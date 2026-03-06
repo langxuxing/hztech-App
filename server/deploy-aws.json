@@ -1,0 +1,12 @@
+{
+  "name": "aws-sydney",
+  "host": "54.66.108.150",
+  "port": 22,
+  "scheme": "http",
+  "web_port": 9000,
+  "app_port": 9001,
+  "user": "ec2-user",
+  "key": "res/aws-sydney/hztech.pem",
+  "remote_path": "/home/ec2-user/mobileapp",
+  "ssh_opts": ["-o", "StrictHostKeyChecking=accept-new"]
+}
