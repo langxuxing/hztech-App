@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'secure/prefs.dart';
 import 'screens/login_screen.dart';
 import 'screens/main_screen.dart';
+import 'widgets/water_background.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -16,6 +17,7 @@ class HzQuantApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: '禾正量化',
+      debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
         useMaterial3: true,
@@ -74,7 +76,9 @@ class _AuthGateState extends State<_AuthGate> {
   Widget build(BuildContext context) {
     if (_loading) {
       return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
+        body: WaterBackground(
+          child: Center(child: CircularProgressIndicator()),
+        ),
       );
     }
     if (!_loggedIn || _needUnlock) {

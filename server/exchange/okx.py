@@ -1,0 +1,457 @@
+# -*- coding: utf-8 -*-
+"""
+OKX 交易所 API：配置加载、账户余额/持仓/行情，基于 ccxt 实现。
+与 botconfig/testapi.py 行为一致（优先 api 子对象、沙盒请求头）。
+"""
+from __future__ import annotations
+
+import base64
+import hmac
+import json
+import logging
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
+
+import ccxt
+
+logger = logging.getLogger(__name__)
+_DEBUG_POSITIONS = os.environ.get("DEBUG_POSITIONS", "0") == "1"
+
+# 默认配置文件路径（由 get_default_config_path 设置，config_path=None 时使用）
+_default_config_path: Path | None = None
+
+
+def get_default_config_path(config_dir: Path) -> Path:
+    """解析默认 OKX 配置路径并设为模块默认。config_dir 一般为 server/botconfig。"""
+    global _default_config_path
+    path = Path(os.environ.get("OKX_CONFIG", str(config_dir / "okx.json")))
+    if not path.exists():
+        path = config_dir / "account_api.json"
+    _default_config_path = path
+    return path
+
+
+def _resolve_path(config_path: Path | None) -> Path | None:
+    return config_path if config_path is not None else _default_config_path
+
+
+def _parse_sandbox(value: object) -> bool:
+    """解析 sandbox 配置：仅 True/\"true\"/1/\"1\" 为沙盒。"""
+    if value is True or value == 1:
+        return True
+    if value is False or value is None or value == 0:
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes")
+    return False
+
+
+def _read_key_secret_passphrase(obj: dict) -> tuple[str, str, str]:
+    """从 dict 读 key/secret/passphrase，兼容 key 与 apikey、secret 与 secretkey/secret_key。"""
+    key = (obj.get("apikey") or obj.get("key") or "").strip()
+    secret = (
+        obj.get("secretkey") or obj.get("secret_key") or obj.get("secret") or ""
+    ).strip()
+    passphrase = (obj.get("passphrase") or "").strip()
+    return key, secret, passphrase
+
+
+def load_okx_config(path: Path | None) -> dict | None:
+    """从 JSON 加载 OKX 配置（与 botconfig/testapi.py 一致，优先 api 子对象）。
+    支持格式：
+    1) 新格式：{"api": {"name", "key", "secret", "passphrase", "base_url", "sandbox"}}
+    2) 中间格式：{"api": {"apikey", "secretkey", "passphrase", ...}}（api 内用旧键名）
+    3) 旧格式：顶层 apikey/key, secretkey/secret, passphrase, base_url, sandbox
+    返回统一结构：name, key, secret, passphrase, base_url, sandbox。
+    path 为 None 时使用 get_default_config_path 设置的默认路径。
+    """
+    resolved = _resolve_path(path)
+    if not resolved or not resolved.exists():
+        return None
+    try:
+        with open(resolved, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    api = data.get("api") if isinstance(data.get("api"), dict) else None
+    if api:
+        sandbox = _parse_sandbox(api.get("sandbox"))
+        base_url = (api.get("base_url") or "https://www.okx.com").rstrip("/")
+        if sandbox:
+            base_url = "https://www.okx.com"
+        key, secret, passphrase = _read_key_secret_passphrase(api)
+        return {
+            "name": api.get("name") or resolved.stem,
+            "key": key,
+            "secret": secret,
+            "passphrase": passphrase,
+            "base_url": base_url,
+            "sandbox": sandbox,
+        }
+    key, secret, passphrase = _read_key_secret_passphrase(data)
+    sandbox = _parse_sandbox(data.get("sandbox"))
+    base_url = (
+        (data.get("base_url") or "https://www.okx.com").strip().rstrip("/")
+        or "https://www.okx.com"
+    )
+    if sandbox:
+        base_url = "https://www.okx.com"
+
+    return {
+        "name": resolved.stem,
+        "key": key,
+        "secret": secret,
+        "passphrase": passphrase,
+        "base_url": base_url,
+        "sandbox": sandbox,
+    }
+
+
+def _create_exchange(cfg: dict):
+    """从统一配置构建 ccxt.okx 实例（沙盒通过 set_sandbox_mode 区分）。"""
+    key = (cfg.get("key") or "").strip()
+    secret = (cfg.get("secret") or "").strip()
+    passphrase = (cfg.get("passphrase") or "").strip()
+    base_url = (cfg.get("base_url") or "https://www.okx.com").rstrip("/")
+    sandbox = bool(cfg.get("sandbox"))
+    options = {"defaultType": "swap"}
+    # ccxt okx: password 即 OKX 的 passphrase
+    exchange = ccxt.okx(
+        {
+            "apiKey": key,
+            "secret": secret,
+            "password": passphrase,
+            "options": options,
+            "timeout": 15000,
+            "enableRateLimit": True,
+        }
+    )
+    exchange.set_sandbox_mode(sandbox)
+    return exchange
+
+
+def okx_info_safe(config_path: Path | None = None) -> dict | None:
+    """读取 OKX 配置并脱敏返回（key 后四位，不返回 secret）。config_path 为 None 用默认。"""
+    cfg = load_okx_config(config_path)
+    if not cfg:
+        return None
+    key = cfg.get("key") or ""
+    return {
+        "apikey_masked": f"****{key[-4:]}" if len(key) >= 4 else "****",
+        "has_passphrase": bool(cfg.get("passphrase")),
+        "has_secretkey": bool(cfg.get("secret")),
+    }
+
+
+def okx_request(
+    method: str,
+    request_path: str,
+    body: str = "",
+    config_path: Path | None = None,
+    params: dict | None = None,
+) -> tuple[dict | None, str | None]:
+    """OKX 私有接口签名请求（与 botconfig/testapi.py 一致）。
+    返回 (data, error)。error 非空表示 HTTP 或配置错误（如 403）。"""
+    path = _resolve_path(config_path)
+    config_name = path.name if path else "default"
+    if _DEBUG_POSITIONS:
+        logger.info(
+            "[持仓-OKX] 准备请求 OKX: %s %s config=%s",
+            method, request_path, config_name,
+        )
+    cfg = load_okx_config(path) if path else None
+    if not cfg:
+        if _DEBUG_POSITIONS and path:
+            logger.warning("[持仓-OKX] 配置文件不存在或格式无效: %s", path)
+        return (None, "OKX 配置文件不存在或格式无效")
+    key = cfg.get("key") or ""
+    secret = cfg.get("secret") or ""
+    passphrase = cfg.get("passphrase") or ""
+    if not key or not secret:
+        return (None, "OKX 配置缺少 key 或 secret")
+    base = cfg.get("base_url") or "https://www.okx.com"
+    if params and method.upper() == "GET":
+        request_path = request_path.split("?")[0] + "?" + urlencode(params)
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    prehash = ts + method.upper() + request_path + body
+    sign = base64.b64encode(
+        hmac.new(secret.encode(), prehash.encode(), "sha256").digest()
+    ).decode()
+    url = base + request_path
+    headers = {
+        "OK-ACCESS-KEY": key,
+        "OK-ACCESS-SIGN": sign,
+        "OK-ACCESS-TIMESTAMP": ts,
+        "OK-ACCESS-PASSPHRASE": passphrase,
+        "Content-Type": "application/json",
+    }
+    if cfg.get("sandbox"):
+        headers["x-simulated-trading"] = "1"
+    try:
+        req = Request(
+            url,
+            headers=headers,
+            method=method,
+            data=body.encode() if body else None,
+        )
+        with urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+            if _DEBUG_POSITIONS:
+                code = data.get("code") if isinstance(data, dict) else "N/A"
+                logger.info("[持仓-OKX] OKX 响应: %s %s code=%s", method, request_path, code)
+            return (data, None)
+    except HTTPError as e:
+        err_body = ""
+        try:
+            raw = e.fp.read() if getattr(e, "fp", None) else b""
+            err_body = raw.decode("utf-8", errors="replace")[:500]
+        except Exception:
+            err_body = ""
+        okx_code = None
+        okx_msg = ""
+        try:
+            parsed = json.loads(err_body) if err_body.strip() else {}
+            okx_code = parsed.get("code")
+            if (
+                okx_code is None
+                and isinstance(parsed.get("data"), list)
+                and parsed["data"]
+            ):
+                okx_code = parsed["data"][0].get("code")
+            okx_msg = (parsed.get("msg") or "").strip()
+        except (json.JSONDecodeError, IndexError, TypeError, KeyError):
+            pass
+        is_1010 = e.code == 403 and (
+            okx_code in ("1010", 1010) or (err_body and "1010" in err_body)
+        )
+        if is_1010:
+            logger.info(
+                "OKX 1010: %s %s -> IP 未在 API 白名单（请在 OKX 后台添加当前服务器 IP）",
+                method, request_path,
+            )
+        else:
+            snippet = err_body[:500] if err_body else ""
+            logger.warning(
+                "OKX request failed: %s %s -> %s %s",
+                method, request_path, e.code, snippet,
+            )
+        if e.code == 403:
+            if is_1010:
+                return (None, "OKX 1010: IP 未在 API 白名单，请在 OKX 后台添加当前服务器 IP")
+            return (
+                None,
+                f"OKX 403: {okx_msg}" if okx_msg else "OKX 返回 403，请检查 API 权限与 IP 白名单",
+            )
+        if e.code == 401:
+            return (
+                None,
+                f"OKX 401: {okx_msg}" if okx_msg else "OKX 鉴权失败，请检查 apikey/secret/passphrase",
+            )
+        return (None, f"OKX 请求失败 ({e.code})")
+    except (URLError, json.JSONDecodeError, OSError, KeyError) as e:
+        logger.warning("OKX request error: %s %s -> %s", method, request_path, e)
+        return (None, None)
+
+
+def _okx_fetch_balance_fallback(config_path: Path | None) -> dict | None:
+    """余额获取回退：用原生签名请求 /api/v5/account/balance（避免 ccxt load_markets 解析异常）。"""
+    data, _ = okx_request("GET", "/api/v5/account/balance", config_path=config_path)
+    if data is None or data.get("code") != "0":
+        return None
+    total_eq = 0.0
+    avail_eq = 0.0
+    upl = 0.0
+    for d in (data.get("data") or []):
+        try:
+            total_eq += float(d.get("totalEq", 0) or 0)
+            avail_eq += float(d.get("availEq", 0) or 0)
+            upl += float(d.get("upl", 0) or 0)
+        except (TypeError, ValueError):
+            pass
+    if avail_eq == 0 and total_eq != 0:
+        avail_eq = total_eq
+    return {"total_eq": total_eq, "avail_eq": avail_eq, "upl": upl, "raw": data}
+
+
+def okx_fetch_balance(config_path: Path | None = None) -> dict | None:
+    """调用 OKX 账户权益（ccxt fetch_balance，失败时回退到原生请求）。config_path 为空用默认配置。"""
+    path = _resolve_path(config_path)
+    cfg = load_okx_config(path) if path else None
+    if not cfg or not (cfg.get("key") and cfg.get("secret")):
+        return None
+    try:
+        exchange = _create_exchange(cfg)
+        balance = exchange.fetch_balance()
+    except TypeError as e:
+        if "NoneType" in str(e) and "+" in str(e) and "str" in str(e):
+            logger.warning(
+                "OKX fetch_balance: ccxt 解析 markets 报错（多为 preopen 标的空字段），请升级 ccxt>=4.4.85 或使用回退请求。错误: %s",
+                e,
+            )
+            return _okx_fetch_balance_fallback(path)
+        raise
+    except Exception as e:
+        logger.warning("OKX fetch_balance error: %s", e)
+        return None
+    total_eq = 0.0
+    avail_eq = 0.0
+    upl = 0.0
+    info = balance.get("info") or {}
+    data_list = info.get("data") if isinstance(info, dict) else []
+    if data_list:
+        for d in data_list:
+            try:
+                total_eq += float(d.get("totalEq", 0) or 0)
+                avail_eq += float(d.get("availEq", 0) or 0)
+                upl += float(d.get("upl", 0) or 0)
+            except (TypeError, ValueError):
+                pass
+    if avail_eq == 0 and total_eq != 0:
+        avail_eq = total_eq
+    return {"total_eq": total_eq, "avail_eq": avail_eq, "upl": upl, "raw": balance}
+
+
+def _okx_fetch_positions_fallback(config_path: Path | None) -> tuple[list[dict], str | None]:
+    """持仓获取回退：用原生签名请求 /api/v5/account/positions?instType=SWAP（避免 ccxt 解析时 None+str 等异常）。"""
+    data, err = okx_request(
+        "GET",
+        "/api/v5/account/positions",
+        config_path=config_path,
+        params={"instType": "SWAP"},
+    )
+    if err:
+        return ([], err)
+    if data is None or data.get("code") != "0":
+        return ([], data.get("msg", "OKX 持仓接口返回异常") if isinstance(data, dict) else "OKX 持仓接口返回异常")
+    raw_list = data.get("data") or []
+    out = []
+    for d in raw_list:
+        try:
+            inst_id = (d.get("instId") or "").strip()
+            if not inst_id or "-SWAP" not in inst_id.upper():
+                continue
+            pos_str = d.get("pos") or "0"
+            contracts = float(pos_str)
+            if contracts == 0:
+                continue
+            pos_side = (d.get("posSide") or d.get("side") or "long").lower()
+            if pos_side not in ("long", "short"):
+                pos_side = "long" if contracts >= 0 else "short"
+            pos_f = contracts if pos_side == "long" else -abs(contracts)
+            mark_px = float(d.get("markPx") or 0)
+            last_px = okx_fetch_ticker(inst_id) if inst_id else None
+            if last_px is None:
+                last_px = mark_px
+            avg_px = float(d.get("avgPx") or 0)
+            upl = float(d.get("upl") or 0)
+            out.append({
+                "inst_id": inst_id,
+                "pos": pos_f,
+                "pos_side": pos_side,
+                "avg_px": avg_px,
+                "mark_px": mark_px,
+                "last_px": last_px,
+                "upl": upl,
+            })
+        except (TypeError, ValueError, KeyError):
+            continue
+    return (out, None)
+
+
+def _inst_id_to_ccxt_symbol(inst_id: str) -> str:
+    """OKX instId (BTC-USDT-SWAP) -> ccxt 统一符号 (BTC/USDT:USDT)。"""
+    if "-SWAP" in inst_id.upper():
+        a = inst_id.upper().replace("-SWAP", "").split("-")
+        if len(a) >= 2:
+            return f"{a[0]}/{a[1]}:{a[1]}"
+    return inst_id.replace("-", "/")
+
+
+def okx_fetch_ticker(inst_id: str) -> float | None:
+    """OKX 公开接口：获取合约最新价（ccxt fetch_ticker）。成功返回 last 价格，失败返回 None。"""
+    try:
+        exchange = ccxt.okx({"enableRateLimit": True, "timeout": 5000})
+        symbol = _inst_id_to_ccxt_symbol(inst_id)
+        ticker = exchange.fetch_ticker(symbol)
+        if ticker and ticker.get("last") is not None:
+            return float(ticker["last"])
+        return None
+    except Exception:
+        return None
+
+
+def _ccxt_symbol_to_inst_id(symbol: str) -> str:
+    """ccxt 统一符号 (BTC/USDT:USDT) -> OKX instId (BTC-USDT-SWAP)。"""
+    if ":" in symbol:
+        base_quote = symbol.split(":")[0]
+        quote = symbol.split(":")[1] if ":" in symbol else "USDT"
+        return f"{base_quote.replace('/', '-')}-{quote}-SWAP"
+    return symbol.replace("/", "-")
+
+
+def okx_fetch_positions(config_path: Path | None = None) -> tuple[list[dict], str | None]:
+    """调用 OKX 持仓（ccxt fetch_positions）；返回 (positions, error)。"""
+    path = _resolve_path(config_path)
+    if _DEBUG_POSITIONS and path:
+        logger.info("[持仓] 开始拉取 OKX 持仓 config=%s", path.name)
+    cfg = load_okx_config(path) if path else None
+    if not cfg or not (cfg.get("key") and cfg.get("secret")):
+        return ([], "OKX 配置文件不存在或格式无效")
+    try:
+        exchange = _create_exchange(cfg)
+        raw_list = exchange.fetch_positions()
+    except TypeError as e:
+        if "NoneType" in str(e) and "+" in str(e) and "str" in str(e):
+            logger.warning(
+                "OKX fetch_positions: ccxt 解析报错（多为 preopen 标的空字段），使用原生 API 回退。错误: %s",
+                e,
+            )
+            return _okx_fetch_positions_fallback(path)
+        logger.warning("OKX fetch_positions error: %s", e)
+        return ([], str(e) or "无法获取持仓，请检查 OKX 配置或网络")
+    except Exception as e:
+        logger.warning("OKX fetch_positions error: %s", e)
+        return ([], str(e) or "无法获取持仓，请检查 OKX 配置或网络")
+    out = []
+    for p in raw_list:
+        try:
+            info = p.get("info") or {}
+            if info.get("instType") and info.get("instType") != "SWAP":
+                continue
+            symbol = p.get("symbol") or ""
+            if symbol and ":USDT" not in symbol and "-SWAP" not in str(info.get("instId", "")):
+                continue
+            contracts = float(p.get("contracts") or p.get("contractSize") or 0)
+            side = (p.get("side") or "long").lower()
+            if side not in ("long", "short"):
+                side = "long" if contracts >= 0 else "short"
+            pos_f = contracts if side == "long" else -abs(contracts)
+            if pos_f == 0:
+                continue
+            inst_id = info.get("instId") or _ccxt_symbol_to_inst_id(symbol)
+            mark_px = float(info.get("markPx") or p.get("markPrice") or 0)
+            last_px = okx_fetch_ticker(inst_id) if inst_id else None
+            if last_px is None:
+                last_px = mark_px
+            avg_px = float(info.get("avgPx") or p.get("entryPrice") or 0)
+            upl = float(info.get("upl") or p.get("unrealizedPnl") or 0)
+            out.append({
+                "inst_id": inst_id,
+                "pos": pos_f,
+                "pos_side": side,
+                "avg_px": avg_px,
+                "mark_px": mark_px,
+                "last_px": last_px,
+                "upl": upl,
+            })
+        except (TypeError, ValueError, AttributeError, KeyError):
+            continue
+    if not out and raw_list:
+        logger.info("OKX positions: %d raw items, all pos=0 or parse failed", len(raw_list))
+    return (out, None)

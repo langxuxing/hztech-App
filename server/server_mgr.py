@@ -52,7 +52,7 @@ def run_ssh(remote_cmd, check=True):
 
 
 def rsync_sync(exclude=None):
-    """使用 rsync 同步项目到 AWS。会同步：server/（后端+Web 页面）、apk/、res/ 等；排除 .git、flutter_app/（仅上传构建好的 APK 到 apk/，不上传 Flutter 源码）等。"""
+    """使用 rsync 同步项目到 AWS。会同步：server/（后端+Web 页面+res）、apk/ 等；排除 .git、flutter_app/（仅上传构建好的 APK 到 apk/，不上传 Flutter 源码）等。"""
     c = load_config()
     key = PROJECT_ROOT / c["key"]
     remote = f"{c['user']}@{c['host']}:{c['remote_path']}"
@@ -97,6 +97,35 @@ def _flutter_build_env():
     return env
 
 
+def _find_flutter(env):
+    """解析 flutter 可执行文件路径，避免 subprocess 因 PATH 未包含 flutter 而报 FileNotFoundError。"""
+    path_str = env.get("PATH", "")
+    found = shutil.which("flutter", path=path_str)
+    if found:
+        return found
+    # 常见 Flutter 安装目录（macOS/Linux）
+    flutter_root = os.environ.get("FLUTTER_ROOT", "").strip()
+    candidates = [
+        Path(flutter_root) if flutter_root else None,
+        Path.home() / "flutter",
+        Path.home() / "development" / "flutter",
+        Path.home() / "Developer" / "flutter",
+    ]
+    for base in candidates:
+        if not base or not base.is_dir():
+            continue
+        # SDK 目录下为 bin/flutter
+        exe = base / "bin" / "flutter"
+        if exe.is_file() and os.access(exe, os.X_OK):
+            return str(exe)
+    # Homebrew 等可能直接装在 PATH 目录，已在 which 中检查过；再试常见 bin 目录
+    for bin_dir in [Path("/opt/homebrew/bin"), Path("/usr/local/bin")]:
+        exe = bin_dir / "flutter"
+        if exe.is_file() and os.access(exe, os.X_OK):
+            return str(exe)
+    return None
+
+
 def build_apk_flutter():
     """使用 Flutter 编译 release APK，并复制到 apk/。"""
     if not FLUTTER_APP.is_dir():
@@ -105,9 +134,13 @@ def build_apk_flutter():
     if not env.get("ANDROID_HOME"):
         print("未找到 Android SDK。请设置 ANDROID_HOME 或安装 Android Studio（默认: ~/Library/Android/sdk）。")
         return False
+    flutter_cmd = _find_flutter(env)
+    if not flutter_cmd:
+        print("未找到 Flutter。请将 flutter 加入 PATH，或设置 FLUTTER_ROOT（如 export FLUTTER_ROOT=$HOME/flutter）。")
+        return False
     print("Building Flutter APK (release) ... (ANDROID_HOME=%s)" % env["ANDROID_HOME"])
     subprocess.run(
-        ["flutter", "build", "apk", "--release"],
+        [flutter_cmd, "build", "apk", "--release"],
         check=True,
         cwd=str(FLUTTER_APP),
         env=env,
@@ -199,10 +232,15 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "restart":
         remote_restart()
         sys.exit(0)
+    if len(sys.argv) > 1 and sys.argv[1] == "db-sync":
+        remote_path = get_remote_path()
+        run_ssh(f"cd {remote_path} && python3 -c 'from server.db import init_db; init_db()'")
+        print("DB sync (user migrations) done on remote.")
+        sys.exit(0)
     if len(sys.argv) > 1 and sys.argv[1] == "shell":
         subprocess.run(ssh_cmd(), cwd=PROJECT_ROOT)
         sys.exit(0)
     print("Config:", json.dumps(cfg, indent=2, ensure_ascii=False))
     target, key = get_ssh_target()
     print("SSH target:", target, "key:", key)
-    print("Usage: python server_mgr.py [build | deploy [--build] [--no-start] | restart | shell]")
+    print("Usage: python server_mgr.py [build | deploy [--build] [--no-start] | restart | db-sync | shell]")

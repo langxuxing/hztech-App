@@ -1,0 +1,11 @@
+{
+  "api": {
+    "name": "Alang_Sandbox",
+    "key": "739edf70-7ac8-4b4e-82ad-fab46f774583",
+    "secret": "4A36C51F8A81D60BC9F6208F391BF387",
+    "passphrase": "TestOKX_12345678",
+    "base_url": "https://www.okx.com",
+    "sandbox": true
+  }
+}
+

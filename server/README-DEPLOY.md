@@ -2,7 +2,7 @@
 
 ## 配置
 
-- `server/deploy-aws.json`：主机 54.66.108.150、端口 22、密钥 `res/aws-sydney/hztech.pem`、远程目录 `/home/ec2-user/mobileapp`。
+- `server/deploy-aws.json`：主机 54.66.108.150、端口 22、密钥 `server/res/aws-sydney/hztech.pem`、远程目录 `/home/ec2-user/mobileapp`。
 
 ## Ops 一键部署（构建 + 上传 + 重启）
 
@@ -68,6 +68,8 @@ python3 server/server_mgr.py deploy --build
 1. **推荐**：安装 SQLite 开发包后重装当前 Python（如 Amazon Linux 2：`sudo yum install sqlite-devel`，然后 `pyenv install --force 3.14.0`）。
 2. **无需改环境**：项目已依赖 `pysqlite3-binary`，`db` 会在缺少 `_sqlite3` 时自动使用它，直接 `pip install -r server/requirements.txt` 后启动即可。
 
+数据库文件路径为 `server/sqlite/tradingbots.db`（首次启动时自动创建目录与表）。
+
 ## 首次在 AWS 上安装（可选）
 
 若在 EC2 上直接克隆或拷贝了项目，可在服务器上执行一次依赖安装并启动：
@@ -76,7 +78,7 @@ python3 server/server_mgr.py deploy --build
 cd /home/ec2-user/mobileapp && bash server/install_on_aws.sh
 ```
 
-会安装 `server/requirements.txt`、创建 `apk`/`res` 目录并后台启动 Flask 服务。
+会安装 `server/requirements.txt`、创建 `apk` 目录（资源在 `server/res/`）并后台启动 Flask 服务。
 
 ## 部署后测试
 

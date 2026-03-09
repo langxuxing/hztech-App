@@ -6,7 +6,7 @@ import 'package:http/http.dart' as http;
 void debugLog(String location, String message, Map<String, dynamic> data,
     {String? hypothesisId}) {
   final payload = <String, dynamic>{
-    'sessionId': '9089ed',
+    'sessionId': '977bbd',
     'location': location,
     'message': message,
     'data': data,
@@ -16,10 +16,10 @@ void debugLog(String location, String message, Map<String, dynamic> data,
   http
       .post(
         Uri.parse(
-            'http://127.0.0.1:7759/ingest/e6327e07-fe57-429c-be6d-c9b352c12dad'),
+            'http://127.0.0.1:7612/ingest/4067d007-374f-4ae3-8716-ed65822af179'),
         headers: {
           'Content-Type': 'application/json',
-          'X-Debug-Session-Id': '9089ed',
+          'X-Debug-Session-Id': '977bbd',
         },
         body: jsonEncode(payload),
       )

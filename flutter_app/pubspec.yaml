@@ -36,6 +36,7 @@ dependencies:
   local_auth: ^2.2.0
   permission_handler: ^11.3.0
   flutter_svg: ^2.0.10+1
+  fl_chart: ^0.69.0
 
 dev_dependencies:
   flutter_test:
@@ -64,6 +65,8 @@ flutter:
     # 使用 package 根下 images/，避免 Web 上路径被拼成 assets/assets/...
     - images/hztech_logo.png
     - images/hztech_logo_small.png
+    - images/zhikong.png
+    - images/background-water.png
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
@@ -91,10 +94,18 @@ flutter:
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
 
-# App 图标：使用 hztech_logo_small.png 作为启动图标（与 res/hztech_logo_small.png 一致）
+# App 图标：Android 使用 hzlogo.png
 flutter_launcher_icons:
   android: true
   ios: false
-  image_path: "images/hztech_logo_small.png"
+  image_path: "images/hzlogo.png"
   adaptive_icon_background: "#000000"
-  adaptive_icon_foreground: "images/hztech_logo_small.png"
+  adaptive_icon_foreground: "images/hzlogo.png"
+  web:
+    generate: true
+    image_path: "images/hztech_logo_small.png"
+    background_color: "#000000"
+    theme_color: "#000000"
+  macos:
+    generate: true
+    image_path: "images/hztech_logo_small.png"

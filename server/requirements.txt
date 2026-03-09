@@ -1,4 +1,6 @@
 flask>=3.0.0
-PyJWT>=2.8.0
+PyJWT>=2.8.0   # import 时使用: import jwt
+requests>=2.28.0
+ccxt>=4.4.85
 pytest>=7.0.0
-pysqlite3-binary>=0.5.4
+# pysqlite3-binary：仅在没有 _sqlite3 的环境（如部分 Linux）需手动安装

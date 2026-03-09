@@ -1,6 +1,8 @@
 # OKX API 凭证，勿提交
 **/okx.json
 src/res/okx.json
+# 后台账号 API 配置（server/botconfig/ 下敏感文件）
+server/botconfig/account_api.json
 
 # Android
 *.iml
@@ -19,4 +21,6 @@ build/
 *.log
 .temp-cursor/
 # 服务端 sqlite 持久化（用户/配置/日志）
+server/sqlite/
+# 已废弃，现用 server/sqlite/tradingbots.db
 server/data.db

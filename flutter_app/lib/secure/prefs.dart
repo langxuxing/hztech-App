@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../debug_log.dart';
@@ -7,7 +8,9 @@ const _keyBackendUrl = 'backend_url';
 const _keyFingerprint = 'fingerprint_enabled';
 const _keyUnlockedUntil = 'unlocked_until_ms';
 
-const defaultBackendUrl = 'http://54.66.108.150:9001/';
+/// Web 开发模式（localhost）下默认连本地 API，否则连 AWS
+String get defaultBackendUrl =>
+    (kIsWeb && kDebugMode) ? 'http://localhost:9001/' : 'http://54.66.108.150:9001/';
 const unlockDurationMs = 5 * 60 * 1000; // 5 分钟
 
 class SecurePrefs {

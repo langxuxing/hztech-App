@@ -14,14 +14,22 @@ echo "  本地部署：Flutter 构建 → 启动本地服务"
 echo "=============================================="
 
 echo ""
-echo "=== 1/2 构建 Flutter App (release APK) ==="
+echo "=== 1/3 构建 Flutter App (release APK) ==="
 python3 "$PROJECT_ROOT/server/server_mgr.py" build
 echo "  APK 输出: $PROJECT_ROOT/apk/"
 
 echo ""
-echo "=== 2/2 启动本地服务（Web=$WEB_PORT, API=$API_PORT）==="
+echo "=== 2/3 同步本地数据库（用户迁移）==="
+cd "$PROJECT_ROOT" && python3 -c "from server.db import init_db; init_db()"
+echo "  数据库已同步"
+
+echo ""
+echo "=== 3/3 启动本地服务（Web=$WEB_PORT, API=$API_PORT）==="
 echo "  Web:  http://127.0.0.1:${WEB_PORT}"
 echo "  API:  http://127.0.0.1:${API_PORT}  （App 调试请将后端地址设为此处）"
 echo "  按 Ctrl+C 停止"
+echo "  调试：已开启 FLASK_DEBUG 与 LOG_LEVEL=DEBUG，控制台可看到请求/响应详情"
 echo "=============================================="
+export FLASK_DEBUG=1
+export LOG_LEVEL=DEBUG
 exec "$PROJECT_ROOT/server/run_local.sh"

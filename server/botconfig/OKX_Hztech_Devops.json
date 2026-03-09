@@ -1,0 +1,10 @@
+{
+  "api": {
+    "name": "Alang_Live",
+    "passphrase": "Quant-agent@123",
+    "secret":"C9F820909C050EDB137658D8B371112A",
+    "key":"17d4dbf4-e28d-46aa-a3e4-87ae8f40c851",
+    "base_url": "https://www.okx.com",
+    "sandbox": false
+  }
+}

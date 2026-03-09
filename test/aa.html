@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>高级金融卡片预览</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background: #0a0a0f;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      color: #eee;
+      padding: 40px;
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .card {
+      background: rgba(20, 20, 25, 0.65);
+      backdrop-filter: blur(14px);
+      border-radius: 18px;
+      padding: 24px;
+      width: 360px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      box-shadow: 
+        0 8px 32px rgba(0, 0, 0, 0.4),
+        inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card:hover {
+      transform: translateY(-3px);
+      box-shadow: 
+        0 12px 40px rgba(0, 0, 0, 0.5),
+        inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    }
+
+    .card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+      opacity: 0.5;
+    }
+
+    h3 {
+      font-size: 14px;
+      color: #A0A0B0;
+      margin-bottom: 8px;
+      font-weight: 500;
+    }
+
+    .value-number {
+      color: #E8E8F0;
+      font-size: 32px;
+      font-weight: 800;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+      letter-spacing: -0.5px;
+    }
+
+    .currency {
+      font-size: 16px;
+      color: #A0A0B0;
+      vertical-align: super;
+      margin-left: 4px;
+    }
+
+    .profit-value {
+      background: linear-gradient(90deg, #A8FF78, #7EC850);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      font-size: 16px;
+      font-weight: 700;
+      margin-top: 4px;
+      display: inline-block;
+    }
+
+    .chart-container {
+      margin-top: 16px;
+      background-image: radial-gradient(circle at 1px 1px, rgba(255,255,255,0.1) 1px, transparent 0);
+      background-size: 20px 20px;
+      border-radius: 16px;
+      overflow: hidden;
+      height: 80px;
+      position: relative;
+    }
+
+    svg {
+      width: 100%;
+      height: 100%;
+    }
+
+    .chart-line {
+      fill: none;
+      stroke-width: 3;
+      stroke-linecap: round;
+      filter: drop-shadow(0 0 6px rgba(126, 200, 80, 0.6));
+    }
+
+    .chart-area {
+      opacity: 0.4;
+    }
+
+    /* 动画：让曲线轻微浮动 */
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-2px); }
+    }
+
+    .chart-line {
+      animation: float 3s ease-in-out infinite;
+    }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <h3>总资产估值</h3>
+  <div class="value-number">5,803.31 <span class="currency">USDT</span></div>
+  <div class="profit-value">+¥669.88 (+13.07%)</div>
+  
+  <div class="chart-container">
+    <svg viewBox="0 0 200 80" preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="gradient-stroke" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#A8FF78" />
+          <stop offset="100%" stop-color="#7EC850" />
+        </linearGradient>
+        <linearGradient id="gradient-fill" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="rgba(126, 200, 80, 0.3)" />
+          <stop offset="100%" stop-color="rgba(126, 200, 80, 0.02)" />
+        </linearGradient>
+      </defs>
+      <path class="chart-area" d="M0,60 Q20,50 40,55 T80,40 T120,45 T160,30 T200,20 V80 H0 Z" fill="url(#gradient-fill)" />
+      <path class="chart-line" d="M0,60 Q20,50 40,55 T80,40 T120,45 T160,30 T200,20" stroke="url(#gradient-stroke)" />
+    </svg>
+  </div>
+</div>
+
+</body>
+</html>

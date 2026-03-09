@@ -1,0 +1,29 @@
+[
+  {
+    "tradingbot_id": "simpleserver-lhg",
+    "tradingbot_name": "阿郎测试",
+    "exchange_account": "OKX",
+    "symbol": "PEPE-USDT-SWAP",
+    "strategy_name": "simpleserver-lhg",
+    "account_api_file": "OKX_Alang_Sandbox.json",
+    "enbaled": true
+  },
+  {
+    "tradingbot_id": "simpleserver-hztech",
+    "tradingbot_name": "禾正科技",
+    "exchange_account": "OKX",
+    "symbol": "PEPE-USDT-SWAP",
+    "strategy_name": "simpleserver-hztech",
+    "account_api_file": "OKX_Hztech_Live.json",
+    "enbaled": false
+  },
+  {
+    "tradingbot_id": "simpleserver-hztech-devops",
+    "tradingbot_name": "禾正科技开发",
+    "exchange_account": "OKX",
+    "symbol": "PEPE-USDT-SWAP",
+    "strategy_name": "simpleserver-hztech-devops",
+    "account_api_file": "OKX_Hztech_Devops.json",
+    "enbaled": false
+  }
+]

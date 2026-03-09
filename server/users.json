@@ -1,3 +1,5 @@
 [
-  {"username": "admin", "password_hash": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3"}
+  {"username": "admin", "password_hash": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3"},
+  {"username": "linsong", "password_hash": "697d7efe482432493693106466e034b7875e769bcdc28b200369dc331eb01419"},
+  {"username": "lhg", "password_hash": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3"}
 ]

@@ -1,0 +1,10 @@
+{
+  "api": {
+    "name": "禾正科技",
+    "key": "8df52138-d163-449c-98f4-c74a23c215bb",
+    "secret": "C702D6FB32A9F4B1D3A2C0F6FCC5238E",
+    "passphrase": "OKX4devops#123321",
+    "base_url": "https://www.okx.com",
+    "sandbox": false
+  }
+}
