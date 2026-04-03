@@ -1,8 +1,10 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 import 'secure/prefs.dart';
 import 'screens/login_screen.dart';
 import 'screens/main_screen.dart';
+import 'screens/web/web_main_shell.dart';
 import 'widgets/water_background.dart';
 
 void main() {
@@ -47,7 +49,8 @@ class _AuthGateState extends State<_AuthGate> {
     if (!mounted) return;
     setState(() {
       _loggedIn = loggedIn;
-      _needUnlock = loggedIn && fingerprintOn && !unlocked;
+      // Web 无法使用生物识别解锁，避免卡在仅指纹页
+      _needUnlock = loggedIn && fingerprintOn && !unlocked && !kIsWeb;
       _loading = false;
     });
   }
@@ -86,6 +89,9 @@ class _AuthGateState extends State<_AuthGate> {
         onLoginSuccess: _onLoginSuccess,
         unlockMode: _loggedIn && _needUnlock,
       );
+    }
+    if (kIsWeb) {
+      return WebMainShell(onLogout: _onLogout);
     }
     return MainScreen(onLogout: _onLogout);
   }

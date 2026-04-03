@@ -1,0 +1,12 @@
+{
+  "api": {
+    "name": "董杰VIP",
+    "passphrase": "Display4defi@AWS",
+    "secret":"F48A63D24EDCB9AF4DDF78042D28ED52",
+    "key":"a769a852-5961-4f5e-a0f1-afc7e38d20f1",    
+    "base_url": "https://www.okx.com",
+    "sandbox": false
+  }
+}
+
+  

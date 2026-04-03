@@ -4,7 +4,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
-import '../debug_log.dart';
+import '../debug_ingest_log.dart';
 import 'models.dart';
 
 /// 是否为“连接在收到完整响应前关闭”的瞬时错误（可重试）
@@ -20,27 +20,10 @@ Future<http.Response> _getWithRetry(
   Uri uri,
   Map<String, String> headers,
 ) async {
-  // #region agent log
-  debugLog('client.dart:_getWithRetry', 'request_start', {
-    'uri': uri.toString(),
-  }, hypothesisId: 'H1,H2');
-  // #endregion
   try {
     final resp = await http.get(uri, headers: headers).timeout(_timeout);
-    // #region agent log
-    debugLog('client.dart:_getWithRetry', 'request_ok', {
-      'statusCode': resp.statusCode,
-      'bodyLength': resp.body.length,
-    }, hypothesisId: 'H2,H4');
-    // #endregion
     return resp;
   } on Exception catch (e, st) {
-    // #region agent log
-    debugLog('client.dart:_getWithRetry', 'request_error', {
-      'error': e.toString(),
-      'type': e.runtimeType.toString(),
-    }, hypothesisId: 'H3,H4');
-    // #endregion
     if (_isConnectionClosedError(e, st)) {
       await Future<void>.delayed(const Duration(milliseconds: 800));
       return await http.get(uri, headers: headers).timeout(_timeout);
@@ -54,29 +37,12 @@ Future<http.Response> _postWithRetry(
   Map<String, String> headers, {
   Object? body,
 }) async {
-  // #region agent log
-  debugLog('client.dart:_postWithRetry', 'request_start', {
-    'uri': uri.toString(),
-  }, hypothesisId: 'H1,H2');
-  // #endregion
   try {
     final resp = await http
         .post(uri, headers: headers, body: body)
         .timeout(_timeout);
-    // #region agent log
-    debugLog('client.dart:_postWithRetry', 'request_ok', {
-      'statusCode': resp.statusCode,
-      'bodyLength': resp.body.length,
-    }, hypothesisId: 'H2,H4');
-    // #endregion
     return resp;
   } on Exception catch (e, st) {
-    // #region agent log
-    debugLog('client.dart:_postWithRetry', 'request_error', {
-      'error': e.toString(),
-      'type': e.runtimeType.toString(),
-    }, hypothesisId: 'H3,H4');
-    // #endregion
     if (_isConnectionClosedError(e, st)) {
       await Future<void>.delayed(const Duration(milliseconds: 800));
       return await http
@@ -116,6 +82,20 @@ class ApiClient {
   /// POST /api/login，返回 success、token、message（401 时 success=false）
   Future<LoginResponse> login(String username, String password) async {
     final uri = Uri.parse('${_normalizedBase}api/login');
+    // #region agent log
+    unawaited(
+      debugIngestLog(
+        location: 'client.dart:login',
+        message: 'login_request_uri',
+        hypothesisId: 'H5',
+        data: <String, Object?>{
+          'baseUrl': baseUrl,
+          'normalizedBase': _normalizedBase,
+          'loginUri': uri.toString(),
+        },
+      ),
+    );
+    // #endregion
     final body = jsonEncode({
       'username': username,
       'password': password,
@@ -123,11 +103,11 @@ class ApiClient {
     final resp = await _postWithRetry(uri, _headers, body: body);
     final raw = resp.body.trim();
     if (raw.isEmpty) {
-      throw FormatException('后端返回空内容，请检查后端地址是否为 API 服务（如 http://localhost:9001/）');
+      throw FormatException('后端返回空内容，请检查后端地址是否为 API 服务（如 http://localhost:8080/）');
     }
     if (raw.toLowerCase().startsWith('<')) {
       throw FormatException(
-        '后端返回了网页而非接口数据。请将「后端地址」改为 API 地址（如 http://localhost:9001/），不要填前端页面地址（如 62567）。',
+        '后端返回了网页而非接口数据。请将「后端地址」改为服务根地址（如 http://localhost:8080/），路径为 /api/...；不要填错误端口。',
       );
     }
     final map = jsonDecode(resp.body) as Map<String, dynamic>;

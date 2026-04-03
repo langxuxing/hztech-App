@@ -1,7 +1,11 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
 
+import 'dart:async';
+
 import '../api/client.dart';
+import '../debug_ingest_log.dart';
 import '../secure/prefs.dart';
 import '../widgets/water_background.dart';
 
@@ -43,6 +47,19 @@ class _LoginScreenState extends State<LoginScreen> {
   void initState() {
     super.initState();
     _prefs.backendBaseUrl.then((url) {
+      // #region agent log
+      unawaited(
+        debugIngestLog(
+          location: 'login_screen.dart:initState',
+          message: 'backend_url_for_field',
+          hypothesisId: 'H4',
+          data: <String, Object?>{
+            'urlFromPrefs': url,
+            'controllerWasEmpty': _backendUrlCtrl.text.isEmpty,
+          },
+        ),
+      );
+      // #endregion
       if (mounted && _backendUrlCtrl.text.isEmpty) {
         _backendUrlCtrl.text = url;
       }
@@ -78,7 +95,26 @@ class _LoginScreenState extends State<LoginScreen> {
     }
     setState(() => _loading = true);
     try {
-      final baseUrl = _normalizeBaseUrl(rawUrl);
+      final normalizedInput = _normalizeBaseUrl(rawUrl);
+      final baseUrl = migrateLocalBackendPort9000To8080(rawUrl);
+      if (mounted && baseUrl != normalizedInput) {
+        _backendUrlCtrl.text = baseUrl;
+      }
+      // #region agent log
+      unawaited(
+        debugIngestLog(
+          location: 'login_screen.dart:_performLogin',
+          message: 'before_api_login',
+          hypothesisId: 'H4_H5',
+          data: <String, Object?>{
+            'rawUrl': rawUrl,
+            'normalizedInput': normalizedInput,
+            'baseUrlAfterMigrate': baseUrl,
+            'controllerText': _backendUrlCtrl.text,
+          },
+        ),
+      );
+      // #endregion
       final api = ApiClient(baseUrl);
       final resp = await api.login(user, pass);
       if (!mounted) return;
@@ -91,9 +127,21 @@ class _LoginScreenState extends State<LoginScreen> {
       }
     } catch (e) {
       if (!mounted) return;
-      final msg = e is FormatException && e.message.isNotEmpty
-          ? e.message
-          : '网络异常: $e';
+      final String msg;
+      if (e is FormatException && e.message.isNotEmpty) {
+        msg = e.message;
+      } else {
+        final s = e.toString();
+        final looksUnreachable =
+            s.contains('Failed to fetch') || s.contains('ClientException');
+        if (kIsWeb && looksUnreachable) {
+          msg =
+              '无法连接后端 $rawUrl。请先在本机项目根目录执行 ./server/run_local.sh（默认端口 8080 提供 /api），'
+              '或执行 flutter build web 后用浏览器打开 http://127.0.0.1:8080/ 与接口同源。';
+        } else {
+          msg = '网络异常: $e';
+        }
+      }
       _showSnack(msg);
     } finally {
       if (mounted) setState(() => _loading = false);

@@ -2,7 +2,7 @@
 
 ## 配置
 
-- `server/deploy-aws.json`：主机 54.66.108.150、端口 22、密钥 `server/res/aws-sydney/hztech.pem`、远程目录 `/home/ec2-user/mobileapp`。
+- `server/deploy-aws.json`：主机 54.252.181.151、端口 22、密钥 `/Volumes/HZTech/aws-sydney/aws-defi.pem`、远程目录 `/home/ec2-user/hztechapp`。
 
 ## Ops 一键部署（构建 + 上传 + 重启）
 
@@ -51,15 +51,15 @@ python3 server/server_mgr.py deploy --build
 2. **确认服务在跑**  
    SSH 上 EC2 后执行：
    ```bash
-   pgrep -f "server/app.py"
+   pgrep -f "server/main.py"
    curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9000/
    curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9001/
    ```
    若有 2 个 PID 且两个 curl 都返回 200，说明本机正常，问题在安全组或网络。
 
 3. **若进程没起来**  
-   看日志：`cat /home/ec2-user/mobileapp/server_web.log`、`server_api.log`。若是 `_sqlite3` 等错误，按下一节处理。然后重新执行：  
-   `cd /home/ec2-user/mobileapp && bash server/install_on_aws.sh`
+   看日志：`cat /home/ec2-user/hztechapp/server_web.log`、`server_api.log`。若是 `_sqlite3` 等错误，按下一节处理。然后重新执行：  
+   `cd /home/ec2-user/hztechapp && bash server/install_on_aws.sh`
 
 ## 若出现 No module named '_sqlite3'
 
@@ -75,7 +75,7 @@ python3 server/server_mgr.py deploy --build
 若在 EC2 上直接克隆或拷贝了项目，可在服务器上执行一次依赖安装并启动：
 
 ```bash
-cd /home/ec2-user/mobileapp && bash server/install_on_aws.sh
+cd /home/ec2-user/hztechapp && bash server/install_on_aws.sh
 ```
 
 会安装 `server/requirements.txt`、创建 `apk` 目录（资源在 `server/res/`）并后台启动 Flask 服务。
@@ -88,14 +88,14 @@ cd /home/ec2-user/mobileapp && bash server/install_on_aws.sh
 ./server/test_server.sh
 ```
 
-或指定地址：`BASE_URL=http://54.66.108.150:9001 ./server/test_server.sh`
+或指定地址：`BASE_URL=http://54.252.181.151:9001 ./server/test_server.sh`
 
 会请求首页、`/api/strategy/status`、`/api/login` 及登录后的 `/api/account-profit`。
 
 ## 部署后
 
-- Web（浏览器）：`http://54.66.108.150:9000`
-- API（App 后端）：`http://54.66.108.150:9001`
-- APK 下载：Web 首页或 `http://54.66.108.150:9000/download/apk/禾正量化-release.apk`
+- Web（浏览器）：`http://54.252.181.151:9000`
+- API（App 后端）：`http://54.252.181.151:9001`
+- APK 下载：Web 首页或 `http://54.252.181.151:9000/download/apk/禾正量化-release.apk`
 - 若需 HTTPS：在 EC2 前加 Nginx/Caddy 做 SSL 终结，再在 `deploy-aws.json` 中把 `scheme` 改为 `https`。
-- 日志：`python3 server/server_mgr.py shell` 登录后 `cat /home/ec2-user/mobileapp/server_web.log` 或 `server_api.log`
+- 日志：`python3 server/server_mgr.py shell` 登录后 `cat /home/ec2-user/hztechapp/server_web.log` 或 `server_api.log`

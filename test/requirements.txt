@@ -1,3 +1,11 @@
 # 测试依赖。安装后可在项目根执行: pytest test/
 # 若需完整后台依赖，请再安装: pip install -r server/requirements.txt
-pytest>=7.0.0
+#
+# 若本机全局装有旧版 pytest-asyncio，可能出现:
+#   ImportError: cannot import name 'Config' from 'pytest'
+# 处理任选其一:
+#   pip install -U 'pytest-asyncio>=0.24'
+#   或不需要异步测试: pip uninstall pytest-asyncio
+#   或使用: ./test/run_pytest.sh（见脚本内说明）
+pytest>=8.0
+pytest-asyncio>=0.24.0

@@ -1,19 +1,39 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:fl_chart/fl_chart.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
 import '../secure/prefs.dart';
 import '../theme/finance_style.dart';
+import '../widgets/month_end_profit_panel.dart';
+import '../widgets/profit_percent_line_chart.dart';
 import '../widgets/water_background.dart';
 
 class AccountProfitScreen extends StatefulWidget {
-  const AccountProfitScreen({super.key, this.sharedBots = const []});
+  const AccountProfitScreen({
+    super.key,
+    this.sharedBots = const [],
+    this.initialBotId,
+    this.periodicRefreshActive = true,
+    this.webLayout = false,
+    this.embedInShell = false,
+  });
 
-  /// 由 MainScreen 下发的机器人列表，与策略管理同源，保证下拉框有数据
+  /// 由 MainScreen 下发的交易账户列表，与账户管理同源，保证下拉框有数据
   final List<UnifiedTradingBot> sharedBots;
+
+  /// 进入页面时默认选中的交易账户（例如从账户管理列表点入）
+  final String? initialBotId;
+
+  /// 为 false 时不启动定时刷新（例如嵌在 MainScreen 非当前 Tab 时避免后台请求）
+  final bool periodicRefreshActive;
+
+  /// Web 宽屏分栏布局（由 [WebAccountProfitScreen] 传入）
+  final bool webLayout;
+
+  /// 嵌入 Web 主导航壳时不显示本页 [AppBar]。
+  final bool embedInShell;
 
   @override
   State<AccountProfitScreen> createState() => _AccountProfitScreenState();
@@ -30,8 +50,49 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
   bool _loading = true;
   String? _error;
   String? _positionsLoadError;
-  Timer? _positionTimer;
+  Map<String, dynamic>? _positionsOkxDebug;
+  Timer? _autoRefreshTimer;
   static const String _defaultBotId = 'simpleserver';
+
+  /// 保持当前选中账户，拉取最新收益、曲线、持仓与赛季（用于定时刷新与下拉切换后的全量刷新）
+  Future<void> _refreshLatestData() async {
+    if (!mounted || _loading) return;
+    final list = _bots.isNotEmpty ? _bots : widget.sharedBots;
+    final botId = _selectedBotId ??
+        (list.isNotEmpty ? list.first.tradingbotId : null) ??
+        _defaultBotId;
+    try {
+      final baseUrl = await _prefs.backendBaseUrl;
+      final token = await _prefs.authToken;
+      final api = ApiClient(baseUrl, token: token);
+      final phase2 = await Future.wait([
+        api.getAccountProfit(),
+        api.getBotProfitHistory(botId, limit: 500),
+      ]);
+      if (!mounted) return;
+      final profitResp = phase2[0] as AccountProfitResponse;
+      final historyResp = phase2[1] as BotProfitHistoryResponse;
+      setState(() {
+        _accounts = profitResp.accounts ?? [];
+        _snapshots = historyResp.snapshots;
+      });
+      final phase3 = await Future.wait([
+        api.getTradingbotPositions(botId),
+        api.getTradingbotSeasons(botId, limit: 50),
+      ]);
+      if (!mounted) return;
+      final positionsResp = phase3[0] as OkxPositionsResponse;
+      final seasonsResp = phase3[1] as TradingbotSeasonsResponse;
+      setState(() {
+        _positions = positionsResp.positions;
+        _positionsLoadError = positionsResp.positionsError;
+        _positionsOkxDebug = positionsResp.okxDebug;
+        _seasons = seasonsResp.seasons;
+      });
+    } catch (_) {
+      // 后台轮询失败不打扰主流程
+    }
+  }
 
   Future<void> _load() async {
     if (!mounted) return;
@@ -40,40 +101,86 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
       _error = null;
     });
     try {
+      // 并行读配置，减少首包延迟
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
       final api = ApiClient(baseUrl, token: token);
 
-      // 优先使用 MainScreen 下发的列表，与策略管理同源，避免本页 getTradingBots 空或失败导致无下拉框
-      List<UnifiedTradingBot> bots = widget.sharedBots;
+      // 优先 MainScreen 下发的列表；否则本页拉取（与账户管理同源）
+      List<UnifiedTradingBot> bots = List.from(widget.sharedBots);
       if (bots.isEmpty) {
         final botsResp = await api.getTradingBots();
         bots = botsResp.botList;
       }
-      final botId = bots.isNotEmpty ? bots.first.tradingbotId : _defaultBotId;
-
-      // 并行拉取收益、历史、持仓、赛季，再一次性 setState，避免先出列表再迟 2 秒出数据（与策略管理页同因）
-      final profitFuture = api.getAccountProfit();
-      final historyFuture = api.getBotProfitHistory(botId, limit: 500);
-      final positionsFuture = api.getTradingbotPositions(botId);
-      final seasonsFuture = api.getTradingbotSeasons(botId, limit: 50);
-
-      final profitResp = await profitFuture;
-      final historyResp = await historyFuture;
-      final positionsResp = await positionsFuture;
-      final seasonsResp = await seasonsFuture;
+      final initial = widget.initialBotId?.trim();
+      if (initial != null && initial.isNotEmpty) {
+        final has = bots.any((b) => b.tradingbotId == initial);
+        if (!has) {
+          bots = [
+            UnifiedTradingBot(
+              tradingbotId: initial,
+              status: '',
+              canControl: false,
+              isTest: false,
+            ),
+            ...bots,
+          ];
+        }
+      }
+      final botId = (initial != null && initial.isNotEmpty)
+          ? initial
+          : (bots.isNotEmpty ? bots.first.tradingbotId : _defaultBotId);
 
       if (!mounted) return;
+      // 阶段一：一有账户列表就结束全屏 loading，下拉框可立即显示
       setState(() {
         _bots = bots;
         _selectedBotId = botId;
-        _accounts = profitResp.accounts ?? [];
-        _snapshots = historyResp.snapshots;
-        _positions = positionsResp.positions;
-        _positionsLoadError = positionsResp.positionsError;
-        _seasons = seasonsResp.seasons;
         _loading = false;
       });
+
+      // 阶段二：账户收益 + 历史（不经过 OKX 直连，通常较快）
+      try {
+        final phase2 = await Future.wait([
+          api.getAccountProfit(),
+          api.getBotProfitHistory(botId, limit: 500),
+        ]);
+        if (!mounted) return;
+        final profitResp = phase2[0] as AccountProfitResponse;
+        final historyResp = phase2[1] as BotProfitHistoryResponse;
+        setState(() {
+          _accounts = profitResp.accounts ?? [];
+          _snapshots = historyResp.snapshots;
+        });
+      } catch (e) {
+        if (mounted) {
+          setState(() => _error = '收益/历史加载失败: $e');
+        }
+      }
+
+      // 阶段三：持仓 + 赛季（后端可能调 OKX，1010/慢响应不再阻塞上面两阶段）
+      try {
+        final phase3 = await Future.wait([
+          api.getTradingbotPositions(botId),
+          api.getTradingbotSeasons(botId, limit: 50),
+        ]);
+        if (!mounted) return;
+        final positionsResp = phase3[0] as OkxPositionsResponse;
+        final seasonsResp = phase3[1] as TradingbotSeasonsResponse;
+        setState(() {
+          _positions = positionsResp.positions;
+          _positionsLoadError = positionsResp.positionsError;
+          _positionsOkxDebug = positionsResp.okxDebug;
+          _seasons = seasonsResp.seasons;
+        });
+      } catch (e) {
+        if (mounted) {
+          setState(() {
+            _positionsLoadError = '持仓/赛季加载异常: $e';
+            _positionsOkxDebug = null;
+          });
+        }
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -83,45 +190,37 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
     }
   }
 
-  Future<void> _loadPositionsOnly() async {
-    final firstBotId = _bots.isNotEmpty
-        ? _bots.first.tradingbotId
-        : 'simpleserver-lhg';
-    final botId = _selectedBotId ?? firstBotId;
-    try {
-      final baseUrl = await _prefs.backendBaseUrl;
-      final token = await _prefs.authToken;
-      final api = ApiClient(baseUrl, token: token);
-      final positionsResp = await api.getTradingbotPositions(botId);
-      if (!mounted) return;
-      setState(() {
-        _positions = positionsResp.positions;
-        _positionsLoadError = positionsResp.positionsError;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _positionsLoadError = '持仓更新失败，请下拉刷新');
-    }
-  }
-
   Future<void> _loadForBot(String botId) async {
-    if (botId == _selectedBotId) return;
     setState(() => _selectedBotId = botId);
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
       final api = ApiClient(baseUrl, token: token);
-      final historyResp = await api.getBotProfitHistory(botId, limit: 500);
-      final seasonsResp = await api.getTradingbotSeasons(botId, limit: 50);
-      final positionsResp = await api.getTradingbotPositions(botId);
+      final results = await Future.wait([
+        api.getAccountProfit(),
+        api.getBotProfitHistory(botId, limit: 500),
+        api.getTradingbotSeasons(botId, limit: 50),
+        api.getTradingbotPositions(botId),
+      ]);
       if (!mounted) return;
+      final profitResp = results[0] as AccountProfitResponse;
+      final historyResp = results[1] as BotProfitHistoryResponse;
+      final seasonsResp = results[2] as TradingbotSeasonsResponse;
+      final positionsResp = results[3] as OkxPositionsResponse;
       setState(() {
+        _accounts = profitResp.accounts ?? [];
         _snapshots = historyResp.snapshots;
         _seasons = seasonsResp.seasons;
         _positions = positionsResp.positions;
         _positionsLoadError = positionsResp.positionsError;
+        _positionsOkxDebug = positionsResp.okxDebug;
+        _error = null;
       });
-    } catch (_) {}
+    } catch (e) {
+      if (mounted) {
+        setState(() => _error = '切换账户后加载失败: $e');
+      }
+    }
   }
 
   @override
@@ -133,15 +232,25 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
       _selectedBotId = _bots.first.tradingbotId;
     }
     _load();
-    _positionTimer = Timer.periodic(
-      const Duration(minutes: 1),
-      (_) => _loadPositionsOnly(),
+    _syncAutoRefreshTimer();
+  }
+
+  void _syncAutoRefreshTimer() {
+    _autoRefreshTimer?.cancel();
+    _autoRefreshTimer = null;
+    if (!widget.periodicRefreshActive) return;
+    _autoRefreshTimer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => _refreshLatestData(),
     );
   }
 
   @override
   void didUpdateWidget(covariant AccountProfitScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.periodicRefreshActive != widget.periodicRefreshActive) {
+      _syncAutoRefreshTimer();
+    }
     // MainScreen 异步加载完 bots 后下发，同步到本页以显示下拉框
     if (widget.sharedBots.isNotEmpty &&
         widget.sharedBots.length != _bots.length) {
@@ -156,12 +265,42 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
 
   @override
   void dispose() {
-    _positionTimer?.cancel();
+    _autoRefreshTimer?.cancel();
     super.dispose();
   }
 
   String _fmt(double v) => v.toStringAsFixed(2);
   String _fmtPct(double v) => '${v.toStringAsFixed(2)}%';
+
+  String _formatOkxDebug(Map<String, dynamic> m) {
+    final b = StringBuffer();
+    final ip = m['server_egress_ip'];
+    if (ip != null) b.writeln('服务器出口 IP: $ip');
+    final cf = m['config_file'];
+    if (cf != null) b.writeln('OKX 配置: $cf');
+    final masked = m['apikey_masked'];
+    if (masked != null) b.writeln('API Key: $masked');
+    if (m['sandbox'] == true) b.writeln('沙盒: 是');
+    final note = m['note'];
+    if (note != null) b.writeln(note);
+    return b.toString().trim();
+  }
+
+  Widget _buildOkxDebugHint() {
+    final d = _positionsOkxDebug;
+    if (d == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: SelectableText(
+        _formatOkxDebug(d),
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          fontSize: 11,
+          height: 1.35,
+          color: AppFinanceStyle.labelColor.withValues(alpha: 0.88),
+        ),
+      ),
+    );
+  }
 
   /// 将赛季时间格式化为 月-日 时:分
   String _formatSeasonTime(String? value) {
@@ -209,29 +348,17 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
   Widget _buildBotSelector() {
     final list = _effectiveBots;
     if (list.isEmpty) return const SizedBox.shrink();
-    if (list.length == 1) {
-      return Align(
-        alignment: Alignment.centerLeft,
-        child: _glassCard(
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Text(
-              list.first.tradingbotName ?? list.first.tradingbotId,
-              style: const TextStyle(color: AppFinanceStyle.valueColor),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ),
-      );
-    }
+    // 无论 1 个或多个交易账户都使用 DropdownButton，交互一致
     return Align(
       alignment: Alignment.centerLeft,
-      child: SizedBox(
-        width: (MediaQuery.of(context).size.width * 0.45).clamp(160.0, 280.0),
-        height: kMinInteractiveDimension,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: (MediaQuery.of(context).size.width * 0.45).clamp(160.0, 280.0),
+          minHeight: kMinInteractiveDimension,
+        ),
         child: _glassCard(
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
             child: DropdownButton<String>(
               value: _selectedBotId ?? list.first.tradingbotId,
               isExpanded: true,
@@ -258,6 +385,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
               },
             ),
           ),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         ),
       ),
     );
@@ -270,80 +398,164 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppFinanceStyle.backgroundDark,
-      appBar: AppBar(
-        title: Text(
-          '机器人收益',
-          style: AppFinanceStyle.labelTextStyle(context).copyWith(
-            color: AppFinanceStyle.valueColor,
-            fontSize: 18,
-            fontWeight: FontWeight.w600,
+  List<Widget> _buildMainColumnChildren() {
+    return [
+      if (_error != null)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: Text(
+            _error!,
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.error,
+              fontSize: 13,
+            ),
           ),
         ),
-        backgroundColor: AppFinanceStyle.backgroundDark,
-        foregroundColor: AppFinanceStyle.valueColor,
-        surfaceTintColor: Colors.transparent,
-      ),
+      if (_effectiveBots.isNotEmpty) ...[
+        _buildBotSelector(),
+        const SizedBox(height: 24),
+      ],
+      if (_accounts.isEmpty && _error == null)
+        const Padding(
+          padding: EdgeInsets.symmetric(vertical: 24),
+          child: Center(
+            child: Text(
+              '暂无账户数据，请确认后端 Accounts 已配置交易账户',
+              style: TextStyle(color: Colors.white70),
+            ),
+          ),
+        ),
+      _buildAccountOverview(),
+      const SizedBox(height: 32),
+      _buildProfitChart(),
+      const SizedBox(height: 32),
+      _buildMonthEndSection(),
+      const SizedBox(height: 32),
+      _buildPositions(),
+      const SizedBox(height: 32),
+      _buildSeasons(),
+    ];
+  }
+
+  Widget _buildBodyScrollable() {
+    final wide =
+        widget.webLayout && MediaQuery.sizeOf(context).width >= 960;
+    if (wide) {
+      return SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(32, 32, 32, 32),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (_error != null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 16),
+                      child: Text(
+                        _error!,
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  if (_effectiveBots.isNotEmpty) ...[
+                    _buildBotSelector(),
+                    const SizedBox(height: 24),
+                  ],
+                  if (_accounts.isEmpty && _error == null)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 24),
+                      child: Center(
+                        child: Text(
+                          '暂无账户数据，请确认后端 Accounts 已配置交易账户',
+                          style: TextStyle(color: Colors.white70),
+                        ),
+                      ),
+                    ),
+                  _buildAccountOverview(),
+                  const SizedBox(height: 32),
+                  _buildProfitChart(),
+                  const SizedBox(height: 32),
+                  _buildMonthEndSection(),
+                ],
+              ),
+            ),
+            const SizedBox(width: 28),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _buildPositions(),
+                  const SizedBox(height: 32),
+                  _buildSeasons(),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(32, 32, 32, 32),
+      children: _buildMainColumnChildren(),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final canPop = Navigator.of(context).canPop();
+    return Scaffold(
+      backgroundColor: AppFinanceStyle.backgroundDark,
+      appBar: widget.embedInShell
+          ? null
+          : AppBar(
+              leading: widget.webLayout && canPop
+                  ? IconButton(
+                      icon: const Icon(Icons.arrow_back),
+                      onPressed: () => Navigator.of(context).pop(),
+                    )
+                  : null,
+              automaticallyImplyLeading: !(widget.webLayout && canPop),
+              title: Text(
+                widget.webLayout ? '账户详情' : '账户收益',
+                style: AppFinanceStyle.labelTextStyle(context).copyWith(
+                  color: AppFinanceStyle.valueColor,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              backgroundColor: AppFinanceStyle.backgroundDark,
+              foregroundColor: AppFinanceStyle.valueColor,
+              surfaceTintColor: Colors.transparent,
+            ),
       body: WaterBackground(
         child: RefreshIndicator(
           onRefresh: _load,
           child: _loading && _accounts.isEmpty && _effectiveBots.isEmpty
               ? const Center(child: CircularProgressIndicator())
               : _error != null && _accounts.isEmpty && _effectiveBots.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        _error!,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(color: Colors.white70),
-                      ),
-                      const SizedBox(height: 16),
-                      FilledButton(onPressed: _load, child: const Text('重试')),
-                    ],
-                  ),
-                )
-              : ListView(
-                  padding: const EdgeInsets.fromLTRB(32, 32, 32, 32),
-                  children: [
-                    if (_error != null)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 16),
-                        child: Text(
-                          _error!,
-                          style: TextStyle(
-                            color: Theme.of(context).colorScheme.error,
-                            fontSize: 13,
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            _error!,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Colors.white70),
                           ),
-                        ),
-                      ),
-                    if (_effectiveBots.isNotEmpty) ...[
-                      _buildBotSelector(),
-                      const SizedBox(height: 24),
-                    ],
-                    if (_accounts.isEmpty && _error == null)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 24),
-                        child: Center(
-                          child: Text(
-                            '暂无账户数据，请确认后端已配置交易机器人',
-                            style: TextStyle(color: Colors.white70),
+                          const SizedBox(height: 16),
+                          FilledButton(
+                            onPressed: _load,
+                            child: const Text('重试'),
                           ),
-                        ),
+                        ],
                       ),
-                    _buildAccountOverview(),
-                    const SizedBox(height: 32),
-                    _buildProfitChart(),
-                    const SizedBox(height: 32),
-                    _buildPositions(),
-                    const SizedBox(height: 32),
-                    _buildSeasons(),
-                  ],
-                ),
+                    )
+                  : _buildBodyScrollable(),
         ),
       ),
     );
@@ -378,8 +590,8 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
               Expanded(
                 child: _overviewChip(
                   context,
-                  '权益',
-                  _fmt(equity),
+                  '现金余额',
+                  _fmt(balance),
                   titleSize: titleSize,
                   valueColor: AppFinanceStyle.profitGreenEnd,
                 ),
@@ -388,8 +600,8 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
               Expanded(
                 child: _overviewChip(
                   context,
-                  '余额',
-                  _fmt(balance),
+                  '权益',
+                  _fmt(equity),
                   valueColor: AppFinanceStyle.profitGreenEnd,
                   titleSize: titleSize,
                 ),
@@ -447,6 +659,11 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
     );
   }
 
+  Widget _buildMonthEndSection() {
+    if (_selectedAccount == null) return const SizedBox.shrink();
+    return _glassCard(MonthEndProfitPanel(snapshots: _snapshots));
+  }
+
   Widget _buildProfitChart() {
     final a = _selectedAccount;
     if (a == null) return const SizedBox.shrink();
@@ -474,8 +691,8 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
           if (_snapshots.isNotEmpty) ...[
             const SizedBox(height: 8),
             SizedBox(
-              height: 192,
-              child: _ProfitPercentLineChart(snapshots: _snapshots),
+              height: widget.webLayout ? 240 : 192,
+              child: ProfitPercentLineChart(snapshots: _snapshots),
             ),
           ],
           const SizedBox(height: 12),
@@ -516,7 +733,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('当前', style: AppFinanceStyle.labelTextStyle(context)),
+                  Text('权益', style: AppFinanceStyle.labelTextStyle(context)),
                   Text(
                     _fmt(current),
                     style:
@@ -626,6 +843,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
                             ),
                       ),
                     ),
+                  _buildOkxDebugHint(),
                 ],
               ),
             )
@@ -710,32 +928,31 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
                 final color = p.upl >= 0
                     ? AppFinanceStyle.profitGreenEnd
                     : Colors.red;
+                final small = Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: AppFinanceStyle.labelColor,
+                );
                 return Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
                         '${p.instId} $side ${p.pos.toStringAsFixed(4)}',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: AppFinanceStyle.labelColor,
-                        ),
+                        style: small,
                       ),
-                      Text(
-                        '均价 ${_fmt(p.avgPx)}',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: AppFinanceStyle.labelColor,
-                        ),
-                      ),
-                      Text(
-                        '标记 ${_fmt(p.markPx)}',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: AppFinanceStyle.labelColor,
-                        ),
-                      ),
-                      Text(
-                        _fmt(p.upl),
-                        style: TextStyle(color: color, fontSize: 12),
+                      const SizedBox(height: 4),
+                      Wrap(
+                        spacing: 12,
+                        runSpacing: 4,
+                        children: [
+                          Text('均价 ${_fmt(p.avgPx)}', style: small),
+                          Text('现价 ${_fmt(p.displayPrice)}', style: small),
+                          Text('标记 ${_fmt(p.markPx)}', style: small),
+                          Text(
+                            '浮盈 ${_fmt(p.upl)}',
+                            style: TextStyle(color: color, fontSize: 12),
+                          ),
+                        ],
                       ),
                     ],
                   ),
@@ -752,6 +969,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
                   ),
                 ),
               ),
+            _buildOkxDebugHint(),
           ],
         ],
       ),
@@ -934,60 +1152,6 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
             }),
         ],
       ),
-    );
-  }
-}
-
-/// 盈利率曲线（参考策略管理）：用 profitPercent 画线，盈利部分更明显
-class _ProfitPercentLineChart extends StatelessWidget {
-  const _ProfitPercentLineChart({required this.snapshots});
-
-  final List<BotProfitSnapshot> snapshots;
-
-  @override
-  Widget build(BuildContext context) {
-    if (snapshots.isEmpty) return const SizedBox.shrink();
-    final spots = <FlSpot>[];
-    double minY = 0, maxY = 0;
-    for (var i = 0; i < snapshots.length; i++) {
-      final p = snapshots[i].profitPercent;
-      spots.add(FlSpot(i.toDouble(), p));
-      if (p < minY) minY = p;
-      if (p > maxY) maxY = p;
-    }
-    if (minY == maxY) {
-      minY = minY - 1;
-      maxY = maxY + 1;
-    }
-    final isPositive =
-        snapshots.isNotEmpty && (snapshots.last.profitPercent >= 0);
-    final lineColor = isPositive ? AppFinanceStyle.profitGreenEnd : Colors.red;
-    return LineChart(
-      LineChartData(
-        minX: 0,
-        maxX: (snapshots.length - 1).clamp(0, double.infinity).toDouble(),
-        minY: minY - 2,
-        maxY: maxY + 2,
-        gridData: FlGridData(show: false),
-        titlesData: FlTitlesData(show: false),
-        borderData: FlBorderData(show: false),
-        lineBarsData: [
-          LineChartBarData(
-            spots: spots,
-            isCurved: true,
-            color: lineColor,
-            barWidth: 3,
-            isStrokeCapRound: true,
-            dotData: FlDotData(show: false),
-            belowBarData: BarAreaData(
-              show: true,
-              color: (isPositive ? AppFinanceStyle.profitGreenEnd : Colors.red)
-                  .withValues(alpha: 0.35),
-            ),
-          ),
-        ],
-      ),
-      duration: const Duration(milliseconds: 150),
     );
   }
 }

@@ -1,0 +1,16 @@
+{
+  "api": {
+    "name": "Forest_Sandbox",
+    "key": "92e9d100-e423-476e-b565-f877f0544777",
+    "secret": "05D772CEC47AE3EB1EA26E09ACEB526D",
+    "passphrase": "Lin118126&",
+    "base_url": "https://www.okx.com",
+    "sandbox": true
+  },
+  "settings": {
+    "debug": false,
+    "log_level": "INFO",
+    "timeout": 30
+  }
+}
+

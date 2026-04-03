@@ -124,6 +124,56 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_bot_seasons_bot_id ON bot_seasons(bot_id);
             CREATE INDEX IF NOT EXISTS idx_bot_seasons_started ON bot_seasons(started_at);
+            CREATE TABLE IF NOT EXISTS account_meta (
+                account_id TEXT PRIMARY KEY,
+                initial_capital REAL NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS account_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id TEXT NOT NULL,
+                snapshot_at TEXT NOT NULL,
+                cash_balance REAL NOT NULL DEFAULT 0,
+                equity_usdt REAL NOT NULL DEFAULT 0,
+                initial_capital REAL NOT NULL DEFAULT 0,
+                profit_amount REAL NOT NULL DEFAULT 0,
+                profit_percent REAL NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_account_snapshots_account ON account_snapshots(account_id);
+            CREATE INDEX IF NOT EXISTS idx_account_snapshots_at ON account_snapshots(snapshot_at);
+            CREATE TABLE IF NOT EXISTS account_month_open (
+                account_id TEXT NOT NULL,
+                year_month TEXT NOT NULL,
+                open_equity REAL NOT NULL,
+                recorded_at TEXT NOT NULL,
+                PRIMARY KEY (account_id, year_month)
+            );
+            CREATE TABLE IF NOT EXISTS account_positions_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id TEXT NOT NULL,
+                okx_pos_id TEXT NOT NULL,
+                inst_id TEXT NOT NULL DEFAULT '',
+                inst_type TEXT,
+                pos_side TEXT,
+                mgn_mode TEXT,
+                open_avg_px REAL,
+                close_avg_px REAL,
+                open_max_pos TEXT,
+                close_total_pos TEXT,
+                pnl REAL,
+                realized_pnl REAL,
+                fee REAL,
+                funding_fee REAL,
+                close_type TEXT,
+                c_time_ms TEXT,
+                u_time_ms TEXT NOT NULL,
+                raw_json TEXT NOT NULL,
+                synced_at TEXT NOT NULL,
+                UNIQUE(account_id, okx_pos_id, u_time_ms)
+            );
+            CREATE INDEX IF NOT EXISTS idx_aph_account ON account_positions_history(account_id);
+            CREATE INDEX IF NOT EXISTS idx_aph_utime ON account_positions_history(u_time_ms);
         """)
         conn.commit()
         # 若用户表为空且存在 users.json，则导入
@@ -166,17 +216,190 @@ def user_create(username: str, password_hash: str) -> bool:
         conn.close()
 
 
-def user_list() -> list[dict]:
-    """返回用户列表（不含 password_hash）。"""
+_VALID_USER_ROLES = frozenset({"customer", "trader", "admin"})
+
+
+def user_get_role(username: str) -> str:
+    """返回 customer / trader / admin；未知或缺列时默认 trader。"""
     conn = get_conn()
     try:
         cur = conn.execute(
-            "SELECT id, username, created_at FROM users ORDER BY id"
+            "SELECT role FROM users WHERE LOWER(TRIM(username)) = LOWER(?)",
+            (username.strip(),),
         )
-        return [
-            {"id": r[0], "username": r[1], "created_at": r[2]}
-            for r in cur.fetchall()
-        ]
+        row = cur.fetchone()
+        if not row or row[0] is None:
+            return "trader"
+        r = str(row[0]).strip().lower()
+        return r if r in _VALID_USER_ROLES else "trader"
+    except sqlite3.OperationalError:
+        return "trader"
+    finally:
+        conn.close()
+
+
+def user_get_linked_account_ids(username: str) -> list[str]:
+    """客户可访问的 account_id / tradingbot_id 列表；解析 linked_account_ids JSON。"""
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "SELECT linked_account_ids FROM users WHERE LOWER(TRIM(username)) = LOWER(?)",
+            (username.strip(),),
+        )
+        row = cur.fetchone()
+        if not row or row[0] is None or str(row[0]).strip() == "":
+            return []
+        raw = str(row[0]).strip()
+        try:
+            data = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            return []
+        if not isinstance(data, list):
+            return []
+        out: list[str] = []
+        for x in data:
+            if x is None:
+                continue
+            s = str(x).strip()
+            if s:
+                out.append(s)
+        return out
+    except sqlite3.OperationalError:
+        return []
+    finally:
+        conn.close()
+
+
+def user_list() -> list[dict]:
+    """返回用户列表（不含 password_hash），含 role、linked_account_ids。"""
+    conn = get_conn()
+    try:
+        try:
+            cur = conn.execute(
+                "SELECT id, username, created_at, role, linked_account_ids FROM users ORDER BY id"
+            )
+            rows = cur.fetchall()
+        except sqlite3.OperationalError:
+            cur = conn.execute(
+                "SELECT id, username, created_at FROM users ORDER BY id"
+            )
+            rows = cur.fetchall()
+            return [
+                {
+                    "id": r[0],
+                    "username": r[1],
+                    "created_at": r[2],
+                    "role": "trader",
+                    "linked_account_ids": [],
+                }
+                for r in rows
+            ]
+        out: list[dict] = []
+        for r in rows:
+            role = str(r[3] or "trader").strip().lower()
+            if role not in _VALID_USER_ROLES:
+                role = "trader"
+            links: list[str] = []
+            if r[4]:
+                try:
+                    parsed = json.loads(str(r[4]))
+                    if isinstance(parsed, list):
+                        links = [str(x).strip() for x in parsed if str(x).strip()]
+                except (TypeError, json.JSONDecodeError):
+                    links = []
+            out.append(
+                {
+                    "id": r[0],
+                    "username": r[1],
+                    "created_at": r[2],
+                    "role": role,
+                    "linked_account_ids": links,
+                }
+            )
+        return out
+    finally:
+        conn.close()
+
+
+def user_get_by_id(user_id: int) -> dict | None:
+    conn = get_conn()
+    try:
+        try:
+            cur = conn.execute(
+                "SELECT id, username, created_at, role, linked_account_ids FROM users WHERE id = ?",
+                (user_id,),
+            )
+            r = cur.fetchone()
+        except sqlite3.OperationalError:
+            cur = conn.execute(
+                "SELECT id, username, created_at FROM users WHERE id = ?",
+                (user_id,),
+            )
+            r = cur.fetchone()
+            if not r:
+                return None
+            return {
+                "id": r[0],
+                "username": r[1],
+                "created_at": r[2],
+                "role": "trader",
+                "linked_account_ids": [],
+            }
+        if not r:
+            return None
+        role = str(r[3] or "trader").strip().lower()
+        if role not in _VALID_USER_ROLES:
+            role = "trader"
+        links: list[str] = []
+        if r[4]:
+            try:
+                parsed = json.loads(str(r[4]))
+                if isinstance(parsed, list):
+                    links = [str(x).strip() for x in parsed if str(x).strip()]
+            except (TypeError, json.JSONDecodeError):
+                links = []
+        return {
+            "id": r[0],
+            "username": r[1],
+            "created_at": r[2],
+            "role": role,
+            "linked_account_ids": links,
+        }
+    finally:
+        conn.close()
+
+
+def user_update_profile(
+    user_id: int,
+    *,
+    role: str | None = None,
+    linked_account_ids: list[str] | None = None,
+) -> bool:
+    """更新角色与/或客户可见账户；role 须为合法枚举。无有效变更时返回 False。"""
+    conn = get_conn()
+    try:
+        fields: list[str] = []
+        args: list[Any] = []
+        if role is not None:
+            rr = str(role).strip().lower()
+            if rr not in _VALID_USER_ROLES:
+                return False
+            fields.append("role = ?")
+            args.append(rr)
+        if linked_account_ids is not None:
+            fields.append("linked_account_ids = ?")
+            args.append(json.dumps(linked_account_ids, ensure_ascii=False))
+        if not fields:
+            return False
+        args.append(user_id)
+        cur = conn.execute(
+            f"UPDATE users SET {', '.join(fields)} WHERE id = ?",
+            args,
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    except sqlite3.OperationalError:
+        return False
     finally:
         conn.close()
 
@@ -479,6 +702,340 @@ def bot_season_list_by_bot(bot_id: str, limit: int = 50) -> list[dict]:
                 "created_at": r[8],
             }
             for r in cur.fetchall()
+        ]
+    finally:
+        conn.close()
+
+
+# ---------- Account_List 账户（AccountMgr 定时快照、月初权益） ----------
+def account_meta_upsert(account_id: str, initial_capital: float) -> None:
+    """写入或更新账户初始资金（来自 Account_List.json 的 Initial_capital）。"""
+    conn = get_conn()
+    try:
+        conn.execute(
+            """INSERT INTO account_meta (account_id, initial_capital, updated_at)
+               VALUES (?, ?, datetime('now'))
+               ON CONFLICT(account_id) DO UPDATE SET
+                 initial_capital = excluded.initial_capital,
+                 updated_at = datetime('now')""",
+            (account_id.strip(), float(initial_capital)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def account_meta_get(account_id: str) -> dict | None:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "SELECT account_id, initial_capital, updated_at FROM account_meta WHERE account_id = ?",
+            (account_id.strip(),),
+        )
+        r = cur.fetchone()
+        if not r:
+            return None
+        return {
+            "account_id": r[0],
+            "initial_capital": float(r[1]),
+            "updated_at": r[2],
+        }
+    finally:
+        conn.close()
+
+
+def account_snapshot_insert(
+    account_id: str,
+    snapshot_at: str,
+    cash_balance: float,
+    equity_usdt: float,
+    initial_capital: float,
+    profit_amount: float,
+    profit_percent: float,
+) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            """INSERT INTO account_snapshots
+               (account_id, snapshot_at, cash_balance, equity_usdt, initial_capital,
+                profit_amount, profit_percent)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                account_id.strip(),
+                snapshot_at,
+                cash_balance,
+                equity_usdt,
+                initial_capital,
+                profit_amount,
+                profit_percent,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def account_snapshot_latest_by_account(account_id: str) -> dict | None:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """SELECT id, account_id, snapshot_at, cash_balance, equity_usdt, initial_capital,
+                      profit_amount, profit_percent, created_at
+               FROM account_snapshots WHERE account_id = ? ORDER BY snapshot_at DESC LIMIT 1""",
+            (account_id.strip(),),
+        )
+        r = cur.fetchone()
+        if not r:
+            return None
+        return {
+            "id": r[0],
+            "account_id": r[1],
+            "snapshot_at": r[2],
+            "cash_balance": r[3],
+            "equity_usdt": r[4],
+            "initial_capital": r[5],
+            "profit_amount": r[6],
+            "profit_percent": r[7],
+            "created_at": r[8],
+        }
+    finally:
+        conn.close()
+
+
+def account_snapshot_query_by_account(account_id: str, limit: int = 500) -> list[dict]:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """SELECT id, account_id, snapshot_at, cash_balance, equity_usdt, initial_capital,
+                      profit_amount, profit_percent, created_at
+               FROM account_snapshots WHERE account_id = ? ORDER BY snapshot_at ASC LIMIT ?""",
+            (account_id.strip(), limit),
+        )
+        return [
+            {
+                "id": r[0],
+                "account_id": r[1],
+                "snapshot_at": r[2],
+                "cash_balance": r[3],
+                "equity_usdt": r[4],
+                "initial_capital": r[5],
+                "profit_amount": r[6],
+                "profit_percent": r[7],
+                "created_at": r[8],
+            }
+            for r in cur.fetchall()
+        ]
+    finally:
+        conn.close()
+
+
+def account_month_open_get(account_id: str, year_month: str) -> dict | None:
+    """year_month 形如 2026-04。"""
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """SELECT account_id, year_month, open_equity, recorded_at
+               FROM account_month_open WHERE account_id = ? AND year_month = ?""",
+            (account_id.strip(), year_month.strip()),
+        )
+        r = cur.fetchone()
+        if not r:
+            return None
+        return {
+            "account_id": r[0],
+            "year_month": r[1],
+            "open_equity": float(r[2]),
+            "recorded_at": r[3],
+        }
+    finally:
+        conn.close()
+
+
+def account_month_open_insert_if_absent(
+    account_id: str,
+    year_month: str,
+    open_equity: float,
+    recorded_at: str,
+) -> None:
+    """每月仅第一条记录生效（月初首次快照时写入）。"""
+    conn = get_conn()
+    try:
+        conn.execute(
+            """INSERT OR IGNORE INTO account_month_open
+               (account_id, year_month, open_equity, recorded_at)
+               VALUES (?, ?, ?, ?)""",
+            (account_id.strip(), year_month.strip(), open_equity, recorded_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _fnum(v: object) -> float | None:
+    if v is None or v == "":
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def account_positions_history_insert_batch(
+    account_id: str,
+    rows: list[dict],
+    synced_at: str,
+) -> int:
+    """写入 OKX positions-history 行；按 (account_id, okx_pos_id, u_time_ms) 去重。返回新插入行数。"""
+    aid = account_id.strip()
+    conn = get_conn()
+    inserted = 0
+    try:
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            pid = str(r.get("posId") or "").strip()
+            ut = str(r.get("uTime") or "").strip()
+            if not pid or not ut:
+                continue
+            inst = str(r.get("instId") or "").strip()
+            cur = conn.execute(
+                """INSERT OR IGNORE INTO account_positions_history
+                   (account_id, okx_pos_id, inst_id, inst_type, pos_side, mgn_mode,
+                    open_avg_px, close_avg_px, open_max_pos, close_total_pos,
+                    pnl, realized_pnl, fee, funding_fee, close_type,
+                    c_time_ms, u_time_ms, raw_json, synced_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    aid,
+                    pid,
+                    inst,
+                    (str(r.get("instType") or "").strip() or None),
+                    (str(r.get("posSide") or r.get("direction") or "").strip() or None),
+                    (str(r.get("mgnMode") or "").strip() or None),
+                    _fnum(r.get("openAvgPx")),
+                    _fnum(r.get("closeAvgPx")),
+                    str(r.get("openMaxPos") or "") or None,
+                    str(r.get("closeTotalPos") or "") or None,
+                    _fnum(r.get("pnl")),
+                    _fnum(r.get("realizedPnl")),
+                    _fnum(r.get("fee")),
+                    _fnum(r.get("fundingFee")),
+                    str(r.get("type") or "").strip() or None,
+                    str(r.get("cTime") or "").strip() or None,
+                    ut,
+                    json.dumps(r, ensure_ascii=False),
+                    synced_at,
+                ),
+            )
+            if cur.rowcount and cur.rowcount > 0:
+                inserted += 1
+        conn.commit()
+        return inserted
+    finally:
+        conn.close()
+
+
+def account_positions_history_query_by_account(
+    account_id: str, limit: int = 500
+) -> list[dict]:
+    """按 u_time_ms 倒序返回历史仓位（解析常用字段 + raw_json）。"""
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """SELECT id, account_id, okx_pos_id, inst_id, inst_type, pos_side, mgn_mode,
+                      open_avg_px, close_avg_px, open_max_pos, close_total_pos,
+                      pnl, realized_pnl, fee, funding_fee, close_type,
+                      c_time_ms, u_time_ms, raw_json, synced_at
+               FROM account_positions_history
+               WHERE account_id = ?
+               ORDER BY CAST(u_time_ms AS INTEGER) DESC
+               LIMIT ?""",
+            (account_id.strip(), max(1, int(limit))),
+        )
+        out: list[dict] = []
+        for r in cur.fetchall():
+            raw = r[18]
+            try:
+                parsed = json.loads(raw) if raw else {}
+            except (TypeError, json.JSONDecodeError):
+                parsed = {}
+            out.append(
+                {
+                    "id": r[0],
+                    "account_id": r[1],
+                    "okx_pos_id": r[2],
+                    "inst_id": r[3],
+                    "inst_type": r[4],
+                    "pos_side": r[5],
+                    "mgn_mode": r[6],
+                    "open_avg_px": r[7],
+                    "close_avg_px": r[8],
+                    "open_max_pos": r[9],
+                    "close_total_pos": r[10],
+                    "pnl": r[11],
+                    "realized_pnl": r[12],
+                    "fee": r[13],
+                    "funding_fee": r[14],
+                    "close_type": r[15],
+                    "c_time_ms": r[16],
+                    "u_time_ms": r[17],
+                    "raw": parsed,
+                    "synced_at": r[19],
+                }
+            )
+        return out
+    finally:
+        conn.close()
+
+
+def account_positions_daily_realized(
+    account_id: str, year: int, month: int
+) -> list[dict[str, Any]]:
+    """
+    按 UTC 自然日汇总历史平仓盈亏与笔数。
+    单笔净盈亏 = COALESCE(pnl,0) + COALESCE(fee,0) + COALESCE(funding_fee,0)（与 OKX 费用字段一致）。
+    """
+    from datetime import datetime, timezone
+
+    aid = (account_id or "").strip()
+    if not aid or year < 2000 or year > 2100 or month < 1 or month > 12:
+        return []
+    try:
+        start = datetime(year, month, 1, tzinfo=timezone.utc)
+    except ValueError:
+        return []
+    if month == 12:
+        end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        end = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+    start_ms = int(start.timestamp() * 1000)
+    end_ms = int(end.timestamp() * 1000)
+
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT strftime('%Y-%m-%d',
+                   datetime(CAST(u_time_ms AS INTEGER) / 1000, 'unixepoch')) AS d,
+                   SUM(COALESCE(pnl, 0) + COALESCE(fee, 0) + COALESCE(funding_fee, 0)) AS net_pnl,
+                   COUNT(*) AS close_count
+            FROM account_positions_history
+            WHERE account_id = ?
+              AND CAST(u_time_ms AS INTEGER) >= ?
+              AND CAST(u_time_ms AS INTEGER) < ?
+            GROUP BY d
+            ORDER BY d
+            """,
+            (aid, start_ms, end_ms),
+        )
+        return [
+            {
+                "day": str(r[0]),
+                "net_pnl": float(r[1] or 0),
+                "close_count": int(r[2] or 0),
+            }
+            for r in cur.fetchall()
+            if r[0]
         ]
     finally:
         conn.close()

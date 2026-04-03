@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
@@ -6,9 +7,12 @@ import '../theme/finance_style.dart';
 import '../widgets/water_background.dart';
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key, this.onLogout});
+  const SettingsScreen({super.key, this.onLogout, this.embedInShell = false});
 
   final VoidCallback? onLogout;
+
+  /// 嵌入 Web 主导航壳时不显示本页 [AppBar]。
+  final bool embedInShell;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -92,12 +96,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppFinanceStyle.backgroundDark,
-      appBar: AppBar(
-        title: Text('设置', style: AppFinanceStyle.labelTextStyle(context).copyWith(color: AppFinanceStyle.valueColor, fontSize: 18)),
-        backgroundColor: AppFinanceStyle.backgroundDark,
-        foregroundColor: AppFinanceStyle.valueColor,
-        surfaceTintColor: Colors.transparent,
-      ),
+      appBar: widget.embedInShell
+          ? null
+          : AppBar(
+              title: Text(
+                '设置',
+                style: AppFinanceStyle.labelTextStyle(context).copyWith(
+                  color: AppFinanceStyle.valueColor,
+                  fontSize: 18,
+                ),
+              ),
+              backgroundColor: AppFinanceStyle.backgroundDark,
+              foregroundColor: AppFinanceStyle.valueColor,
+              surfaceTintColor: Colors.transparent,
+            ),
       body: WaterBackground(
         child: Column(
           children: [
@@ -149,49 +161,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 20),
-                  FinanceCard(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                    child: SwitchListTile(
-                      title: Text('指纹登录', style: AppFinanceStyle.labelTextStyle(context).copyWith(color: AppFinanceStyle.valueColor)),
-                      value: _fingerprintEnabled,
-                      onChanged: _toggleFingerprint,
-                      activeColor: AppFinanceStyle.profitGreenEnd,
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  FinanceCard(
-                    padding: const EdgeInsets.all(20),
-                    child: SizedBox(
-                      width: double.infinity,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text('权限说明', style: AppFinanceStyle.labelTextStyle(context).copyWith(color: AppFinanceStyle.valueColor, fontSize: 16)),
-                          const SizedBox(height: 8),
-                          Text(
-                            '若提示「已拒绝敏感权限」或指纹/网络不可用，请在系统设置中为本应用开启：\n'
-                            '· 网络（访问后端与账户数据）\n'
-                            '· 生物识别/指纹（指纹登录）',
-                            style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 13, height: 1.4),
-                          ),
-                          const SizedBox(height: 16),
-                          FilledButton.tonalIcon(
-                            onPressed: () async {
-                              await openAppSettings();
-                            },
-                            style: FilledButton.styleFrom(
-                              backgroundColor: AppFinanceStyle.cardBorder.withValues(alpha: 0.5),
-                              foregroundColor: AppFinanceStyle.valueColor,
-                            ),
-                            icon: const Icon(Icons.settings, size: 20),
-                            label: const Text('打开应用设置'),
-                          ),
-                        ],
+                  if (!kIsWeb) ...[
+                    const SizedBox(height: 20),
+                    FinanceCard(
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                      child: SwitchListTile(
+                        title: Text('指纹登录', style: AppFinanceStyle.labelTextStyle(context).copyWith(color: AppFinanceStyle.valueColor)),
+                        value: _fingerprintEnabled,
+                        onChanged: _toggleFingerprint,
+                        activeColor: AppFinanceStyle.profitGreenEnd,
                       ),
                     ),
-                  ),
+                    const SizedBox(height: 20),
+                    FinanceCard(
+                      padding: const EdgeInsets.all(20),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text('权限说明', style: AppFinanceStyle.labelTextStyle(context).copyWith(color: AppFinanceStyle.valueColor, fontSize: 16)),
+                            const SizedBox(height: 8),
+                            Text(
+                              '若提示「已拒绝敏感权限」或指纹/网络不可用，请在系统设置中为本应用开启：\n'
+                              '· 网络（访问后端与账户数据）\n'
+                              '· 生物识别/指纹（指纹登录）',
+                              style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 13, height: 1.4),
+                            ),
+                            const SizedBox(height: 16),
+                            FilledButton.tonalIcon(
+                              onPressed: () async {
+                                await openAppSettings();
+                              },
+                              style: FilledButton.styleFrom(
+                                backgroundColor: AppFinanceStyle.cardBorder.withValues(alpha: 0.5),
+                                foregroundColor: AppFinanceStyle.valueColor,
+                              ),
+                              icon: const Icon(Icons.settings, size: 20),
+                              label: const Text('打开应用设置'),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),

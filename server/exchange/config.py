@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-OKX 交易所配置：从 botconfig 的 OKX JSON 读取，与 okx.py 行为一致。
+OKX 交易所配置：从 Accounts 的 OKX JSON 读取，与 okx.py 行为一致。
 供 ExchangeManager 在无 QTrader 时使用。
 """
 from pathlib import Path
@@ -9,12 +9,12 @@ from typing import List, Optional
 from . import okx
 from .models import ExchangeConfig, ExchangeType as ModelExchangeType
 
-# 默认配置目录：server/botconfig
-_DEFAULT_CONFIG_DIR = Path(__file__).resolve().parent.parent / "botconfig"
+# 默认配置目录：server/Accounts
+_DEFAULT_CONFIG_DIR = Path(__file__).resolve().parent.parent / "Accounts"
 
 
 def _get_config_dir() -> Path:
-    return Path(__file__).resolve().parent.parent / "botconfig"
+    return Path(__file__).resolve().parent.parent / "Accounts"
 
 
 def get_default_okx_config_path() -> Optional[Path]:

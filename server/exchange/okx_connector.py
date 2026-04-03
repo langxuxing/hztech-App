@@ -390,6 +390,10 @@ class ExchangeManager:
             return {
                 "total_eq": float(raw.get("total_eq", 0)),
                 "avail_eq": float(raw.get("avail_eq", 0)),
+                "equity_usdt": float(raw.get("equity_usdt", raw.get("total_eq", 0))),
+                "cash_balance": float(
+                    raw.get("cash_balance", raw.get("avail_eq", 0))
+                ),
                 "upl": float(raw.get("upl", 0)),
             }
         if not exchange:

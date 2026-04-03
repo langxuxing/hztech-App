@@ -20,7 +20,7 @@ db.DB_PATH = os.path.join(_tmp, "test.db")
 db.init_db()
 db.user_create("admin", hashlib.sha256(b"123").hexdigest())
 
-from app import app  # noqa: E402
+from main import app  # noqa: E402
 
 app.config["TESTING"] = True
 

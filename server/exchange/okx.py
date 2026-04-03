@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 OKX 交易所 API：配置加载、账户余额/持仓/行情，基于 ccxt 实现。
-与 botconfig/testapi.py 行为一致（优先 api 子对象、沙盒请求头）。
+与 Accounts/testapi.py 行为一致（优先 api 子对象、沙盒请求头）。
 """
 from __future__ import annotations
 
@@ -21,12 +21,50 @@ import ccxt
 logger = logging.getLogger(__name__)
 _DEBUG_POSITIONS = os.environ.get("DEBUG_POSITIONS", "0") == "1"
 
+
+def get_public_egress_ip(timeout: float = 2.5) -> str | None:
+    """探测本机访问公网时的出口 IP（与 OKX 侧看到的来源 IP 一致，用于 1010 白名单排查）。"""
+    for url in (
+        "https://api.ipify.org",
+        "https://ifconfig.me/ip",
+    ):
+        try:
+            req = Request(url, headers={"User-Agent": "hztech-okx-debug/1"})
+            with urlopen(req, timeout=timeout) as resp:
+                text = resp.read().decode("utf-8", errors="replace").strip()
+                if text and len(text) < 45:
+                    return text.split()[0]
+        except Exception:
+            continue
+    return None
+
+
+def okx_debug_snapshot(config_path: Path | None) -> dict[str, object]:
+    """供 API 在 1010 等场景返回：出口 IP、所用配置文件名、脱敏 key，便于与手工 curl 对比。"""
+    path = _resolve_path(config_path)
+    out: dict[str, object] = {
+        "note": (
+            "OKX 校验的是发起 API 请求的服务器公网出口 IP（非手机/浏览器 IP）。"
+            "请将下方「出口 IP」加入该 API Key 的白名单。"
+        ),
+    }
+    if path:
+        out["config_file"] = path.name
+    cfg = load_okx_config(path) if path else None
+    if cfg:
+        key = (cfg.get("key") or "").strip()
+        out["apikey_masked"] = f"****{key[-4:]}" if len(key) >= 4 else "****"
+        out["sandbox"] = bool(cfg.get("sandbox"))
+    out["server_egress_ip"] = get_public_egress_ip()
+    return out
+
+
 # 默认配置文件路径（由 get_default_config_path 设置，config_path=None 时使用）
 _default_config_path: Path | None = None
 
 
 def get_default_config_path(config_dir: Path) -> Path:
-    """解析默认 OKX 配置路径并设为模块默认。config_dir 一般为 server/botconfig。"""
+    """解析默认 OKX 配置路径并设为模块默认。config_dir 一般为 server/Accounts。"""
     global _default_config_path
     path = Path(os.environ.get("OKX_CONFIG", str(config_dir / "okx.json")))
     if not path.exists():
@@ -61,7 +99,7 @@ def _read_key_secret_passphrase(obj: dict) -> tuple[str, str, str]:
 
 
 def load_okx_config(path: Path | None) -> dict | None:
-    """从 JSON 加载 OKX 配置（与 botconfig/testapi.py 一致，优先 api 子对象）。
+    """从 JSON 加载 OKX 配置（与 Accounts/testapi.py 一致，优先 api 子对象）。
     支持格式：
     1) 新格式：{"api": {"name", "key", "secret", "passphrase", "base_url", "sandbox"}}
     2) 中间格式：{"api": {"apikey", "secretkey", "passphrase", ...}}（api 内用旧键名）
@@ -156,7 +194,7 @@ def okx_request(
     config_path: Path | None = None,
     params: dict | None = None,
 ) -> tuple[dict | None, str | None]:
-    """OKX 私有接口签名请求（与 botconfig/testapi.py 一致）。
+    """OKX 私有接口签名请求（与 Accounts/testapi.py 一致）。
     返回 (data, error)。error 非空表示 HTTP 或配置错误（如 403）。"""
     path = _resolve_path(config_path)
     config_name = path.name if path else "default"
@@ -231,9 +269,13 @@ def okx_request(
             okx_code in ("1010", 1010) or (err_body and "1010" in err_body)
         )
         if is_1010:
+            egress = get_public_egress_ip()
             logger.info(
-                "OKX 1010: %s %s -> IP 未在 API 白名单（请在 OKX 后台添加当前服务器 IP）",
+                "OKX 1010: %s %s -> IP 未在 API 白名单。"
+                " 本机测得出口 IP=%s, config=%s（请在 OKX 将该出口 IP 加入此 API Key 白名单）",
                 method, request_path,
+                egress or "未知",
+                config_name,
             )
         else:
             snippet = err_body[:500] if err_body else ""
@@ -260,7 +302,7 @@ def okx_request(
 
 
 def _okx_fetch_balance_fallback(config_path: Path | None) -> dict | None:
-    """余额获取回退：用原生签名请求 /api/v5/account/balance（避免 ccxt load_markets 解析异常）。"""
+    """余额：原生签名请求 /api/v5/account/balance（不经过 ccxt，避免 load_markets 解析 preopen 等标的异常）。"""
     data, _ = okx_request("GET", "/api/v5/account/balance", config_path=config_path)
     if data is None or data.get("code") != "0":
         return None
@@ -276,45 +318,39 @@ def _okx_fetch_balance_fallback(config_path: Path | None) -> dict | None:
             pass
     if avail_eq == 0 and total_eq != 0:
         avail_eq = total_eq
-    return {"total_eq": total_eq, "avail_eq": avail_eq, "upl": upl, "raw": data}
+    return _okx_balance_dict(total_eq, avail_eq, upl, raw=data)
+
+
+def _okx_balance_dict(
+    total_eq: float, avail_eq: float, upl: float, *, raw: object
+) -> dict:
+    """OKX /api/v5/account/balance 口径：权益 totalEq、可用权益 availEq（作现金余额展示）。"""
+    return {
+        "total_eq": total_eq,
+        "avail_eq": avail_eq,
+        "equity_usdt": total_eq,
+        "cash_balance": avail_eq,
+        "upl": upl,
+        "raw": raw,
+    }
 
 
 def okx_fetch_balance(config_path: Path | None = None) -> dict | None:
-    """调用 OKX 账户权益（ccxt fetch_balance，失败时回退到原生请求）。config_path 为空用默认配置。"""
+    """OKX 账户：权益 totalEq、现金余额口径 availEq（见 cash_balance / equity_usdt 字段）。
+
+    仅走 OKX v5 REST，不调用 ccxt.fetch_balance（否则会 load_markets，ccxt 对 preopen 等标的解析可能 TypeError: NoneType + str）。
+    """
     path = _resolve_path(config_path)
     cfg = load_okx_config(path) if path else None
     if not cfg or not (cfg.get("key") and cfg.get("secret")):
         return None
-    try:
-        exchange = _create_exchange(cfg)
-        balance = exchange.fetch_balance()
-    except TypeError as e:
-        if "NoneType" in str(e) and "+" in str(e) and "str" in str(e):
-            logger.warning(
-                "OKX fetch_balance: ccxt 解析 markets 报错（多为 preopen 标的空字段），请升级 ccxt>=4.4.85 或使用回退请求。错误: %s",
-                e,
-            )
-            return _okx_fetch_balance_fallback(path)
-        raise
-    except Exception as e:
-        logger.warning("OKX fetch_balance error: %s", e)
-        return None
-    total_eq = 0.0
-    avail_eq = 0.0
-    upl = 0.0
-    info = balance.get("info") or {}
-    data_list = info.get("data") if isinstance(info, dict) else []
-    if data_list:
-        for d in data_list:
-            try:
-                total_eq += float(d.get("totalEq", 0) or 0)
-                avail_eq += float(d.get("availEq", 0) or 0)
-                upl += float(d.get("upl", 0) or 0)
-            except (TypeError, ValueError):
-                pass
-    if avail_eq == 0 and total_eq != 0:
-        avail_eq = total_eq
-    return {"total_eq": total_eq, "avail_eq": avail_eq, "upl": upl, "raw": balance}
+    out = _okx_fetch_balance_fallback(path)
+    if out is not None:
+        return out
+    logger.warning(
+        "OKX fetch_balance: /api/v5/account/balance 未返回有效数据，请检查 API 权限、网络与配置"
+    )
+    return None
 
 
 def _okx_fetch_positions_fallback(config_path: Path | None) -> tuple[list[dict], str | None]:
@@ -454,4 +490,110 @@ def okx_fetch_positions(config_path: Path | None = None) -> tuple[list[dict], st
             continue
     if not out and raw_list:
         logger.info("OKX positions: %d raw items, all pos=0 or parse failed", len(raw_list))
+    return (out, None)
+
+
+def okx_fetch_positions_history(
+    config_path: Path | None = None,
+    *,
+    inst_type: str = "SWAP",
+    limit_per_page: int = 100,
+    max_pages: int = 5,
+) -> tuple[list[dict], str | None]:
+    """
+    历史仓位：GET /api/v5/account/positions-history（近约 3 个月，按 uTime 倒序）。
+    分页拉取多页后合并为列表；用于定时入库去重。
+    """
+    path = _resolve_path(config_path)
+    cfg = load_okx_config(path) if path else None
+    if not cfg or not (cfg.get("key") and cfg.get("secret")):
+        return ([], "OKX 配置文件不存在或格式无效")
+    lim = max(1, min(100, int(limit_per_page)))
+    pages = max(1, int(max_pages))
+    merged: list[dict] = []
+    after_ms: str | None = None
+    for _ in range(pages):
+        params: dict[str, str] = {"limit": str(lim)}
+        if inst_type:
+            params["instType"] = inst_type
+        if after_ms:
+            params["after"] = after_ms
+        data, err = okx_request(
+            "GET",
+            "/api/v5/account/positions-history",
+            config_path=config_path,
+            params=params,
+        )
+        if err:
+            return (merged, err) if merged else ([], err)
+        if data is None or data.get("code") != "0":
+            msg = (
+                data.get("msg", "positions-history 异常")
+                if isinstance(data, dict)
+                else "positions-history 异常"
+            )
+            return (merged, msg) if merged else ([], msg)
+        batch = data.get("data") or []
+        if not batch:
+            break
+        merged.extend(batch)
+        if len(batch) < lim:
+            break
+        uts: list[int] = []
+        for r in batch:
+            try:
+                u = int(str(r.get("uTime") or "0").strip() or 0)
+                if u:
+                    uts.append(u)
+            except (TypeError, ValueError, AttributeError):
+                continue
+        if not uts:
+            break
+        after_ms = str(min(uts))
+    return (merged, None)
+
+
+def okx_fetch_pending_orders(
+    config_path: Path | None = None,
+    *,
+    inst_type: str = "SWAP",
+) -> tuple[list[dict], str | None]:
+    """
+    当前委托（未成交）：GET /api/v5/trade/orders-pending。
+    返回 (订单列表简化字段, error)。不入库，仅供实时查询。
+    """
+    data, err = okx_request(
+        "GET",
+        "/api/v5/trade/orders-pending",
+        config_path=config_path,
+        params={"instType": inst_type},
+    )
+    if err:
+        return ([], err)
+    if data is None or data.get("code") != "0":
+        if isinstance(data, dict):
+            msg = data.get("msg", "orders-pending 异常")
+        else:
+            msg = "orders-pending 异常"
+        return ([], msg)
+    raw_list = data.get("data") or []
+    out: list[dict] = []
+    for o in raw_list:
+        if not isinstance(o, dict):
+            continue
+        try:
+            out.append({
+                "inst_id": (o.get("instId") or "").strip(),
+                "ord_id": (o.get("ordId") or "").strip(),
+                "side": (o.get("side") or "").strip(),
+                "pos_side": (o.get("posSide") or "").strip(),
+                "ord_type": (o.get("ordType") or "").strip(),
+                "state": (o.get("state") or "").strip(),
+                "px": o.get("px"),
+                "sz": o.get("sz"),
+                "fill_sz": o.get("fillSz"),
+                "u_time": o.get("uTime") or o.get("cTime"),
+            })
+        except (TypeError, ValueError):
+            continue
     return (out, None)

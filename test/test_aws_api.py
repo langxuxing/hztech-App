@@ -4,7 +4,7 @@
 AWS API 服务测试程序：对远程 API（或本地）发真实 HTTP 请求，校验各接口。
 用法：
   python test/test_aws_api.py
-  BASE_URL=http://54.66.108.150:9001 python test/test_aws_api.py
+  BASE_URL=http://54.252.181.151:9000 python test/test_aws_api.py
   python test/test_aws_api.py -v
   python test/test_aws_api.py --user admin --password 123
 不指定 BASE_URL 时从 server/deploy-aws.json 读取。
@@ -33,10 +33,14 @@ def load_base_url() -> str:
         with open(cfg_path, encoding="utf-8") as f:
             c = json.load(f)
         scheme = c.get("scheme", "http")
-        host = c.get("host", "127.0.0.1")
-        port = c.get("app_port", 9001)
+        api = c.get("api")
+        if isinstance(api, dict) and api.get("host"):
+            host = api["host"]
+        else:
+            host = c.get("host", "127.0.0.1")
+        port = c.get("web_port", 9000)
         return f"{scheme}://{host}:{port}"
-    return "http://127.0.0.1:9001"
+    return "http://127.0.0.1:8080"
 
 
 def request(
@@ -100,9 +104,13 @@ def main() -> int:
         failed += 1
     run_test("GET /", ok, f"code={code}" if verbose else "", verbose)
 
-    # 2) GET /api/strategy/status
+    # 2) GET /api/strategy/status（返回 ok + bots，无顶层 running）
     code, body = request("GET", f"{base}/api/strategy/status")
-    ok = code == 200 and isinstance(body, dict) and "running" in body
+    ok = (
+        code == 200
+        and isinstance(body, dict)
+        and (body.get("ok") is True or "bots" in body)
+    )
     if not ok:
         failed += 1
     run_test(
@@ -149,8 +157,8 @@ def main() -> int:
         print("\n  未获取到 token，跳过需登录接口。")
         if failed > 0:
             print(
-                "  提示: 502/连接失败通常表示 API(9001) 未启动。"
-                "到 EC2 执行: cd /home/ec2-user/mobileapp && bash server/install_on_aws.sh"
+                "  提示: 502/连接失败通常表示服务未启动或端口不对（本机 ./server/run_local.sh 默认 8080）。"
+                "到 EC2 执行: cd /home/ec2-user/hztechapp && bash server/install_on_aws.sh"
             )
         print(f"=== 完成：{failed} 项失败 ===")
         return 1 if failed else 0
@@ -184,16 +192,16 @@ def main() -> int:
         failed += 1
     run_test("GET /api/logs", ok, f"code={code}" if verbose else "", verbose)
 
-    # 9) POST /api/tradingbots/simpleserver/start（仅测接口返回）
+    # 9) POST /api/tradingbots/simpleserver-lhg/start（可管控 bot 之一，仅测接口结构）
     code, body = request(
-        "POST", f"{base}/api/tradingbots/simpleserver/start", token=token
+        "POST", f"{base}/api/tradingbots/simpleserver-lhg/start", token=token
     )
     ok = code == 200 and isinstance(body, dict) and "success" in body
     if not ok:
         failed += 1
     msg = (body.get("message", "") if isinstance(body, dict) else "")[:50]
     run_test(
-        "POST /api/tradingbots/simpleserver/start", ok,
+        "POST /api/tradingbots/simpleserver-lhg/start", ok,
         msg if verbose else "", verbose
     )
 
@@ -210,7 +218,7 @@ def main() -> int:
     if failed > 0:
         print(
             "\n  提示: 若为 502/连接错误，请到 EC2 检查并重启 API："
-            " cd /home/ec2-user/mobileapp && bash server/install_on_aws.sh"
+            " cd /home/ec2-user/hztechapp && bash server/install_on_aws.sh"
         )
     print(f"\n=== 完成：{failed} 项失败 ===")
     return 1 if failed else 0

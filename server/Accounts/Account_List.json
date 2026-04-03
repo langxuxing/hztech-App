@@ -1,0 +1,134 @@
+[
+  {
+    "account_id": "OKX_Alang_Sandbox",
+    "account_name": "阿郎测试",
+    "exchange_account": "OKX",
+    "symbol": "PEPE-USDT-SWAP",
+    "Initial_capital": 5000,
+    "trading_strategy": "Moneyflow-V2.1",
+    "account_key_file": "OKX_Alang_Sandbox.json",
+    "script_file": "botctrl/moneyflow_alangsandbox.sh",
+    "enbaled": true
+  },
+  {
+    "account_id": "OKX_Dong_Live",
+    "account_name": "董杰VIP",
+    "exchange_account": "OKX",
+    "symbol": "PEPE-USDT-SWAP",
+    "Initial_capital": 5000,
+    "trading_strategy": "Moneyflow-V2.1",
+    "account_key_file": "OKX_Dong_Live.json",
+    "script_file": "botctrl/moneyflow_alangsandbox.sh",
+    "enbaled": true
+  },
+  {
+    "account_id": "OKX_Hztech_Devops",
+    "account_name": "禾正科技测试",
+    "exchange_account": "OKX",
+    "symbol": "PEPE-USDT-SWAP",
+    "Initial_capital": 5000,
+    "trading_strategy": "Moneyflow-V2.1",
+    "account_key_file": "OKX_Hztech_Devops.json",
+    "script_file": "botctrl/moneyflow_alangsandbox.sh",
+    "enbaled": true
+  },
+  {
+    "account_id": "OKX_Forest_Sandbox",
+    "account_name": "林总沙盘",
+    "exchange_account": "OKX",
+    "symbol": "PEPE-USDT-SWAP",
+    "Initial_capital": 5000,
+    "trading_strategy": "Moneyflow-V2.1",
+    "account_key_file": "OKX_Forest_Sandbox.json",
+    "script_file": "botctrl/moneyflow_alangsandbox.sh",
+    "enbaled": true
+  },
+  {
+    "account_id": "OKX_Forest_Live",
+    "account_name": "林总账户",
+    "exchange_account": "OKX",
+    "symbol": "PEPE-USDT-SWAP",
+    "Initial_capital": 5000,
+    "trading_strategy": "Moneyflow-V2.1",
+    "account_key_file": "OKX_Forest_Live.json",
+    "script_file": "botctrl/forest_live.sh",
+    "enbaled": false
+  },
+  {
+    "account_id": "OKX_Guoguo_Live",
+    "account_name": "果果账户",
+    "exchange_account": "OKX",
+    "symbol": "PEPE-USDT-SWAP",
+    "Initial_capital": 5000,
+    "trading_strategy": "Moneyflow-V2.1",
+    "account_key_file": "OKX_Guoguo_Live.json",
+    "script_file": "botctrl/guoguo_live.sh",
+    "enbaled": false
+  },
+  {
+    "account_id": "OKX_HzTech_MainRepo",
+    "account_name": "禾正主账户",
+    "exchange_account": "OKX",
+    "symbol": "PEPE-USDT-SWAP",
+    "Initial_capital": 5000,
+    "trading_strategy": "Moneyflow-V2.1",
+    "account_key_file": "OKX_HzTech_MainRepo.json",
+    "script_file": "botctrl/hztech_mainrepo.sh",
+    "enbaled": true
+  },
+  {
+    "account_id": "OKX_HzTech_Moneyflow@001",
+    "account_name": "禾正现金流",
+    "exchange_account": "OKX",
+    "symbol": "PEPE-USDT-SWAP",
+    "Initial_capital": 5000,
+    "trading_strategy": "Moneyflow-V2.1",
+    "account_key_file": "OKX_HzTech_Moneyflow001.json",
+    "script_file": "botctrl/moneyflow_001.sh",
+    "enbaled": true
+  },
+  {
+    "account_id": "OKX_HzTech_Moneyflow@002",
+    "account_name": "Defi专户",
+    "exchange_account": "OKX",
+    "symbol": "PEPE-USDT-SWAP",
+    "Initial_capital": 500,
+    "trading_strategy": "Moneyflow-V2.1",
+    "script_file": "botctrl/moneyflow_002.sh",
+    "account_key_file": "OKX_HzTech_Moneyflow002.json",
+    "enbaled":true
+  },
+  {
+    "account_id": "OKX_HzTech_Moneyflow@003",
+    "account_name": "禾正复利增长",
+    "exchange_account": "OKX",
+    "symbol": "PEPE-USDT-SWAP",
+    "Initial_capital": 5000,
+    "trading_strategy": "Moneyflow-V2.1",
+    "script_file": "botctrl/moneyflow_003.sh",
+    "account_key_file": "OKX_HzTech_Moneyflow003.json",
+    "enbaled": true
+  },
+  {
+    "account_id": "OKX_HzTech_Moneyflow@004",
+    "account_name": "董杰VIP",
+    "exchange_account": "OKX",
+    "symbol": "PEPE-USDT-SWAP",
+    "Initial_capital": 7153,
+    "trading_strategy": "Moneyflow-V2.1",
+    "script_file": "botctrl/moneyflow_004.sh",
+    "account_key_file": "OKX_HzTech_Moneyflow004.json",
+    "enbaled": true
+  },
+  {
+    "account_id": "OKX_HzTech_Moneyflow@005",
+    "account_name": "禾正现金流2",
+    "exchange_account": "OKX",
+    "symbol": "PEPE-USDT-SWAP",
+    "trading_strategy": "Moneyflow-V2.1",
+    "Initial_capital": 0,
+    "account_key_file": "OKX_HzTech_Moneyflow005.json",
+    "script_file": "botctrl/moneyflow_005.sh",
+    "enbaled": true
+  }
+]

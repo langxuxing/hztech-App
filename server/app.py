@@ -1,18 +1,19 @@
 # -*- coding: utf-8 -*-
 """
-MobileApp Web + API Server（部署于 AWS）
-- Web：展示信息、APK 下载
-- API：App 所需（QtraderApi）、策略启停、OKX 信息
+MobileApp API + Flutter Web 静态站点（部署于 AWS）
+- API（JSON）：App / Flutter Web 共用，路径 /api/*
+- Web UI：由 flutter build web 产物提供（与移动端同一套 Dart），未构建时返回简短说明页
+- 静态资源：GET /download/apk/<name>.apk、GET /res/bg
 
 App 所需 API（与 QtraderApi.kt 一致）：
   POST /api/login                 登录，Body: {username, password}，返回 {success, token}
   GET  /api/account-profit        账户盈亏（需 Bearer token）
-  GET  /api/tradingbots           交易机器人列表（需 Bearer token）
+  GET  /api/tradingbots           交易账户列表（需 Bearer token）
   POST /api/tradingbots/{id}/start|stop|restart（需 Bearer token，仅 simpleserver-lhg、simpleserver-hztech）
-  GET  /api/tradingbots/{id}/tradingbot-events  机器人启停事件（需 Bearer token）
+  GET  /api/tradingbots/{id}/tradingbot-events  账户启停事件（需 Bearer token）
   GET  /api/logs                  日志查询（需 Bearer token，?limit=100&level=&source=）
   GET  /api/users                 用户列表（需 Bearer token，用户管理以 DB 为准）
-Web/管控：
+管控：
   GET  /api/strategy/status
   POST /api/strategy/start | stop | restart（需 query bot_id=simpleserver-lhg|simpleserver-hztech）
   GET  /api/okx/info
@@ -32,11 +33,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from functools import wraps
 import jwt
-from flask import Flask, jsonify, request, send_file, g
+from flask import Flask, abort, jsonify, request, send_file, send_from_directory, g
 
 import db as _db
 from exchange import okx as _okx
-from bot_ctrl import (
+
+from tradingbot_ctrlbot_ctrl import (
     start as strategy_start,
     stop as strategy_stop,
     restart as strategy_restart,
@@ -127,7 +129,10 @@ def _add_cors(resp):
     resp.headers["Access-Control-Allow-Methods"] = (
         "GET, POST, PUT, PATCH, DELETE, OPTIONS"
     )
-    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, Accept"
+    resp.headers["Access-Control-Allow-Headers"] = (
+        "Content-Type, Authorization, Accept, Access-Control-Request-Private-Network"
+    )
+    resp.headers["Access-Control-Allow-Private-Network"] = "true"
     return resp
 
 
@@ -138,18 +143,24 @@ def _cors_preflight():
         return app.make_response(("", 204))
 
 
-# 项目根目录（部署根，如 /home/ec2-user/mobileapp）
+# 项目根目录（部署根，如 /home/ec2-user/hztechapp）
 PROJECT_ROOT = Path(
     os.environ.get("MOBILEAPP_ROOT", Path(__file__).resolve().parent.parent)
 )
 SERVER_DIR = Path(__file__).resolve().parent
-CONFIG_DIR = SERVER_DIR / "botconfig"
-# APK 所在目录（可放多个版本），默认项目根下 apk/，对应 AWS 上 mobileapp/apk/
+CONFIG_DIR = SERVER_DIR / "Accounts"
+# APK 所在目录（可放多个版本），默认项目根下 apk/，对应 AWS 上 hztechapp/apk/
 APK_DIR = Path(os.environ.get("APK_DIR", str(PROJECT_ROOT / "apk")))
 # 资源目录：res 已移至 server/res（密钥、背景图等）
 RES_DIR = SERVER_DIR / "res"
 # OKX 配置路径（API 脱敏、定时拉取账户余额）：由 okx 模块解析默认路径
 OKX_CONFIG_PATH = _okx.get_default_config_path(CONFIG_DIR)
+# Flutter Web 构建目录（flutter build web），可用环境变量 FLUTTER_WEB_ROOT 覆盖
+FLUTTER_WEB_DIR = Path(
+    os.environ.get(
+        "FLUTTER_WEB_ROOT", str(PROJECT_ROOT / "flutter_app" / "build" / "web")
+    )
+)
 # JWT：优先从 DB config 读，否则环境变量
 _db.init_db()
 
@@ -227,7 +238,7 @@ def require_auth(f):
 
 
 def _load_tradingbots_config() -> list[dict]:
-    """从 server/botconfig/tradingbots.json 读取机器人列表，不存在则返回默认两 bot（lhg、hztech）。"""
+    """从 server/Accounts/tradingbots.json 读取交易账户列表，不存在则返回默认两 bot（lhg、hztech）。"""
     path = CONFIG_DIR / "tradingbots.json"
     if path.exists():
         try:
@@ -256,8 +267,8 @@ def _load_tradingbots_config() -> list[dict]:
 
 
 def _bot_okx_config_path(bot_id: str) -> Path | None:
-    """仅从 botconfig/tradingbots.json 解析该 bot 的 OKX 配置文件路径，不落库、不缓存、不回退到全局。
-    一切以 botconfig 为准：若 account_api_file 未配置或文件不在 CONFIG_DIR 下则返回 None。"""
+    """仅从 Accounts/tradingbots.json 解析该 bot 的 OKX 配置文件路径，不落库、不缓存、不回退到全局。
+    一切以 Accounts 目录为准：若 account_api_file 未配置或文件不在 CONFIG_DIR 下则返回 None。"""
     bots = _load_tradingbots_config()
     for b in bots:
         if (b.get("tradingbot_id") or "").strip() != bot_id:
@@ -273,7 +284,7 @@ def _bot_okx_config_path(bot_id: str) -> Path | None:
 
 
 def _job_fetch_account_and_save_snapshots() -> None:
-    """定时任务：按 bot 的 account_api_file 分别拉取账号信息并写入 bot_profit_snapshots（每 10 分钟）。仅用 botconfig 下配置，不回退全局。"""
+    """定时任务：按 bot 的 account_api_file 分别拉取账号信息并写入 bot_profit_snapshots（每 10 分钟）。仅用 Accounts 下配置，不回退全局。"""
     bots = _load_tradingbots_config()
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     for b in bots:
@@ -283,7 +294,7 @@ def _job_fetch_account_and_save_snapshots() -> None:
         config_path = _bot_okx_config_path(bot_id)
         if not config_path:
             app.logger.debug(
-                "account_snapshot_skip: bot_id=%s 未在 botconfig 下配置 account_api_file 或文件不存在",
+                "account_snapshot_skip: bot_id=%s 未在 Accounts 下配置 account_api_file 或文件不存在",
                 bot_id,
             )
             continue
@@ -291,7 +302,7 @@ def _job_fetch_account_and_save_snapshots() -> None:
             balance = _okx.okx_fetch_balance(config_path=config_path)
             if balance is None:
                 app.logger.info(
-                    "account_snapshot_skip: bot_id=%s config=%s (同一台机若 testapi 正常而此处失败，可对照 botconfig 下同一配置文件)",
+                    "account_snapshot_skip: bot_id=%s config=%s (同一台机若 testapi 正常而此处失败，可对照 Accounts 下同一配置文件)",
                     bot_id,
                     config_path.name,
                 )
@@ -365,122 +376,6 @@ def res_bg():
     return send_file(path, mimetype="image/png", max_age=3600)
 
 
-@app.route("/")
-def index():
-    """首页：洛伦兹图全屏背景，右上角「下载 App」。"""
-    apk_files = []
-    if APK_DIR.exists():
-        for f in sorted(
-            APK_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True
-        ):
-            if f.suffix.lower() == ".apk":
-                apk_files.append({"name": f.name, "url": f"/download/apk/{f.name}"})
-    first_apk = apk_files[0] if apk_files else None
-    download_url = first_apk["url"] if first_apk else "#"
-    download_text = f"下载 {first_apk['name']}" if first_apk else "下载 App"
-    has_bg = (RES_DIR / BG_IMAGE_FILENAME).is_file()
-
-    html = f"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>禾正量化 | HZTech</title>
-  <style>
-    * {{ box-sizing: border-box; }}
-    body {{ margin: 0; min-height: 100vh; font-family: system-ui, -apple-system, sans-serif; }}
-    .page {{
-      position: relative;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: flex-end;
-      padding-bottom: 3rem;
-      background: {"url(/res/bg) center/cover no-repeat" if has_bg else "#0f172a"};
-    }}
-    .page::before {{
-      content: "";
-      position: absolute;
-      inset: 0;
-      background: rgba(0,0,0,0.35);
-      pointer-events: none;
-    }}
-    .download-app {{
-      position: absolute;
-      top: 1.25rem;
-      right: 1.25rem;
-      z-index: 2;
-      padding: 0.6rem 1.1rem;
-      background: rgba(255,255,255,0.95);
-      color: #0f172a;
-      text-decoration: none;
-      font-weight: 600;
-      font-size: 0.95rem;
-      border-radius: 8px;
-      box-shadow: 0 2px 12px rgba(0,0,0,0.15);
-      transition: background 0.2s, transform 0.15s;
-    }}
-    .download-app:hover {{
-      background: #fff;
-      transform: translateY(-1px);
-    }}
-    .brand {{
-      position: relative;
-      z-index: 1;
-      text-align: center;
-      color: #fff;
-      text-shadow: 0 1px 8px rgba(0,0,0,0.4);
-      margin-top: auto;
-    }}
-    .brand h1 {{ font-size: clamp(1.5rem, 4vw, 2rem); margin: 0 0 0.25rem; font-weight: 600; }}
-    .brand p {{ font-size: 0.9rem; opacity: 0.9; margin: 0; }}
-  </style>
-</head>
-<body>
-  <div class="page">
-    <a class="download-app" href="{download_url}">{download_text}</a>
-    <div class="brand">
-      <h1>禾正量化</h1>
-      <p>HZTech Quant</p>
-    </div>
-  </div>
-</body>
-</html>"""
-    return html
-
-
-@app.route("/dashboard")
-def dashboard():
-    """仪表盘：应用下载、服务状态、API 说明（原首页内容）。"""
-    apk_files = []
-    if APK_DIR.exists():
-        for f in sorted(
-            APK_DIR.iterdir(), key=lambda x: x.stat().st_mtime, reverse=True
-        ):
-            if f.suffix.lower() == ".apk":
-                apk_files.append({"name": f.name, "url": f"/download/apk/{f.name}"})
-    okx_available = OKX_CONFIG_PATH.exists()
-    strategy_status_res = strategy_status()
-    strategy_pids = strategy_status_res.get("pids", [])
-    strategy_running = strategy_status_res.get("running", False)
-    html = f"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>仪表盘 | HZTech</title>
-<style>body {{ font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }} .card {{ background: #f5f5f5; padding: 1rem; border-radius: 8px; margin: 1rem 0; }} a.dl {{ display: inline-block; padding: 0.5rem 1rem; background: #2563eb; color: #fff; text-decoration: none; border-radius: 6px; }} a.dl:hover {{ background: #1d4ed8; }} .muted {{ color: #666; font-size: 0.9rem; }}</style>
-</head>
-<body>
-  <p><a href="/">← 返回首页</a></p>
-  <section class="card"><h2>应用下载</h2><p class="muted">com.hztech.quant · 版本 1.0.0</p>
-  {"".join(f'<p><a class="dl" href="{a["url"]}">下载 {a["name"]}</a></p>' for a in apk_files) or "<p class=\"muted\">暂无 APK，请将 APK 放入 apk 目录。</p>"}
-  </section>
-  <section class="card"><h2>服务状态</h2><p>策略: {"运行中" if strategy_running else "已停止"} (PID: {strategy_pids})</p><p>OKX: {"已配置" if okx_available else "未配置"}</p></section>
-  <p class="muted">API: /api/login · /api/account-profit · /api/tradingbots · /api/logs · /api/okx/info</p>
-</body>
-</html>"""
-    return html
-
-
 @app.route("/download/apk/<filename>")
 def download_apk(filename):
     """下载 APK（仅允许 .apk 且位于 APK_DIR 内）。"""
@@ -527,11 +422,8 @@ def api_users():
     return jsonify({"success": True, "users": rows})
 
 
-# ---------- API：App 所需（与 QtraderApi 一致，需登录） ----------
-@app.route("/api/account-profit", methods=["GET"])
-@require_auth
-def api_account_profit():
-    """账户盈亏：按 bot 的 account_api_file 拉 OKX 实时权益/余额/浮亏，快照提供月初与曲线数据。"""
+def _collect_accounts_profit() -> list[dict]:
+    """与 /api/account-profit 返回的 accounts 数组一致。"""
     bots = _load_tradingbots_config()
     accounts = []
     for b in bots:
@@ -593,6 +485,15 @@ def api_account_profit():
                     "snapshot_time": None,
                 }
             )
+    return accounts
+
+
+# ---------- API：App 所需（与 QtraderApi 一致，需登录） ----------
+@app.route("/api/account-profit", methods=["GET"])
+@require_auth
+def api_account_profit():
+    """账户盈亏：按 bot 的 account_api_file 拉 OKX 实时权益/余额/浮亏，快照提供月初与曲线数据。"""
+    accounts = _collect_accounts_profit()
     return jsonify(
         {
             "success": True,
@@ -606,10 +507,8 @@ def api_account_profit():
 CONTROLLABLE_BOT_IDS = set(_BOT_SCRIPTS.keys())
 
 
-# 交易机器人列表：从 server/botconfig/tradingbots.json 读取，运行状态按 bot 分别查询
-@app.route("/api/tradingbots", methods=["GET"])
-@require_auth
-def api_tradingbots():
+def _collect_tradingbots_list() -> list[dict]:
+    """与 /api/tradingbots 返回的 bots 数组一致。"""
     st = strategy_status()
     bots_status = st.get("bots") or {}
     bots_config = _load_tradingbots_config()
@@ -634,6 +533,14 @@ def api_tradingbots():
                 "enabled": bool(b.get("enabled")),
             }
         )
+    return bots
+
+
+# 交易账户列表：从 server/Accounts/tradingbots.json 读取，运行状态按 bot 分别查询
+@app.route("/api/tradingbots", methods=["GET"])
+@require_auth
+def api_tradingbots():
+    bots = _collect_tradingbots_list()
     # #region agent log
     _debug_log(
         "app.py:api_tradingbots",
@@ -796,7 +703,7 @@ def api_bot_positions(bot_id):
                 "success": True,
                 "bot_id": bot_id,
                 "positions": [],
-                "positions_error": "bot 未在 botconfig/tradingbots.json 配置 account_api_file 或该文件不在 botconfig 下",
+                "positions_error": "bot 未在 Accounts/tradingbots.json 配置 account_api_file 或该文件不在 Accounts 目录下",
             }
         )
     positions, positions_error = _okx.okx_fetch_positions(config_path=config_path)
@@ -817,14 +724,15 @@ def api_bot_positions(bot_id):
             "positions bot_id=%s result empty (see OKX logs above if auth/network issue)",
             bot_id,
         )
-    return jsonify(
-        {
-            "success": True,
-            "bot_id": bot_id,
-            "positions": positions,
-            "positions_error": positions_error,
-        }
-    )
+    payload: dict = {
+        "success": True,
+        "bot_id": bot_id,
+        "positions": positions,
+        "positions_error": positions_error,
+    }
+    if positions_error and "1010" in positions_error:
+        payload["okx_debug"] = _okx.okx_debug_snapshot(config_path)
+    return jsonify(payload)
 
 
 @app.route("/api/tradingbots/<bot_id>/seasons", methods=["GET"])
@@ -961,6 +869,54 @@ def _app_on_stop_signal(*_args):
     sys.exit(0)
 
 
+def _flutter_web_safe_path(root: Path, rel: str) -> Path | None:
+    """将 URL 路径解析为 root 下的文件路径，防止跳出目录。"""
+    if ".." in rel or rel.startswith("/"):
+        return None
+    rel = rel.strip("/")
+    if not rel:
+        return root / "index.html"
+    full = (root / rel).resolve()
+    try:
+        full.relative_to(root.resolve())
+    except ValueError:
+        return None
+    return full
+
+
+@app.route("/", defaults={"spa_path": ""})
+@app.route("/<path:spa_path>")
+def serve_flutter_web(spa_path: str):
+    """托管 Flutter Web（flutter build web）；未知路径回退 index.html 以支持前端路由。"""
+    if spa_path == "api" or spa_path.startswith("api/"):
+        return jsonify({"error": "not_found", "path": "/" + spa_path}), 404
+    root = FLUTTER_WEB_DIR.resolve()
+    index_html = root / "index.html"
+    if not index_html.is_file():
+        body = (
+            "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            "<title>禾正量化</title></head>"
+            "<body style=\"font-family:system-ui,sans-serif;padding:2rem;max-width:560px;line-height:1.5;\">"
+            "<h1>Flutter Web 未构建</h1>"
+            "<p>REST API 仍可通过 <code>/api/</code> 访问（与移动端共用）。</p>"
+            "<p>构建 Web 端：</p><pre style=\"background:#f4f4f5;padding:1rem;border-radius:8px;\">"
+            "cd flutter_app && flutter build web</pre>"
+            "<p>或通过环境变量 <code>FLUTTER_WEB_ROOT</code> 指定已构建目录。</p>"
+            "</body></html>"
+        )
+        return body, 200, {"Content-Type": "text/html; charset=utf-8"}
+    rel = spa_path.strip("/")
+    if not rel:
+        return send_from_directory(str(root), "index.html")
+    target = _flutter_web_safe_path(root, rel)
+    if target is None:
+        abort(404)
+    if target.is_file():
+        return send_from_directory(str(root), rel)
+    return send_from_directory(str(root), "index.html")
+
+
 if __name__ == "__main__":
     try:
         _db.strategy_event_insert(_APP_EVENT_BOT_ID, "start", "auto", None)
@@ -969,7 +925,6 @@ if __name__ == "__main__":
     atexit.register(_app_on_stop)
     signal.signal(signal.SIGTERM, _app_on_stop_signal)
     signal.signal(signal.SIGINT, _app_on_stop_signal)
-    # 端口约定：Web=9000，API=9001。通过环境变量 PORT 指定当前进程端口。
-    # 本地与 AWS 均为双进程：Web 9000 + API 9001（见 run_local.sh / server_mgr remote_restart）
-    port = int(os.environ.get("PORT", 9000))
+    # 单进程同时提供 /api/* 与 Flutter Web 静态资源；端口由环境变量 PORT 指定（默认 8080）
+    port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, debug=os.environ.get("FLASK_DEBUG", "0") == "1")

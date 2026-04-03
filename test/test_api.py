@@ -97,18 +97,25 @@ class TestAuthRequired:
 
 
 class TestTradingbotsConfigAndApi:
-    """后台管理：从配置读取、API 返回 2 个 bot（tradingbots.json 或默认）。"""
+    """后台账户：含 Account_List 启用账户 + tradingbots.json 中额外 bot（如 simpleserver-*）。"""
 
-    EXPECTED_BOT_IDS = {"simpleserver-lhg", "simpleserver-hztech"}
+    EXPECTED_BOT_IDS = {
+        "simpleserver-lhg",
+        "simpleserver-hztech",
+    }
 
-    def test_tradingbots_returns_two_bots(self, client, auth_headers):
+    def test_tradingbots_returns_all_configured_bots(self, client, auth_headers):
         r = client.get("/api/tradingbots", headers=auth_headers)
         assert r.status_code == 200
         data = r.get_json()
         bots = data.get("bots") or data.get("tradingbots") or []
-        assert len(bots) == 2, f"期望 2 个 bot，实际 {len(bots)}: {bots}"
         ids = {b.get("tradingbot_id") for b in bots if b.get("tradingbot_id")}
-        assert self.EXPECTED_BOT_IDS == ids, f"期望 id 集合 {self.EXPECTED_BOT_IDS}，实际 {ids}"
+        assert len(bots) >= len(self.EXPECTED_BOT_IDS), (
+            f"至少应包含 tradingbots.json 中的 bot，实际 {len(bots)}: {bots}"
+        )
+        assert self.EXPECTED_BOT_IDS.issubset(ids), (
+            f"应包含 id 集合 {self.EXPECTED_BOT_IDS}，实际 {ids}"
+        )
 
     def test_tradingbots_each_has_required_fields(self, client, auth_headers):
         r = client.get("/api/tradingbots", headers=auth_headers)

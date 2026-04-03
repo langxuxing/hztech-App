@@ -1,0 +1,21 @@
+{
+  "api": {
+    "name": "OKX_HzTech_Moneyflow@005",
+    "key": "657b83f2-7b47-4531-b7bc-186a5b50f7de",
+    "secret": "61E289FDFB279DB15B517D87E46059BD",
+    "passphrase": "Moneyflow@005",
+    "base_url": "https://www.okx.com",
+    "sandbox": false
+  },
+  "settings": {
+    "debug": false,
+    "log_level": "INFO",
+    "timeout": 30
+  },
+  "trading": {
+    "max_position_size": 1000,
+    "leverage": 50,
+    "order_size_ratio": 0.03
+  }
+}
+

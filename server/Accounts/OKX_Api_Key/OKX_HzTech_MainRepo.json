@@ -1,0 +1,21 @@
+{
+  "api": {
+    "name": "OKX_HzTech_MainRepo",
+    "key": "6a2acfad-a88d-4cda-9f75-3b7743f4cdd8",
+    "secret": "FAA80E19CEBDB555BC73E7CCDF009E0D",
+    "passphrase": "Hztech@HK#2026",
+    "base_url": "https://www.okx.com",
+    "sandbox": false
+  },
+  "settings": {
+    "debug": false,
+    "log_level": "INFO",
+    "timeout": 30
+  },
+  "trading": {
+    "max_position_size": 1000,
+    "leverage": 50,
+    "order_size_ratio": 0.03
+  }
+}
+

@@ -1,0 +1,21 @@
+{
+  "api": {
+    "name": "Forest_Live",
+    "key": "02e39b95-3741-4d45-9c3a-7dcc664dc6e4",
+    "secret": "FCBC0A34107791E2320613F5822F6707",
+    "passphrase": "Lin118126&",
+    "base_url": "https://www.okx.com",
+    "sandbox": false
+  },
+  "settings": {
+    "debug": false,
+    "log_level": "INFO",
+    "timeout": 30
+  },
+  "trading": {
+    "max_position_size": 1000,
+    "leverage": 50,
+    "order_size_ratio": 0.01
+  }
+}
+

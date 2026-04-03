@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-测试 OKXAPI 目录下四个账号：连接、账户信息、当前持仓。
+测试 OKX 账号密钥 JSON：连接、账户信息、当前持仓（仅依赖 api 段）。
+
+密钥文件路径由 Account_List.json 的 account_key_file 决定，相对目录 OKX_Api_Key/
+（若该路径不存在则回退尝试 Accounts 根目录，兼容旧布局）。
+默认仅测试 exchange_account 为 OKX 且 enbaled 为 true 的条目；可用命令行覆盖。
+
 沙盒账号需在请求头中加 x-simulated-trading: 1，base_url 均为 https://www.okx.com。
 """
+import argparse
 import base64
 import hashlib
 import hmac
@@ -15,12 +21,90 @@ from pathlib import Path
 import requests
 
 OKXAPI_DIR = Path(__file__).resolve().parent
-# 四份配置（与当前仓库一致）
-CONFIG_FILES = [
-    "OKX_Alang_Sandbox.json",
-    "OKX_Hztech_Live.json",
-    "OKX_Hztech_Devops.json"
-]
+ACCOUNT_LIST_FILE = OKXAPI_DIR / "Account_List.json"
+OKX_API_KEY_DIR = OKXAPI_DIR / "OKX_Api_Key"
+
+
+def _parse_enabled(value: object) -> bool:
+    """解析 enbaled：与 sandbox 类似，缺省视为 True（便于列表未写该字段时仍跑测试）。"""
+    if value is True or value == 1:
+        return True
+    if value is False or value == 0:
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes")
+    if value is None:
+        return True
+    return bool(value)
+
+
+def load_account_list() -> list[dict]:
+    """读取 Account_List.json，返回列表；文件缺失或格式错误返回空列表。"""
+    if not ACCOUNT_LIST_FILE.is_file():
+        return []
+    try:
+        with open(ACCOUNT_LIST_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [x for x in data if isinstance(x, dict)]
+
+
+def resolve_key_file_path(account_key_file: str) -> Path:
+    """
+    account_key_file 通常为 OKX_xxx.json：优先 OKX_Api_Key/，否则 Accounts/ 根目录。
+    """
+    name = (account_key_file or "").strip()
+    if not name or "/" in name or "\\" in name:
+        return OKX_API_KEY_DIR / name
+    primary = OKX_API_KEY_DIR / name
+    if primary.is_file():
+        return primary
+    fallback = OKXAPI_DIR / name
+    if fallback.is_file():
+        return fallback
+    return primary
+
+
+def iter_okx_test_jobs(
+    *,
+    enabled_only: bool = True,
+    account_id_filter: str | None = None,
+) -> list[tuple[str, str, Path]]:
+    """
+    根据 Account_List 生成待测任务：(展示名, account_id, 密钥文件 Path)。
+    同一密钥文件只保留第一次出现，避免重复请求。
+    """
+    entries = load_account_list()
+    if not entries:
+        return []
+
+    seen_paths: set[str] = set()
+    jobs: list[tuple[str, str, Path]] = []
+    want_id = (account_id_filter or "").strip() or None
+
+    for row in entries:
+        if (row.get("exchange_account") or "").strip().upper() != "OKX":
+            continue
+        aid = str(row.get("account_id") or "").strip()
+        if want_id and aid != want_id:
+            continue
+        if enabled_only and not _parse_enabled(row.get("enbaled")):
+            continue
+        key_name = (row.get("account_key_file") or "").strip()
+        if not key_name:
+            continue
+        path = resolve_key_file_path(key_name)
+        key_norm = str(path.resolve())
+        if key_norm in seen_paths:
+            continue
+        seen_paths.add(key_norm)
+        display = (row.get("account_name") or aid or path.stem).strip()
+        jobs.append((display, aid or path.stem, path))
+
+    return jobs
 
 
 def _parse_sandbox(value: object) -> bool:
@@ -159,17 +243,51 @@ def test_one_account(cfg: dict) -> dict:
 
 
 def main():
-    print("========== OKX 四账号测试（连接 / 账户 / 持仓）==========\n")
+    parser = argparse.ArgumentParser(
+        description="根据 Account_List.json 中的 account_key_file（OKX_Api_Key/）测试 OKX 密钥与接口。"
+    )
+    parser.add_argument(
+        "--account",
+        metavar="ACCOUNT_ID",
+        help="只测试列表中该 account_id（例如 OKX_Alang_Sandbox）",
+    )
+    parser.add_argument(
+        "--include-disabled",
+        action="store_true",
+        help="包含 Account_List 中 enbaled 为 false 的条目",
+    )
+    args = parser.parse_args()
+
+    if not ACCOUNT_LIST_FILE.is_file():
+        print(f"错误: 未找到账户列表 {ACCOUNT_LIST_FILE}", file=sys.stderr)
+        sys.exit(2)
+
+    jobs = iter_okx_test_jobs(
+        enabled_only=not args.include_disabled,
+        account_id_filter=args.account,
+    )
+    if not jobs:
+        print(
+            "未找到可测试的 OKX 账户：请检查 Account_List.json 中 exchange_account、"
+            "enbaled、account_key_file 是否与 --account 筛选一致。\n",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    print("========== OKX 多账号测试（连接 / 账户 / 持仓）==========")
+    print(f"账户列表: {ACCOUNT_LIST_FILE.name}，密钥目录: {OKX_API_KEY_DIR.name}/\n")
+
     all_ok = True
-    for filename in CONFIG_FILES:
-        path = OKXAPI_DIR / filename
+    for display_name, account_id, path in jobs:
         cfg = load_config(path)
+        rel = path.relative_to(OKXAPI_DIR) if path.is_relative_to(OKXAPI_DIR) else path.name
         if not cfg:
-            print(f"[{filename}] 跳过：文件不存在或格式无效\n")
+            print(f"[{account_id}] 跳过：{rel} 不存在或 JSON 无有效 api 段\n")
             all_ok = False
             continue
         env_tag = " [沙盒]" if cfg["sandbox"] else " [实盘]"
-        print(f"--- {cfg['name']}{env_tag} ({filename}) ---")
+        label = display_name or cfg["name"]
+        print(f"--- {label}{env_tag} ({account_id}) [{rel}] ---")
         res = test_one_account(cfg)
         if res["error"]:
             print(f"  失败: {res['error']}\n")

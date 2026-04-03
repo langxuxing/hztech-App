@@ -80,7 +80,7 @@ class AccountProfit {
   }
 }
 
-/// 交易机器人列表
+/// 交易账户列表（与后端 /api/tradingbots 一致）
 class TradingBotsResponse {
   final List<UnifiedTradingBot>? bots;
   final List<UnifiedTradingBot>? tradingbots;
@@ -279,13 +279,24 @@ class OkxPositionsResponse {
   /// 当 OKX 请求失败时后端返回的提示（如配置或网络问题）
   final String? positionsError;
 
+  /// 1010 等场景后端附带的调试信息（出口 IP、配置文件名、脱敏 key）
+  final Map<String, dynamic>? okxDebug;
+
   OkxPositionsResponse({
     required this.success,
     required this.positions,
     this.positionsError,
+    this.okxDebug,
   });
 
   factory OkxPositionsResponse.fromJson(Map<String, dynamic> json) {
+    final raw = json['okx_debug'];
+    Map<String, dynamic>? okxDebug;
+    if (raw is Map<String, dynamic>) {
+      okxDebug = raw;
+    } else if (raw is Map) {
+      okxDebug = Map<String, dynamic>.from(raw);
+    }
     return OkxPositionsResponse(
       success: json['success'] as bool? ?? false,
       positions:
@@ -294,6 +305,7 @@ class OkxPositionsResponse {
               .toList() ??
           [],
       positionsError: json['positions_error'] as String?,
+      okxDebug: okxDebug,
     );
   }
 }

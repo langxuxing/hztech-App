@@ -1,37 +1,36 @@
 # -*- coding: utf-8 -*-
-"""网页测试：首页、dashboard、res/bg、download。"""
+"""网页测试：Flutter Web 壳、/res/bg、APK 下载。"""
 from __future__ import annotations
 
 
-class TestIndex:
-    """GET / 落地页"""
+class TestIndexFlutterWeb:
+    """GET / — Flutter Web 或「未构建」提示页"""
 
     def test_index_200(self, client):
         r = client.get("/")
         assert r.status_code == 200
         text = r.get_data(as_text=True)
-        assert "禾正量化" in text or "HZTech" in text
+        # 已构建：index.html 含 flutter / main.dart.js；未构建：服务端提示页
+        assert (
+            "flutter" in text.lower()
+            or "main.dart" in text
+            or "Flutter Web" in text
+            or "flutter build web" in text
+        )
 
-    def test_index_has_download_link(self, client):
+    def test_index_placeholder_or_flutter(self, client):
         r = client.get("/")
         assert r.status_code == 200
-        assert "下载" in r.get_data(as_text=True)
+        text = r.get_data(as_text=True)
+        assert "/api/" in text or "flutter" in text.lower()
 
 
-class TestDashboard:
-    """GET /dashboard"""
+class TestSpaFallback:
+    """前端路由回退 index.html"""
 
-    def test_dashboard_200(self, client):
+    def test_dashboard_path_returns_200(self, client):
         r = client.get("/dashboard")
         assert r.status_code == 200
-        text = r.get_data(as_text=True)
-        assert "仪表盘" in text or "应用下载" in text
-
-    def test_dashboard_has_back_link(self, client):
-        r = client.get("/dashboard")
-        assert r.status_code == 200
-        text = r.get_data(as_text=True)
-        assert "返回首页" in text or 'href="/"' in text
 
 
 class TestResBg:

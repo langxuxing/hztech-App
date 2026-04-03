@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 
 import 'account_profit_screen.dart';
-import 'bot_list_screen.dart';
+import 'accounts_list.dart';
 import 'settings_screen.dart';
+import 'tradingbot_control.dart';
 import '../api/client.dart';
 import '../api/models.dart';
 import '../secure/prefs.dart';
@@ -25,8 +26,9 @@ class _MainScreenState extends State<MainScreen> {
   final _prefs = SecurePrefs();
 
   static const _tabs = [
-    ('策略管理', Icons.smart_toy),
-    ('机器人收益', Icons.account_balance_wallet),
+    ('账户管理', Icons.manage_accounts),
+    ('策略启停', Icons.smart_toy_outlined),
+    ('账户收益', Icons.account_balance_wallet),
     ('应用设置', Icons.settings),
   ];
 
@@ -37,10 +39,6 @@ class _MainScreenState extends State<MainScreen> {
       final api = ApiClient(baseUrl, token: token);
       final resp = await api.getTradingBots();
       if (!mounted) return;
-
-      // 打印获取到的 botList 到控制台
-      // ignore: avoid_print
-      print('botList: ${resp.botList}');
       setState(() => _sharedBots = resp.botList);
     } catch (_) {}
   }
@@ -49,19 +47,29 @@ class _MainScreenState extends State<MainScreen> {
   void initState() {
     super.initState();
     _loadSharedBots();
+    // 若首包较慢或失败，1.5s 后再拉一次，提高 sharedBots 到达子页的概率
+    Future<void>.delayed(const Duration(milliseconds: 1500), () {
+      if (!mounted || _sharedBots.isNotEmpty) return;
+      _loadSharedBots();
+    });
   }
 
+  /// 使用 IndexedStack 让三个 Tab 子页常驻，避免「仅切到账户收益时才创建 AccountProfitScreen」
+  /// 导致 sharedBots 长期为空、下拉框不出现；父级 _loadSharedBots 完成后子页可立即 didUpdateWidget。
   Widget _body() {
-    switch (_index) {
-      case 0:
-        return const BotListScreen();
-      case 1:
-        return AccountProfitScreen(sharedBots: _sharedBots);
-      case 2:
-        return SettingsScreen(onLogout: widget.onLogout);
-      default:
-        return const BotListScreen();
-    }
+    return IndexedStack(
+      index: _index,
+      sizing: StackFit.expand,
+      children: [
+        const AccountsList(),
+        const TradingBotControl(),
+        AccountProfitScreen(
+          sharedBots: _sharedBots,
+          periodicRefreshActive: _index == 2,
+        ),
+        SettingsScreen(onLogout: widget.onLogout),
+      ],
+    );
   }
 
   @override
@@ -87,8 +95,8 @@ class _MainScreenState extends State<MainScreen> {
           selectedIndex: _index,
           onDestinationSelected: (i) {
             setState(() => _index = i);
-            // 切到机器人收益时若列表仍空则再拉一次（与策略管理同源）
-            if (i == 1 && _sharedBots.isEmpty) _loadSharedBots();
+            // 切到账户收益时若列表仍空则再拉一次（与账户管理同源）
+            if (i == 2 && _sharedBots.isEmpty) _loadSharedBots();
           },
           destinations: _tabs
               .map((e) => NavigationDestination(

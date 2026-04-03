@@ -1,0 +1,21 @@
+{
+  "api": {
+    "name": "Guoguo_Live",
+    "key": "7a1d5301-a601-411b-b12d-4bb6186970ce",
+    "secret": "0EFFD2017C2935ECF6AB3032898858D3",
+    "passphrase": "Slx959899@",
+    "base_url": "https://www.okx.com",
+    "sandbox": false
+  },
+  "settings": {
+    "debug": false,
+    "log_level": "INFO",
+    "timeout": 30
+  },
+  "trading": {
+    "max_position_size": 1000,
+    "leverage": 50,
+    "order_size_ratio": 0.01
+  }
+}
+
