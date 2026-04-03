@@ -19,6 +19,12 @@ _tmp = tempfile.mkdtemp(prefix="hztech_test_")
 db.DB_PATH = os.path.join(_tmp, "test.db")
 db.init_db()
 db.user_create("admin", hashlib.sha256(b"123").hexdigest())
+db.user_create("trader", hashlib.sha256(b"trader").hexdigest())
+_conn = db.get_conn()
+_conn.execute("UPDATE users SET role = 'admin' WHERE username = 'admin'")
+_conn.execute("UPDATE users SET role = 'trader' WHERE username = 'trader'")
+_conn.commit()
+_conn.close()
 
 from main import app  # noqa: E402
 
@@ -46,3 +52,22 @@ def token(client):
 @pytest.fixture
 def auth_headers(token):
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def trader_token(client):
+    r = client.post(
+        "/api/login",
+        json={"username": "trader", "password": "trader"},
+        content_type="application/json",
+    )
+    assert r.status_code == 200, r.get_data(as_text=True)
+    data = r.get_json()
+    assert data.get("success") and data.get("token")
+    assert data.get("role") == "trader"
+    return data["token"]
+
+
+@pytest.fixture
+def trader_headers(trader_token):
+    return {"Authorization": f"Bearer {trader_token}"}

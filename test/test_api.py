@@ -18,6 +18,8 @@ class TestLogin:
         data = r.get_json()
         assert data["success"] is True
         assert "token" in data and len(data["token"]) > 0
+        assert data.get("role") == "admin"
+        assert isinstance(data.get("linked_account_ids"), list)
 
     def test_login_wrong_password(self, client):
         r = client.post(
@@ -138,7 +140,7 @@ class TestTradingbotsConfigAndApi:
 
 
 class TestStrategyApi:
-    """策略相关 API（/api/strategy/* 无需 token；start/stop/restart 需 query bot_id）"""
+    """/api/strategy/status 仍无需 token；start/stop/restart 需登录且仅交易员。"""
 
     def test_strategy_status(self, client):
         r = client.get("/api/strategy/status")
@@ -148,52 +150,69 @@ class TestStrategyApi:
         assert "simpleserver-lhg" in data["bots"]
         assert "simpleserver-hztech" in data["bots"]
 
-    def test_strategy_start_stop_restart_need_bot_id(self, client):
+    def test_strategy_start_stop_restart_need_bot_id(self, client, trader_headers):
         for path in ["/api/strategy/start", "/api/strategy/stop", "/api/strategy/restart"]:
             r = client.post(path)
-            assert r.status_code == 400
+            assert r.status_code == 401
         r = client.get("/api/strategy/status")
         assert r.status_code == 200
-        r = client.post("/api/strategy/start?bot_id=simpleserver-lhg")
+        r = client.post(
+            "/api/strategy/start?bot_id=simpleserver-lhg",
+            headers=trader_headers,
+        )
         assert r.status_code == 200
+
+    def test_strategy_start_forbidden_for_admin(self, client, auth_headers):
+        r = client.post(
+            "/api/strategy/start?bot_id=simpleserver-lhg",
+            headers=auth_headers,
+        )
+        assert r.status_code == 403
 
 
 class TestBotApi:
-    """POST /api/tradingbots/<id>/start|stop|restart 需 token"""
+    """POST /api/tradingbots/<id>/start|stop|restart 需交易员 token"""
 
-    def test_bot_start_with_token(self, client, auth_headers):
+    def test_bot_start_with_token(self, client, trader_headers):
+        r = client.post(
+            "/api/tradingbots/simpleserver-lhg/start",
+            headers=trader_headers,
+        )
+        assert r.status_code == 200
+        data = r.get_json()
+        assert "success" in data
+
+    def test_bot_stop_with_token(self, client, trader_headers):
+        r = client.post(
+            "/api/tradingbots/simpleserver-lhg/stop",
+            headers=trader_headers,
+        )
+        assert r.status_code == 200
+        data = r.get_json()
+        assert "success" in data
+
+    def test_bot_restart_with_token(self, client, trader_headers):
+        r = client.post(
+            "/api/tradingbots/simpleserver-lhg/restart",
+            headers=trader_headers,
+        )
+        assert r.status_code == 200
+        data = r.get_json()
+        assert "success" in data
+
+    def test_bot_unknown_id_404(self, client, trader_headers):
+        r = client.post(
+            "/api/tradingbots/unknown_bot/start",
+            headers=trader_headers,
+        )
+        assert r.status_code == 404
+
+    def test_bot_start_forbidden_for_admin(self, client, auth_headers):
         r = client.post(
             "/api/tradingbots/simpleserver-lhg/start",
             headers=auth_headers,
         )
-        assert r.status_code == 200
-        data = r.get_json()
-        assert "success" in data
-
-    def test_bot_stop_with_token(self, client, auth_headers):
-        r = client.post(
-            "/api/tradingbots/simpleserver-lhg/stop",
-            headers=auth_headers,
-        )
-        assert r.status_code == 200
-        data = r.get_json()
-        assert "success" in data
-
-    def test_bot_restart_with_token(self, client, auth_headers):
-        r = client.post(
-            "/api/tradingbots/simpleserver-lhg/restart",
-            headers=auth_headers,
-        )
-        assert r.status_code == 200
-        data = r.get_json()
-        assert "success" in data
-
-    def test_bot_unknown_id_404(self, client, auth_headers):
-        r = client.post(
-            "/api/tradingbots/unknown_bot/start",
-            headers=auth_headers,
-        )
-        assert r.status_code == 404
+        assert r.status_code == 403
 
 
 class TestPositionsApi:

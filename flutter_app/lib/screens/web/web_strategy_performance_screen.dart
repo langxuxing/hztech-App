@@ -384,8 +384,8 @@ class _WebStrategyPerformanceScreenState
                                 spacing: gap,
                                 runSpacing: gap,
                                 children: [
-                                  for (var i = 0; i < _seasons.take(24).length; i++)
-                                    seasonCard(_seasons[i], i + 1),
+                                  for (final e in _seasons.take(24).toList().asMap().entries)
+                                    seasonCard(e.value, e.key + 1),
                                 ],
                               ),
                           ],

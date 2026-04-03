@@ -157,7 +157,7 @@ def _run_random_bot_cycle(client, headers: dict) -> None:
 
 
 class TestRandomBotStartStop:
-    def test_random_start_stop_cycle(self, client, auth_headers, capsys):
+    def test_random_start_stop_cycle(self, client, trader_headers, capsys):
         # 关闭 pytest 对 stdout/stderr 的捕获，日志直接出现在终端
         with capsys.disabled():
-            _run_random_bot_cycle(client, auth_headers)
+            _run_random_bot_cycle(client, trader_headers)
