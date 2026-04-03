@@ -4,11 +4,12 @@ import '../../api/client.dart';
 import '../../api/models.dart';
 import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
+import '../../widgets/profit_percent_line_chart.dart';
 import '../../widgets/water_background.dart';
 import 'web_account_profit_screen.dart';
 
-/// Web：职责对齐 [AccountsList]，布局为多列玻璃卡网格。
-/// 卡片样式借鉴 [TradingBotControl]，展示启动相关时间与启停操作，不含收益曲线与资金指标。
+/// Web 全局数据看板：汇总权益与盈亏，点击进入账户详情。
+/// 脚本启停见 [WebTradingBotControlScreen]（导航「策略启动」）。
 class WebDashboardScreen extends StatefulWidget {
   const WebDashboardScreen({super.key, this.sharedBots = const []});
 
@@ -21,78 +22,9 @@ class WebDashboardScreen extends StatefulWidget {
 class _WebDashboardScreenState extends State<WebDashboardScreen> {
   final _prefs = SecurePrefs();
   List<AccountProfit> _accounts = [];
-  Map<String, List<BotSeason>> _seasonsByBot = {};
+  Map<String, List<BotProfitSnapshot>> _profitHistory = {};
   bool _loading = true;
   String? _error;
-  String? _loadingBotId;
-
-  static String _fmtDateTimeShort(String? iso) {
-    if (iso == null || iso.isEmpty) return '—';
-    final d = DateTime.tryParse(iso);
-    if (d == null) return iso;
-    final mm = d.month.toString().padLeft(2, '0');
-    final dd = d.day.toString().padLeft(2, '0');
-    final hh = d.hour.toString().padLeft(2, '0');
-    final min = d.minute.toString().padLeft(2, '0');
-    return '$mm-$dd $hh:$min';
-  }
-
-  static String _fmtDuration(Duration d) {
-    if (d.isNegative) return '—';
-    if (d.inSeconds < 60) return '${d.inSeconds} 秒';
-    if (d.inMinutes < 60) return '${d.inMinutes} 分钟';
-    if (d.inHours < 48) {
-      return '${d.inHours} 小时 ${d.inMinutes.remainder(60)} 分';
-    }
-    return '${d.inDays} 天 ${d.inHours.remainder(24)} 小时';
-  }
-
-  /// 根据赛季列表与是否运行中，生成展示用文案。
-  static ({String startLine, String durationLine}) _seasonLines(
-    List<BotSeason> seasons,
-    bool running,
-  ) {
-    if (seasons.isEmpty) {
-      return (startLine: '暂无赛季记录', durationLine: '—');
-    }
-    BotSeason? open;
-    for (final s in seasons) {
-      final st = s.stoppedAt;
-      if (st == null || st.isEmpty) {
-        open = s;
-        break;
-      }
-    }
-    if (running && open != null) {
-      final start = open.startedAt;
-      final parsed = start != null && start.isNotEmpty
-          ? DateTime.tryParse(start)
-          : null;
-      final dur = parsed != null
-          ? DateTime.now().difference(parsed)
-          : Duration.zero;
-      return (
-        startLine: '本次启动 ${_fmtDateTimeShort(start)}',
-        durationLine:
-            parsed != null ? '已运行 ${_fmtDuration(dur)}' : '已运行 —',
-      );
-    }
-    final last = seasons.first;
-    final start = last.startedAt;
-    final stop = last.stoppedAt;
-    final ps = start != null && start.isNotEmpty ? DateTime.tryParse(start) : null;
-    final pe = stop != null && stop.isNotEmpty ? DateTime.tryParse(stop) : null;
-    String durationLine = '—';
-    if (ps != null && pe != null) {
-      durationLine = '上次运行 ${_fmtDuration(pe.difference(ps))}';
-    } else if (ps != null && running) {
-      durationLine = '已运行 ${_fmtDuration(DateTime.now().difference(ps))}';
-    }
-    return (
-      startLine: '上次启动 ${_fmtDateTimeShort(start)}',
-      durationLine: durationLine,
-    );
-  }
 
   Future<void> _load() async {
     setState(() {
@@ -105,25 +37,30 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
       final api = ApiClient(baseUrl, token: token);
       final profitResp = await api.getAccountProfit();
       final accounts = profitResp.accounts ?? [];
-      final Map<String, List<BotSeason>> seasonsMap = {};
+      final Map<String, List<BotProfitSnapshot>> history = {};
       try {
-        final ids =
-            accounts.map((a) => a.botId).where((id) => id.isNotEmpty).toList();
+        final ids = accounts
+            .map((a) => a.botId)
+            .where((id) => id.isNotEmpty)
+            .toList();
         if (ids.isNotEmpty) {
           final results = await Future.wait(
-            ids.map((id) => api.getTradingbotSeasons(id, limit: 30)),
+            ids.map((id) => api.getBotProfitHistory(id)),
           );
           for (var i = 0; i < ids.length && i < results.length; i++) {
-            seasonsMap[ids[i]] = results[i].seasons;
+            final snaps = results[i].snapshots;
+            if (snaps.isNotEmpty) {
+              history[ids[i]] = snaps;
+            }
           }
         }
       } catch (_) {
-        // 卡片仍显示，赛季失败时为空
+        // 卡片仍显示，曲线失败时为空
       }
       if (!mounted) return;
       setState(() {
         _accounts = accounts;
-        _seasonsByBot = seasonsMap;
+        _profitHistory = history;
         _loading = false;
       });
     } catch (e) {
@@ -142,110 +79,6 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
     return null;
   }
 
-  Future<void> _doStart(UnifiedTradingBot bot) async {
-    setState(() => _loadingBotId = bot.tradingbotId);
-    try {
-      final baseUrl = await _prefs.backendBaseUrl;
-      final token = await _prefs.authToken;
-      final api = ApiClient(baseUrl, token: token);
-      final resp = await api.startBot(bot.tradingbotId);
-      if (!mounted) return;
-      setState(() => _loadingBotId = null);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(resp.success ? '启动成功' : (resp.message ?? '启动失败')),
-        ),
-      );
-      if (resp.success) _load();
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _loadingBotId = null);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('请求失败: $e')));
-    }
-  }
-
-  Future<void> _doStop(UnifiedTradingBot bot) async {
-    setState(() => _loadingBotId = bot.tradingbotId);
-    try {
-      final baseUrl = await _prefs.backendBaseUrl;
-      final token = await _prefs.authToken;
-      final api = ApiClient(baseUrl, token: token);
-      final resp = await api.stopBot(bot.tradingbotId);
-      if (!mounted) return;
-      setState(() => _loadingBotId = null);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(resp.success ? '停止成功' : (resp.message ?? '停止失败')),
-        ),
-      );
-      if (resp.success) _load();
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _loadingBotId = null);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('请求失败: $e')));
-    }
-  }
-
-  Future<void> _doRestart(UnifiedTradingBot bot) async {
-    setState(() => _loadingBotId = bot.tradingbotId);
-    try {
-      final baseUrl = await _prefs.backendBaseUrl;
-      final token = await _prefs.authToken;
-      final api = ApiClient(baseUrl, token: token);
-      final resp = await api.restartBot(bot.tradingbotId);
-      if (!mounted) return;
-      setState(() => _loadingBotId = null);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(resp.success ? '重启已执行' : (resp.message ?? '重启失败')),
-        ),
-      );
-      if (resp.success) _load();
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _loadingBotId = null);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('请求失败: $e')));
-    }
-  }
-
-  void _onTapStop(UnifiedTradingBot bot) {
-    final running = bot.status == 'running' || bot.isRunning == true;
-    if (!running) return;
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('确认停止'),
-        content: const Text('确定要停止该账户策略吗？此操作将终止当前运行，请确认以防误操作。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () {
-              Navigator.pop(ctx);
-              _doStop(bot);
-            },
-            child: const Text('确定停止'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
   void _openAccount(AccountProfit a) {
     final id = a.botId.isNotEmpty ? a.botId : null;
     Navigator.of(context).push<void>(
@@ -256,6 +89,12 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
         ),
       ),
     );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
   }
 
   @override
@@ -293,12 +132,24 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
                     SliverPadding(
                       padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
                       sliver: SliverToBoxAdapter(
-                        child: Text(
-                          '账户总数（${_accounts.length}）',
-                          style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                                color: AppFinanceStyle.valueColor,
-                                fontWeight: FontWeight.w900,
-                              ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '全局概览',
+                              style: Theme.of(context).textTheme.titleLarge
+                                  ?.copyWith(
+                                    color: AppFinanceStyle.valueColor,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                            ),
+                            const SizedBox(height: 16),
+
+                            if (_accounts.isNotEmpty) ...[
+                              const SizedBox(height: 16),
+                              _SummaryStrip(accounts: _accounts),
+                            ],
+                          ],
                         ),
                       ),
                     ),
@@ -320,47 +171,35 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
                           final w = MediaQuery.sizeOf(context).width;
                           var cross = 1;
                           if (w >= 1200) {
-                            cross = 3;
+                            cross = 4;
                           } else if (w >= 800) {
-                            cross = 2;
+                            cross = 3;
                           }
-                          return SliverGrid(
-                            gridDelegate:
-                                SliverGridDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: cross,
-                                  mainAxisSpacing: 16,
-                                  crossAxisSpacing: 16,
-                                  childAspectRatio: cross >= 3 ? 1.35 : 1.2,
-                                ),
-                            delegate: SliverChildBuilderDelegate((
-                              context,
-                              index,
-                            ) {
-                              final a = _accounts[index];
-                              final bot = _botFor(a);
-                              final seasons = _seasonsByBot[a.botId] ?? const [];
-                              final running = bot != null &&
-                                  (bot.status == 'running' ||
-                                      bot.isRunning == true);
-                              final lines = _seasonLines(seasons, running);
-                              return _AccountGlassCard(
-                                account: a,
-                                bot: bot,
-                                startLine: lines.startLine,
-                                durationLine: lines.durationLine,
-                                loadingBotId: _loadingBotId,
-                                onStart: bot != null && bot.canControl
-                                    ? () => _doStart(bot)
-                                    : null,
-                                onStop: bot != null && bot.canControl
-                                    ? () => _onTapStop(bot)
-                                    : null,
-                                onRestart: bot != null && bot.canControl
-                                    ? () => _doRestart(bot)
-                                    : null,
-                                onOpenDetail: () => _openAccount(a),
-                              );
-                            }, childCount: _accounts.length),
+                          return SliverPadding(
+                            padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
+                            sliver: SliverGrid(
+                              gridDelegate:
+                                  SliverGridDelegateWithFixedCrossAxisCount(
+                                    crossAxisCount: cross,
+                                    mainAxisSpacing: 16,
+                                    crossAxisSpacing: 16,
+                                    childAspectRatio: cross >= 3 ? 0.6 : 0.7,
+                                  ),
+                              delegate: SliverChildBuilderDelegate((
+                                context,
+                                index,
+                              ) {
+                                final a = _accounts[index];
+                                final bot = _botFor(a);
+                                return _OverviewGlassCard(
+                                  account: a,
+                                  bot: bot,
+                                  snapshots:
+                                      _profitHistory[a.botId] ?? const [],
+                                  onOpen: () => _openAccount(a),
+                                );
+                              }, childCount: _accounts.length),
+                            ),
                           );
                         },
                       ),
@@ -373,30 +212,133 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
   }
 }
 
-class _AccountGlassCard extends StatelessWidget {
-  const _AccountGlassCard({
+class _SummaryStrip extends StatelessWidget {
+  const _SummaryStrip({required this.accounts});
+
+  final List<AccountProfit> accounts;
+
+  @override
+  Widget build(BuildContext context) {
+    var eq = 0.0;
+    var profit = 0.0;
+    var initial = 0.0;
+    for (final a in accounts) {
+      eq += a.equityUsdt;
+      profit += a.profitAmount;
+      initial += a.initialBalance;
+    }
+    final pct = initial > 0 ? (profit / initial) * 100 : 0.0;
+    TextStyle v(double fs) =>
+        AppFinanceStyle.valueTextStyle(context, fontSize: fs);
+    return FinanceCard(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      child: LayoutBuilder(
+        builder: (context, c) {
+          final narrow = c.maxWidth < 520;
+          final children = [
+            _SummaryCell(
+              label: '账户数',
+              value: '${accounts.length}',
+              valueStyle: v(22),
+              narrow: narrow,
+            ),
+            _SummaryCell(
+              label: '合计权益',
+              value: eq.toStringAsFixed(0),
+              valueStyle: v(22),
+              narrow: narrow,
+            ),
+            _SummaryCell(
+              label: '合计盈亏',
+              value: profit.toStringAsFixed(0),
+              valueStyle: v(22).copyWith(
+                color: profit >= 0
+                    ? AppFinanceStyle.profitGreenEnd
+                    : Colors.redAccent,
+              ),
+              narrow: narrow,
+            ),
+            _SummaryCell(
+              label: '加权收益率',
+              value: '${pct.toStringAsFixed(0)}%',
+              valueStyle: v(22),
+              narrow: narrow,
+            ),
+          ];
+          if (narrow) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (var i = 0; i < children.length; i++) ...[
+                  if (i > 0) const SizedBox(height: 12),
+                  children[i],
+                ],
+              ],
+            );
+          }
+          return Row(
+            children: [
+              for (var i = 0; i < children.length; i++) ...[
+                if (i > 0) const SizedBox(width: 16),
+                Expanded(child: children[i]),
+              ],
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _SummaryCell extends StatelessWidget {
+  const _SummaryCell({
+    required this.label,
+    required this.value,
+    required this.valueStyle,
+    required this.narrow,
+  });
+
+  final String label;
+  final String value;
+  final TextStyle valueStyle;
+  final bool narrow;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: narrow
+          ? CrossAxisAlignment.start
+          : CrossAxisAlignment.center,
+      children: [
+        Text(label, style: AppFinanceStyle.labelTextStyle(context)),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: valueStyle,
+          textAlign: narrow ? TextAlign.start : TextAlign.center,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ],
+    );
+  }
+}
+
+class _OverviewGlassCard extends StatelessWidget {
+  const _OverviewGlassCard({
     required this.account,
     required this.bot,
-    required this.startLine,
-    required this.durationLine,
-    required this.loadingBotId,
-    required this.onStart,
-    required this.onStop,
-    required this.onRestart,
-    required this.onOpenDetail,
+    required this.snapshots,
+    required this.onOpen,
   });
 
   final AccountProfit account;
   final UnifiedTradingBot? bot;
-  final String startLine;
-  final String durationLine;
-  final String? loadingBotId;
-  final VoidCallback? onStart;
-  final VoidCallback? onStop;
-  final VoidCallback? onRestart;
-  final VoidCallback onOpenDetail;
+  final List<BotProfitSnapshot> snapshots;
+  final VoidCallback onOpen;
 
-  static const _cardLabelColor = AppFinanceStyle.labelColor;
+  static const _labelColor = AppFinanceStyle.labelColor;
+  static const _numberColor = AppFinanceStyle.profitGreenEnd;
 
   @override
   Widget build(BuildContext context) {
@@ -405,93 +347,52 @@ class _AccountGlassCard extends StatelessWidget {
         (account.exchangeAccount.isNotEmpty
             ? account.exchangeAccount
             : account.botId);
-    final running = bot != null &&
-        (bot!.status == 'running' || bot!.isRunning == true);
-    final bid = bot?.tradingbotId ?? account.botId;
-    final busy = loadingBotId == bid;
-
+    final titleStyle =
+        (Theme.of(context).textTheme.titleLarge ?? const TextStyle()).copyWith(
+          fontWeight: FontWeight.w800,
+          fontSize:
+              (Theme.of(context).textTheme.titleLarge?.fontSize ?? 22) + 2,
+          color: AppFinanceStyle.valueColor,
+        );
     return FinanceCard(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(16),
+      onTap: onOpen,
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.max,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                child: Row(
                   children: [
-                    Row(
-                      children: [
-                        Flexible(
-                          child: Text(
-                            title,
-                            style:
-                                (Theme.of(context).textTheme.titleLarge ??
-                                        const TextStyle())
-                                    .copyWith(
-                                      fontWeight: FontWeight.w800,
-                                      fontSize:
-                                          (Theme.of(context)
-                                                  .textTheme
-                                                  .titleLarge
-                                                  ?.fontSize ??
-                                              22) +
-                                          2,
-                                      color: AppFinanceStyle.valueColor,
-                                    ),
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                    Flexible(
+                      child: Text(
+                        title,
+                        style: titleStyle,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (bot?.isTest == true) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 2,
                         ),
-                        if (bot?.isTest == true) ...[
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: Colors.orange.withValues(alpha: 0.3),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              '测试',
-                              style: Theme.of(context).textTheme.labelSmall
-                                  ?.copyWith(
-                                    color: Colors.orange,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      running ? '运行中' : '已停止',
-                      style: AppFinanceStyle.labelTextStyle(context).copyWith(
-                        color: running
-                            ? Colors.greenAccent
-                            : AppFinanceStyle.labelColor,
-                      ),
-                    ),
-                    if (bot != null && !bot!.canControl) ...[
-                      const SizedBox(height: 6),
-                      Text(
-                        '未配置 Accounts 目录下的启停脚本（script_file）',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: Theme.of(context).colorScheme.outline,
-                            ),
-                      ),
-                    ],
-                    if (bot?.symbol != null && bot!.symbol!.isNotEmpty) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        '交易对 ${bot!.symbol}',
-                        style: AppFinanceStyle.labelTextStyle(context),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withValues(alpha: 0.3),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          '测试',
+                          style: Theme.of(context).textTheme.labelSmall
+                              ?.copyWith(
+                                color: Colors.orange,
+                                fontWeight: FontWeight.w600,
+                              ),
+                        ),
                       ),
                     ],
                   ],
@@ -500,60 +401,68 @@ class _AccountGlassCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
-          Text(
-            startLine,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: _cardLabelColor,
-                ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _OverviewStatCol(
+                label: '月初',
+                value: account.initialBalance.toStringAsFixed(0),
+              ),
+              _OverviewStatCol(
+                label: '现金余额',
+                value: account.balanceUsdt.toStringAsFixed(0),
+              ),
+              _OverviewStatCol(
+                label: '盈利率',
+                value: '${account.profitPercent.toStringAsFixed(0)}%',
+              ),
+            ],
           ),
-          const SizedBox(height: 4),
-          Text(
-            durationLine,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: AppFinanceStyle.valueColor,
-                  fontWeight: FontWeight.w600,
-                ),
-          ),
-          const Spacer(),
-          if (busy)
-            const Padding(
-              padding: EdgeInsets.only(bottom: 8),
-              child: LinearProgressIndicator(minHeight: 2),
-            ),
-          if (bot != null && bot!.canControl)
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              alignment: WrapAlignment.start,
-              children: [
-                FilledButton.tonal(
-                  onPressed: busy || running ? null : onStart,
-                  child: const Text('启动'),
-                ),
-                FilledButton.tonal(
-                  style: FilledButton.styleFrom(
-                    foregroundColor: Colors.redAccent,
+          const SizedBox(height: 8),
+          Expanded(
+            child: snapshots.isNotEmpty
+                ? ProfitPercentLineChart(snapshots: snapshots)
+                : Center(
+                    child: Text(
+                      '暂无收益曲线数据',
+                      style: AppFinanceStyle.labelTextStyle(context),
+                      textAlign: TextAlign.center,
+                    ),
                   ),
-                  onPressed: busy || !running ? null : onStop,
-                  child: const Text('停止'),
-                ),
-                FilledButton.tonal(
-                  onPressed: busy ? null : onRestart,
-                  child: const Text('重启'),
-                ),
-              ],
-            )
-          else
-            const SizedBox.shrink(),
-          Align(
-            alignment: Alignment.centerRight,
-            child: TextButton(
-              onPressed: onOpenDetail,
-              child: const Text('账户收益详情'),
-            ),
           ),
         ],
       ),
+    );
+  }
+}
+
+class _OverviewStatCol extends StatelessWidget {
+  const _OverviewStatCol({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final numStyle =
+        (Theme.of(context).textTheme.titleMedium ?? const TextStyle()).copyWith(
+          color: _OverviewGlassCard._numberColor,
+          fontWeight: FontWeight.bold,
+          fontSize:
+              (Theme.of(context).textTheme.titleLarge?.fontSize ?? 22) + 2,
+        );
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          label,
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+            color: _OverviewGlassCard._labelColor,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(value, style: numStyle),
+      ],
     );
   }
 }

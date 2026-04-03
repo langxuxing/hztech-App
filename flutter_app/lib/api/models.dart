@@ -3,14 +3,90 @@ class LoginResponse {
   final bool success;
   final String? token;
   final String? message;
+  final String? role;
+  final List<String> linkedAccountIds;
 
-  LoginResponse({required this.success, this.token, this.message});
+  LoginResponse({
+    required this.success,
+    this.token,
+    this.message,
+    this.role,
+    this.linkedAccountIds = const [],
+  });
 
   factory LoginResponse.fromJson(Map<String, dynamic> json) {
+    final rawLinks = json['linked_account_ids'];
+    List<String> links = const [];
+    if (rawLinks is List) {
+      links = rawLinks.map((e) => e.toString()).where((s) => s.isNotEmpty).toList();
+    }
     return LoginResponse(
       success: json['success'] as bool? ?? false,
       token: json['token'] as String?,
       message: json['message'] as String?,
+      role: json['role'] as String?,
+      linkedAccountIds: links,
+    );
+  }
+}
+
+/// GET /api/me
+class MeResponse {
+  final bool success;
+  final String? username;
+  final String? role;
+  final List<String> linkedAccountIds;
+
+  MeResponse({
+    required this.success,
+    this.username,
+    this.role,
+    this.linkedAccountIds = const [],
+  });
+
+  factory MeResponse.fromJson(Map<String, dynamic> json) {
+    final rawLinks = json['linked_account_ids'];
+    List<String> links = const [];
+    if (rawLinks is List) {
+      links = rawLinks.map((e) => e.toString()).where((s) => s.isNotEmpty).toList();
+    }
+    return MeResponse(
+      success: json['success'] as bool? ?? false,
+      username: json['username'] as String?,
+      role: json['role'] as String?,
+      linkedAccountIds: links,
+    );
+  }
+}
+
+/// 用户管理列表项（与 /api/users 对齐）
+class ManagedUserRow {
+  final int id;
+  final String username;
+  final String createdAt;
+  final String role;
+  final List<String> linkedAccountIds;
+
+  ManagedUserRow({
+    required this.id,
+    required this.username,
+    required this.createdAt,
+    required this.role,
+    required this.linkedAccountIds,
+  });
+
+  factory ManagedUserRow.fromJson(Map<String, dynamic> json) {
+    final rawLinks = json['linked_account_ids'];
+    List<String> links = const [];
+    if (rawLinks is List) {
+      links = rawLinks.map((e) => e.toString()).where((s) => s.isNotEmpty).toList();
+    }
+    return ManagedUserRow(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      username: json['username'] as String? ?? '',
+      createdAt: json['created_at'] as String? ?? '',
+      role: (json['role'] as String? ?? 'trader').toLowerCase(),
+      linkedAccountIds: links,
     );
   }
 }
@@ -226,6 +302,94 @@ class BotProfitHistoryResponse {
           (json['snapshots'] as List<dynamic>?)
               ?.map(
                 (e) => BotProfitSnapshot.fromJson(e as Map<String, dynamic>),
+              )
+              .toList() ??
+          [],
+    );
+  }
+}
+
+/// 策略效能：OKX 日线 TR（True Range）与账户现金日增量（UTC 日）
+class StrategyDailyEfficiencyRow {
+  final String day;
+  final double open;
+  final double high;
+  final double low;
+  final double close;
+  final double tr;
+  final double? trPct;
+  final double? sodCash;
+  final double? eodCash;
+  final double? cashDeltaUsdt;
+  final double? cashDeltaPct;
+  final double? efficiencyRatio;
+
+  StrategyDailyEfficiencyRow({
+    required this.day,
+    required this.open,
+    required this.high,
+    required this.low,
+    required this.close,
+    required this.tr,
+    this.trPct,
+    this.sodCash,
+    this.eodCash,
+    this.cashDeltaUsdt,
+    this.cashDeltaPct,
+    this.efficiencyRatio,
+  });
+
+  factory StrategyDailyEfficiencyRow.fromJson(Map<String, dynamic> json) {
+    return StrategyDailyEfficiencyRow(
+      day: json['day'] as String? ?? '',
+      open: (json['open'] as num?)?.toDouble() ?? 0,
+      high: (json['high'] as num?)?.toDouble() ?? 0,
+      low: (json['low'] as num?)?.toDouble() ?? 0,
+      close: (json['close'] as num?)?.toDouble() ?? 0,
+      tr: (json['tr'] as num?)?.toDouble() ?? 0,
+      trPct: (json['tr_pct'] as num?)?.toDouble(),
+      sodCash: (json['sod_cash'] as num?)?.toDouble(),
+      eodCash: (json['eod_cash'] as num?)?.toDouble(),
+      cashDeltaUsdt: (json['cash_delta_usdt'] as num?)?.toDouble(),
+      cashDeltaPct: (json['cash_delta_pct'] as num?)?.toDouble(),
+      efficiencyRatio: (json['efficiency_ratio'] as num?)?.toDouble(),
+    );
+  }
+}
+
+class StrategyDailyEfficiencyResponse {
+  final bool success;
+  final String? message;
+  final String botId;
+  final String instId;
+  final String dayBasis;
+  final String cashBasis;
+  final List<StrategyDailyEfficiencyRow> rows;
+
+  StrategyDailyEfficiencyResponse({
+    required this.success,
+    this.message,
+    required this.botId,
+    required this.instId,
+    required this.dayBasis,
+    required this.cashBasis,
+    required this.rows,
+  });
+
+  factory StrategyDailyEfficiencyResponse.fromJson(Map<String, dynamic> json) {
+    return StrategyDailyEfficiencyResponse(
+      success: json['success'] as bool? ?? false,
+      message: json['message'] as String?,
+      botId: json['bot_id'] as String? ?? '',
+      instId: json['inst_id'] as String? ?? '',
+      dayBasis: json['day_basis'] as String? ?? 'utc',
+      cashBasis: json['cash_basis'] as String? ?? 'none',
+      rows:
+          (json['rows'] as List<dynamic>?)
+              ?.map(
+                (e) => StrategyDailyEfficiencyRow.fromJson(
+                  e as Map<String, dynamic>,
+                ),
               )
               .toList() ??
           [],

@@ -639,12 +639,6 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
           fontSize: titleSize,
           color: color,
         );
-    final unitStyle =
-        (Theme.of(context).textTheme.titleLarge ?? const TextStyle()).copyWith(
-          fontWeight: FontWeight.bold,
-          fontSize: (titleSize - 2).clamp(10.0, double.infinity),
-          color: color,
-        );
     return Column(
       children: [
         Text(label, style: AppFinanceStyle.labelTextStyle(context)),
@@ -1042,12 +1036,6 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
               final profitColor = (s.profitAmount ?? 0) >= 0
                   ? AppFinanceStyle.profitGreenEnd
                   : Colors.red;
-              final startStr = s.startedAt != null && s.startedAt!.length >= 19
-                  ? s.startedAt!.substring(0, 19).replaceAll('T', ' ')
-                  : (s.startedAt ?? '-');
-              final stopStr = s.stoppedAt != null && s.stoppedAt!.length >= 19
-                  ? s.stoppedAt!.substring(0, 19).replaceAll('T', ' ')
-                  : (s.stoppedAt ?? '-');
               return Padding(
                 padding: const EdgeInsets.only(bottom: 12),
                 child: Row(

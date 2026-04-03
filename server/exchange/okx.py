@@ -22,6 +22,67 @@ logger = logging.getLogger(__name__)
 _DEBUG_POSITIONS = os.environ.get("DEBUG_POSITIONS", "0") == "1"
 
 
+def _parse_okx_http_error_body(err_body: str) -> tuple[object | None, str]:
+    """解析 OKX HTTP 错误响应 JSON：返回 (业务码, 展示用原因文案)。
+
+    优先使用 data[0] 的 sCode/sMsg（OKX 常见嵌套结构），否则用顶层 code/msg。
+    非 JSON 时业务码为 None，第二项为截断的原始文本。
+    """
+    raw = (err_body or "").strip()
+    if not raw:
+        return None, ""
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None, raw[:400]
+    if not isinstance(parsed, dict):
+        return None, raw[:400]
+    top_code = parsed.get("code")
+    top_msg = (parsed.get("msg") or "").strip()
+    data = parsed.get("data")
+    nested_code: object | None = None
+    nested_msg = ""
+    if isinstance(data, list) and data and isinstance(data[0], dict):
+        d0 = data[0]
+        nested_code = d0.get("sCode")
+        if nested_code is None or nested_code == "":
+            nested_code = d0.get("code")
+        nested_msg = (d0.get("sMsg") or d0.get("msg") or "").strip()
+    if nested_code is not None and nested_code != "":
+        primary_code = nested_code
+    else:
+        primary_code = top_code
+    show_msg = nested_msg or top_msg
+    return primary_code, show_msg
+
+
+def _okx_code_is_1010(code: object, err_body: str) -> bool:
+    if code is not None and str(code).strip() == "1010":
+        return True
+    if code == 1010:
+        return True
+    # 解析失败时仅从 JSON 形态匹配，避免误匹配纯文本中的数字
+    return '"1010"' in err_body or "'1010'" in err_body
+
+
+def _okx_business_error_detail(data: dict) -> str:
+    """HTTP 200 且 JSON code != '0'：用 OKX 返回的真实 code/msg（含 data[0] sCode/sMsg）。"""
+    code: object = data.get("code")
+    msg = (data.get("msg") or "").strip()
+    dlist = data.get("data")
+    if isinstance(dlist, list) and dlist and isinstance(dlist[0], dict):
+        d0 = dlist[0]
+        nc = d0.get("sCode")
+        if nc is None or nc == "":
+            nc = d0.get("code")
+        nm = (d0.get("sMsg") or d0.get("msg") or "").strip()
+        if nc is not None and nc != "":
+            code = nc
+        if nm:
+            msg = nm
+    return f"OKX 业务错误 code={code!r} msg={msg or '未知'}"
+
+
 def get_public_egress_ip(timeout: float = 2.5) -> str | None:
     """探测本机访问公网时的出口 IP（与 OKX 侧看到的来源 IP 一致，用于 1010 白名单排查）。"""
     for url in (
@@ -44,8 +105,9 @@ def okx_debug_snapshot(config_path: Path | None) -> dict[str, object]:
     path = _resolve_path(config_path)
     out: dict[str, object] = {
         "note": (
-            "OKX 校验的是发起 API 请求的服务器公网出口 IP（非手机/浏览器 IP）。"
-            "请将下方「出口 IP」加入该 API Key 的白名单。"
+            "请以 OKX 接口返回的 code/msg 及官方文档为准排查。"
+            " 若确认为 IP 白名单问题，请将发起请求的服务器公网出口 IP（非浏览器 IP）"
+            " 加入该 API Key 的白名单。"
         ),
     }
     if path:
@@ -251,61 +313,48 @@ def okx_request(
             err_body = raw.decode("utf-8", errors="replace")[:500]
         except Exception:
             err_body = ""
-        okx_code = None
-        okx_msg = ""
-        try:
-            parsed = json.loads(err_body) if err_body.strip() else {}
-            okx_code = parsed.get("code")
-            if (
-                okx_code is None
-                and isinstance(parsed.get("data"), list)
-                and parsed["data"]
-            ):
-                okx_code = parsed["data"][0].get("code")
-            okx_msg = (parsed.get("msg") or "").strip()
-        except (json.JSONDecodeError, IndexError, TypeError, KeyError):
-            pass
-        is_1010 = e.code == 403 and (
-            okx_code in ("1010", 1010) or (err_body and "1010" in err_body)
-        )
+        primary_code, show_msg = _parse_okx_http_error_body(err_body)
+        is_1010 = e.code == 403 and _okx_code_is_1010(primary_code, err_body)
+        egress: str | None = None
         if is_1010:
             egress = get_public_egress_ip()
-            logger.info(
-                "OKX 1010: %s %s -> IP 未在 API 白名单。"
-                " 本机测得出口 IP=%s, config=%s（请在 OKX 将该出口 IP 加入此 API Key 白名单）",
-                method, request_path,
-                egress or "未知",
-                config_name,
-            )
-        else:
-            snippet = err_body[:500] if err_body else ""
-            logger.warning(
-                "OKX request failed: %s %s -> %s %s",
-                method, request_path, e.code, snippet,
-            )
-        if e.code == 403:
-            if is_1010:
-                return (None, "OKX 1010: IP 未在 API 白名单，请在 OKX 后台添加当前服务器 IP")
-            return (
-                None,
-                f"OKX 403: {okx_msg}" if okx_msg else "OKX 返回 403，请检查 API 权限与 IP 白名单",
-            )
-        if e.code == 401:
-            return (
-                None,
-                f"OKX 401: {okx_msg}" if okx_msg else "OKX 鉴权失败，请检查 apikey/secret/passphrase",
-            )
-        return (None, f"OKX 请求失败 ({e.code})")
+        raw_log = (err_body[:500] if err_body else "") or "(无响应体)"
+        logger.warning(
+            "OKX请求失败 %s %s config=%s | HTTP状态=%s OKX业务码=%r OKX原因=%r | 响应体=%s%s",
+            method,
+            request_path,
+            config_name,
+            e.code,
+            primary_code,
+            show_msg or "(空)",
+            raw_log,
+            (
+                f" | 本机出口IP={egress or '未知'}(与OKX白名单比对)"
+                if is_1010
+                else ""
+            ),
+        )
+        reason = show_msg or "(OKX 响应体未解析出 msg)"
+        detail = (
+            f"HTTP {e.code} OKX业务码={primary_code!r} 原因={reason} 原始响应={raw_log!r}"
+        )
+        if is_1010:
+            detail += f" 本机出口IP={egress or '未知'}"
+        return (None, detail)
     except (URLError, json.JSONDecodeError, OSError, KeyError) as e:
         logger.warning("OKX request error: %s %s -> %s", method, request_path, e)
         return (None, None)
 
 
-def _okx_fetch_balance_fallback(config_path: Path | None) -> dict | None:
+def _okx_fetch_balance_fallback(
+    config_path: Path | None,
+) -> tuple[dict | None, str | None]:
     """余额：原生签名请求 /api/v5/account/balance（不经过 ccxt，避免 load_markets 解析 preopen 等标的异常）。"""
-    data, _ = okx_request("GET", "/api/v5/account/balance", config_path=config_path)
-    if data is None or data.get("code") != "0":
-        return None
+    data, err = okx_request("GET", "/api/v5/account/balance", config_path=config_path)
+    if data is None:
+        return None, err or "请求失败或无有效 JSON（参见同时间点 OKX request 日志）"
+    if data.get("code") != "0":
+        return None, _okx_business_error_detail(data)
     total_eq = 0.0
     avail_eq = 0.0
     upl = 0.0
@@ -318,7 +367,7 @@ def _okx_fetch_balance_fallback(config_path: Path | None) -> dict | None:
             pass
     if avail_eq == 0 and total_eq != 0:
         avail_eq = total_eq
-    return _okx_balance_dict(total_eq, avail_eq, upl, raw=data)
+    return _okx_balance_dict(total_eq, avail_eq, upl, raw=data), None
 
 
 def _okx_balance_dict(
@@ -344,11 +393,14 @@ def okx_fetch_balance(config_path: Path | None = None) -> dict | None:
     cfg = load_okx_config(path) if path else None
     if not cfg or not (cfg.get("key") and cfg.get("secret")):
         return None
-    out = _okx_fetch_balance_fallback(path)
+    out, err_detail = _okx_fetch_balance_fallback(path)
     if out is not None:
         return out
+    cfg_name = path.name if path else "default"
     logger.warning(
-        "OKX fetch_balance: /api/v5/account/balance 未返回有效数据，请检查 API 权限、网络与配置"
+        "OKX fetch_balance [%s]: /api/v5/account/balance 未返回有效数据 — %s",
+        cfg_name,
+        err_detail or "请检查 API 权限、网络与配置",
     )
     return None
 
@@ -364,7 +416,9 @@ def _okx_fetch_positions_fallback(config_path: Path | None) -> tuple[list[dict],
     if err:
         return ([], err)
     if data is None or data.get("code") != "0":
-        return ([], data.get("msg", "OKX 持仓接口返回异常") if isinstance(data, dict) else "OKX 持仓接口返回异常")
+        if isinstance(data, dict):
+            return ([], _okx_business_error_detail(data))
+        return ([], "OKX 持仓接口返回异常")
     raw_list = data.get("data") or []
     out = []
     for d in raw_list:
@@ -420,6 +474,51 @@ def okx_fetch_ticker(inst_id: str) -> float | None:
         return None
     except Exception:
         return None
+
+
+def okx_fetch_daily_ohlcv_with_tr(
+    inst_id: str, *, limit: int = 120
+) -> tuple[list[dict[str, float | str]], str | None]:
+    """
+    OKX 公开 K 线：日线 OHLC，并计算当日 True Range（TR）。
+    TR = max(H-L, |H-昨收|, |L-昨收|)；首根 K 线无前收时 TR = H-L。
+    inst_id 示例：PEPE-USDT-SWAP（与持仓 instId 一致）。
+    返回 (bars, error)，bars 项含 day(UTC 日期 YYYY-MM-DD)、open/high/low/close/tr。
+    """
+    lim = max(2, min(500, int(limit)))
+    try:
+        exchange = ccxt.okx({"enableRateLimit": True, "timeout": 20000})
+        symbol = _inst_id_to_ccxt_symbol(inst_id)
+        ohlcv = exchange.fetch_ohlcv(symbol, "1d", limit=lim)
+    except Exception as e:
+        return [], str(e) or "fetch_ohlcv failed"
+    if not ohlcv:
+        return [], "empty ohlcv"
+    out: list[dict[str, float | str]] = []
+    prev_close: float | None = None
+    for row in ohlcv:
+        try:
+            ts_ms, o, h, l, c = int(row[0]), float(row[1]), float(row[2]), float(row[3]), float(row[4])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if prev_close is None:
+            tr = h - l
+        else:
+            pc = float(prev_close)
+            tr = max(h - l, abs(h - pc), abs(l - pc))
+        prev_close = c
+        day = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).strftime("%Y-%m-%d")
+        out.append(
+            {
+                "day": day,
+                "open": float(o),
+                "high": h,
+                "low": l,
+                "close": c,
+                "tr": float(tr),
+            }
+        )
+    return out, None
 
 
 def _ccxt_symbol_to_inst_id(symbol: str) -> str:
@@ -528,7 +627,7 @@ def okx_fetch_positions_history(
             return (merged, err) if merged else ([], err)
         if data is None or data.get("code") != "0":
             msg = (
-                data.get("msg", "positions-history 异常")
+                _okx_business_error_detail(data)
                 if isinstance(data, dict)
                 else "positions-history 异常"
             )
@@ -572,7 +671,7 @@ def okx_fetch_pending_orders(
         return ([], err)
     if data is None or data.get("code") != "0":
         if isinstance(data, dict):
-            msg = data.get("msg", "orders-pending 异常")
+            msg = _okx_business_error_detail(data)
         else:
             msg = "orders-pending 异常"
         return ([], msg)

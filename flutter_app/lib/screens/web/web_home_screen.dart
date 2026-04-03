@@ -74,18 +74,6 @@ class _WebHomeScreenState extends State<WebHomeScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'Web3+AI量化交易平台',
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      color: const Color.fromARGB(
-                        255,
-                        4,
-                        10,
-                        176,
-                      ).withValues(alpha: 0.9),
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
                   const Spacer(),
                   SizedBox(
                     width: double.infinity,

@@ -2,16 +2,35 @@ import 'package:flutter/material.dart';
 
 import '../../api/client.dart';
 import '../../api/models.dart';
+import '../../auth/app_user_role.dart';
 import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
 import '../settings_screen.dart';
 import '../tradingbot_control.dart';
+import '../user_management_screen.dart';
 import 'download_app_page.dart';
+import 'tradingbot_control_screen.dart';
 import 'web_dashboard_screen.dart';
 import 'web_home_screen.dart';
 import 'web_strategy_performance_screen.dart';
 
+class _NavItem {
+  const _NavItem({
+    required this.title,
+    required this.icon,
+    required this.selectedIcon,
+    required this.page,
+  });
+
+  final String title;
+  final IconData icon;
+  final IconData selectedIcon;
+  final Widget page;
+}
+
 /// 浏览器端主导航：侧栏 / 抽屉 + 多 Tab，与移动端 [MainScreen] 分流。
+/// 顺序：主页 → 仪表盘（全局概览）→ 策略启动（交易员/管理员）→ 账户收益与详情（含策略能效）
+/// → 用户管理（管理员）→ 策略启停（仅交易员）→ 下载 → 设置。
 class WebMainShell extends StatefulWidget {
   const WebMainShell({super.key, this.onLogout});
 
@@ -26,15 +45,64 @@ class _WebMainShellState extends State<WebMainShell> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   int _index = 0;
   List<UnifiedTradingBot> _sharedBots = [];
+  AppUserRole _role = AppUserRole.trader;
 
-  static const _titles = [
-    '主页',
-    '仪表盘',
-    '策略启停',
-    '账户收益与详情',
-    '下载 App',
-    '设置',
-  ];
+  List<_NavItem> _itemsForRole() {
+    final bots = _sharedBots;
+    return [
+      const _NavItem(
+        title: 'AI+Web3金融动力学',
+        icon: Icons.home_outlined,
+        selectedIcon: Icons.home,
+        page: WebHomeScreen(),
+      ),
+      if (_role.canViewGlobalDashboard)
+        _NavItem(
+          title: '账号总览',
+          icon: Icons.dashboard_outlined,
+          selectedIcon: Icons.dashboard,
+          page: WebDashboardScreen(sharedBots: bots),
+        ),
+
+      if (_role.canViewStrategyPerformance)
+        _NavItem(
+          title: '账户收益与详情',
+          icon: Icons.insights_outlined,
+          selectedIcon: Icons.insights,
+          page: WebStrategyPerformanceScreen(sharedBots: bots),
+        ),
+      if (_role.canViewStrategyStart)
+        _NavItem(
+          title: '策略启动',
+          icon: Icons.play_circle_outline,
+          selectedIcon: Icons.play_circle,
+          page: WebTradingBotControlScreen(sharedBots: bots),
+        ),
+      if (_role.canManageUsers)
+        _NavItem(
+          title: '用户管理',
+          icon: Icons.group_outlined,
+          selectedIcon: Icons.group,
+          page: UserManagementScreen(embedInShell: true),
+        ),
+      const _NavItem(
+        title: 'APK下载',
+        icon: Icons.download_outlined,
+        selectedIcon: Icons.download,
+        page: DownloadAppPage(),
+      ),
+      _NavItem(
+        title: '设置',
+        icon: Icons.settings_outlined,
+        selectedIcon: Icons.settings,
+        page: SettingsScreen(
+          embedInShell: true,
+          onLogout: widget.onLogout,
+          appUserRole: _role,
+        ),
+      ),
+    ];
+  }
 
   Future<void> _loadBots() async {
     try {
@@ -47,10 +115,30 @@ class _WebMainShellState extends State<WebMainShell> {
     } catch (_) {}
   }
 
+  Future<void> _loadRole() async {
+    final fromPrefs = await _prefs.getAppUserRole();
+    if (!mounted) return;
+    setState(() => _role = fromPrefs);
+    try {
+      final base = await _prefs.backendBaseUrl;
+      final token = await _prefs.authToken;
+      final api = ApiClient(base, token: token);
+      final me = await api.getMe();
+      if (!mounted || !me.success) return;
+      await _prefs.setUserRole(me.role);
+      setState(() => _role = AppUserRole.fromApi(me.role));
+    } catch (_) {}
+  }
+
+  void _clampIndex(int len) {
+    if (_index >= len) setState(() => _index = 0);
+  }
+
   @override
   void initState() {
     super.initState();
     _loadBots();
+    _loadRole();
     Future<void>.delayed(const Duration(milliseconds: 1500), () {
       if (!mounted || _sharedBots.isNotEmpty) return;
       _loadBots();
@@ -59,21 +147,13 @@ class _WebMainShellState extends State<WebMainShell> {
 
   @override
   Widget build(BuildContext context) {
+    final items = _itemsForRole();
+    _clampIndex(items.length);
     final useRail = MediaQuery.sizeOf(context).width >= 760;
     final body = IndexedStack(
-      index: _index,
+      index: _index.clamp(0, items.length - 1),
       sizing: StackFit.expand,
-      children: [
-        const WebHomeScreen(),
-        WebDashboardScreen(sharedBots: _sharedBots),
-        const TradingBotControl(embedInShell: true),
-        WebStrategyPerformanceScreen(sharedBots: _sharedBots),
-        const DownloadAppPage(),
-        SettingsScreen(
-          embedInShell: true,
-          onLogout: widget.onLogout,
-        ),
-      ],
+      children: items.map((e) => e.page).toList(),
     );
 
     if (useRail) {
@@ -81,12 +161,12 @@ class _WebMainShellState extends State<WebMainShell> {
         backgroundColor: AppFinanceStyle.backgroundDark,
         appBar: AppBar(
           title: Text(
-            _titles[_index],
+            items[_index.clamp(0, items.length - 1)].title,
             style: AppFinanceStyle.labelTextStyle(context).copyWith(
-                  color: AppFinanceStyle.valueColor,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                ),
+              color: AppFinanceStyle.valueColor,
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+            ),
           ),
           backgroundColor: AppFinanceStyle.backgroundDark,
           foregroundColor: AppFinanceStyle.valueColor,
@@ -96,7 +176,7 @@ class _WebMainShellState extends State<WebMainShell> {
           children: [
             NavigationRail(
               backgroundColor: const Color(0xFF0f0f14),
-              selectedIndex: _index,
+              selectedIndex: _index.clamp(0, items.length - 1),
               onDestinationSelected: (i) => setState(() => _index = i),
               labelType: NavigationRailLabelType.all,
               selectedLabelTextStyle: const TextStyle(
@@ -107,37 +187,13 @@ class _WebMainShellState extends State<WebMainShell> {
                 color: AppFinanceStyle.labelColor,
                 fontSize: 12,
               ),
-              destinations: const [
-                NavigationRailDestination(
-                  icon: Icon(Icons.home_outlined),
-                  selectedIcon: Icon(Icons.home),
-                  label: Text('欢迎页'),
-                ),
-                NavigationRailDestination(
-                  icon: Icon(Icons.dashboard_outlined),
-                  selectedIcon: Icon(Icons.dashboard),
-                  label: Text('仪表盘'),
-                ),
-                NavigationRailDestination(
-                  icon: Icon(Icons.smart_toy_outlined),
-                  selectedIcon: Icon(Icons.smart_toy),
-                  label: Text('策略启停'),
-                ),
-                NavigationRailDestination(
-                  icon: Icon(Icons.insights_outlined),
-                  selectedIcon: Icon(Icons.insights),
-                  label: Text('账户收益与详情'),
-                ),
-                NavigationRailDestination(
-                  icon: Icon(Icons.download_outlined),
-                  selectedIcon: Icon(Icons.download),
-                  label: Text('APK下载'),
-                ),
-                NavigationRailDestination(
-                  icon: Icon(Icons.settings_outlined),
-                  selectedIcon: Icon(Icons.settings),
-                  label: Text('设置'),
-                ),
+              destinations: [
+                for (final e in items)
+                  NavigationRailDestination(
+                    icon: Icon(e.icon),
+                    selectedIcon: Icon(e.selectedIcon),
+                    label: Text(e.title),
+                  ),
               ],
             ),
             const VerticalDivider(width: 1, thickness: 1),
@@ -152,12 +208,12 @@ class _WebMainShellState extends State<WebMainShell> {
       backgroundColor: AppFinanceStyle.backgroundDark,
       appBar: AppBar(
         title: Text(
-          _titles[_index],
+          items[_index.clamp(0, items.length - 1)].title,
           style: AppFinanceStyle.labelTextStyle(context).copyWith(
-                color: AppFinanceStyle.valueColor,
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-              ),
+            color: AppFinanceStyle.valueColor,
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+          ),
         ),
         backgroundColor: AppFinanceStyle.backgroundDark,
         foregroundColor: AppFinanceStyle.valueColor,
@@ -186,12 +242,12 @@ class _WebMainShellState extends State<WebMainShell> {
                 ),
               ),
             ),
-            for (var i = 0; i < _titles.length; i++)
+            for (var i = 0; i < items.length; i++)
               ListTile(
                 selected: _index == i,
                 selectedTileColor: Colors.white12,
                 title: Text(
-                  _titles[i],
+                  items[i].title,
                   style: TextStyle(
                     color: _index == i
                         ? AppFinanceStyle.profitGreenEnd

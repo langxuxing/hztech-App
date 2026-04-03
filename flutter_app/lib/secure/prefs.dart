@@ -3,9 +3,11 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../auth/app_user_role.dart';
 import '../debug_ingest_log.dart';
 
 const _keyToken = 'auth_token';
+const _keyUserRole = 'user_role';
 const _keyBackendUrl = 'backend_url';
 const _keyFingerprint = 'fingerprint_enabled';
 const _keyUnlockedUntil = 'unlocked_until_ms';
@@ -100,6 +102,20 @@ class SecurePrefs {
     }
   }
 
+  /// 登录或 GET /api/me 后写入，与后端 role 一致。
+  Future<void> setUserRole(String? role) async {
+    if (role == null || role.isEmpty) {
+      await _storage.delete(key: _keyUserRole);
+    } else {
+      await _storage.write(key: _keyUserRole, value: role.trim().toLowerCase());
+    }
+  }
+
+  Future<AppUserRole> getAppUserRole() async {
+    final v = await _storage.read(key: _keyUserRole);
+    return AppUserRole.fromApi(v);
+  }
+
   Future<String> get backendBaseUrl async {
     final v = await _storage.read(key: _keyBackendUrl);
     final raw = v ?? defaultBackendUrl;
@@ -189,6 +205,7 @@ class SecurePrefs {
 
   Future<void> clearOnLogout() async {
     await _storage.delete(key: _keyToken);
+    await _storage.delete(key: _keyUserRole);
     await _storage.delete(key: _keyUnlockedUntil);
   }
 }

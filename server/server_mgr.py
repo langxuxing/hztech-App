@@ -278,7 +278,8 @@ def build_web_flutter():
     if extra:
         print("  dart-define: %s" % " ".join(extra))
     subprocess.run(
-        [flutter_cmd, "build", "web", "--release", *extra],
+        # 关闭 Wasm 预检：flutter_secure_storage_web 等不兼容 Wasm，与当前 JS 产物无关，仅减少构建日志噪声。
+        [flutter_cmd, "build", "web", "--release", "--no-wasm-dry-run", *extra],
         check=True,
         cwd=str(FLUTTER_APP),
         env=env,

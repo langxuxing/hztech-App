@@ -88,7 +88,7 @@ class TestMainAccountMgrE2E:
         """
         与 ApiClient 一致：getBotProfitHistory、getTradingbotPositions、
         getTradingbotSeasons；另测 events（审计）。
-        Web：web_strategy_performance_screen / web_dashboard_screen 同源接口。
+        Web：web_strategy_performance_screen / tradingbot_control_screen 同源接口。
         """
         mgr_ids = _enabled_account_ids_from_mgr()
         if not mgr_ids:

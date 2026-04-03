@@ -120,6 +120,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!mounted) return;
       if (resp.success && resp.token != null && resp.token!.isNotEmpty) {
         await _prefs.setAuthToken(resp.token);
+        await _prefs.setUserRole(resp.role);
         await _prefs.setBackendBaseUrl(baseUrl);
         widget.onLoginSuccess();
       } else {
@@ -450,7 +451,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                                 Icons.fingerprint,
                                                 color: enabled
                                                     ? _electricCyan
-                                                    : _silver.withOpacity(0.4),
+                                                    : _silver.withValues(alpha: 0.4),
                                               ),
                                             ),
                                           );
@@ -475,6 +476,18 @@ class _LoginScreenState extends State<LoginScreen> {
                                   fit: BoxFit.contain,
                                   errorBuilder: (_, __, ___) =>
                                       const SizedBox.shrink(),
+                                ),
+                                const SizedBox(height: 12),
+                                Text(
+                                  _tagline,
+                                  textAlign: TextAlign.center,
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .bodySmall
+                                      ?.copyWith(
+                                        color: _silver.withValues(alpha: 0.85),
+                                        height: 1.45,
+                                      ),
                                 ),
                               ],
                             ),

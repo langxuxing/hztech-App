@@ -2,17 +2,30 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../auth/app_user_role.dart';
 import '../secure/prefs.dart';
 import '../theme/finance_style.dart';
 import '../widgets/water_background.dart';
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key, this.onLogout, this.embedInShell = false});
+  const SettingsScreen({
+    super.key,
+    this.onLogout,
+    this.embedInShell = false,
+    this.appUserRole,
+    this.onOpenUserManagement,
+  });
 
   final VoidCallback? onLogout;
 
   /// 嵌入 Web 主导航壳时不显示本页 [AppBar]。
   final bool embedInShell;
+
+  /// 当前登录角色（用于展示说明；可为空则不在此页显示角色条）。
+  final AppUserRole? appUserRole;
+
+  /// 管理员：在移动端从此处进入用户管理（Web 侧栏另有入口）。
+  final VoidCallback? onOpenUserManagement;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -117,6 +130,49 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
                 children: [
+                  if (widget.appUserRole != null) ...[
+                    FinanceCard(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('当前角色', style: AppFinanceStyle.labelTextStyle(context)),
+                          const SizedBox(height: 8),
+                          Text(
+                            AppUserRole.label(widget.appUserRole!),
+                            style: AppFinanceStyle.labelTextStyle(context).copyWith(
+                                  color: AppFinanceStyle.valueColor,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                          ),
+                          if (widget.appUserRole == AppUserRole.admin) ...[
+                            const SizedBox(height: 12),
+                            Text(
+                              '系统配置：请在 Web 侧栏「用户管理」维护用户类型与客户绑定账户；此处可修改后端地址与退出登录。',
+                              style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 13, height: 1.4),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                  ],
+                  if (widget.appUserRole == AppUserRole.admin &&
+                      widget.onOpenUserManagement != null) ...[
+                    FinanceCard(
+                      padding: const EdgeInsets.all(20),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          onPressed: widget.onOpenUserManagement,
+                          icon: const Icon(Icons.group_outlined),
+                          label: const Text('用户管理'),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                  ],
                   FinanceCard(
                     padding: const EdgeInsets.all(20),
                     child: Column(
@@ -169,7 +225,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         title: Text('指纹登录', style: AppFinanceStyle.labelTextStyle(context).copyWith(color: AppFinanceStyle.valueColor)),
                         value: _fingerprintEnabled,
                         onChanged: _toggleFingerprint,
-                        activeColor: AppFinanceStyle.profitGreenEnd,
+                        activeThumbColor: AppFinanceStyle.profitGreenEnd,
                       ),
                     ),
                     const SizedBox(height: 20),

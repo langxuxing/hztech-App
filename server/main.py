@@ -11,9 +11,12 @@ App 所需 API（与 QtraderApi.kt 一致）：
   GET  /api/tradingbots           交易账户列表（需 Bearer token）
   POST /api/tradingbots/{id}/start|stop|restart（需 Bearer token；simpleserver-* 或 Account_List 的 botctrl/*.sh 等 script_file）
   GET  /api/tradingbots/{id}/pending-orders | /ticker  当前委托、行情（不入库；id 可为 Account_List 的 account_id）
+  GET  /api/tradingbots/{id}/strategy-daily-efficiency  OKX 日线 TR + 现金日增量（?inst_id=&days=）
   GET  /api/tradingbots/{id}/tradingbot-events  账户启停事件（需 Bearer token）
   GET  /api/logs                  日志查询（需 Bearer token，?limit=100&level=&source=）
-  GET  /api/users                 用户列表（需 Bearer token，用户管理以 DB 为准）
+  GET  /api/users                 用户列表（仅管理员，含 role、linked_account_ids）
+  PATCH /api/users/<id>           更新角色/客户绑定账户（仅管理员）
+  GET  /api/me                    当前用户 role、linked_account_ids
 管控：
   GET  /api/strategy/status
   POST /api/strategy/start | stop | restart（需 query bot_id=simpleserver-lhg|simpleserver-hztech）
@@ -31,13 +34,14 @@ import sys
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from functools import wraps
 import jwt
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory, g
 
 import db as _db
+import strategy_efficiency as _strategy_efficiency
 from Accounts import AccountMgr as _account_mgr
 from exchange import okx as _okx
 from tradingbot_ctrl import (
@@ -382,11 +386,13 @@ def _resolve_okx_config_path(bot_or_account_id: str) -> Path | None:
         return p
     return _account_mgr.resolve_okx_config_path(bot_or_account_id)
 
-
+# 账号信息同步器：从okx交易所读取账号信息并写入数据库
 def _job_fetch_account_and_save_snapshots() -> None:
     """定时任务：Account_List 账户写入 account_snapshots + account_positions_history（由 AccountMgr；另兼容 tradingbots.json 旧 bot 写入 bot_profit_snapshots）。"""
+    
+    # 1. 读取 Account_List 中的账户信息并写入数据库
     try:
-        _account_mgr.refresh_all_snapshots(_db, app.logger)
+        _account_mgr.refresh_all_balance_snapshots(_db, app.logger)
     except Exception as e:
         _db.log_insert(
             "WARN",
@@ -394,6 +400,18 @@ def _job_fetch_account_and_save_snapshots() -> None:
             source="timer",
             extra={"error": str(e)},
         )
+
+    try:
+        _account_mgr._fetch_and_save_tradingbot_snapshots(_db, app.logger)
+    except Exception as e:
+        _db.log_insert(
+            "WARN",
+            "account_mgr_tradingbot_snapshot_failed",
+            source="timer",
+            extra={"error": str(e)},
+        )
+        
+    # 2. 读取 Account_List 中的账户信息并写入数据库
     try:
         _account_mgr.refresh_all_positions_history(_db, app.logger)
     except Exception as e:
@@ -403,42 +421,6 @@ def _job_fetch_account_and_save_snapshots() -> None:
             source="timer",
             extra={"error": str(e)},
         )
-    bots = _load_tradingbots_config()
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    for b in bots:
-        bot_id = (b.get("tradingbot_id") or "").strip()
-        if not bot_id:
-            continue
-        config_path = _bot_okx_config_path(bot_id)
-        if not config_path:
-            continue
-        try:
-            balance = _okx.okx_fetch_balance(config_path=config_path)
-            if balance is None:
-                continue
-            total_eq = float(balance.get("equity_usdt") or balance.get("total_eq") or 0.0)
-            prev = _db.bot_profit_latest_by_bot(bot_id)
-            initial = float(prev["initial_balance"]) if prev else total_eq
-            if prev is None and total_eq > 0:
-                initial = total_eq
-            profit_amount = total_eq - initial
-            profit_percent = (profit_amount / initial * 100.0) if initial else 0.0
-            _db.bot_profit_insert(
-                bot_id=bot_id,
-                snapshot_at=ts,
-                initial_balance=initial,
-                current_balance=total_eq,
-                equity_usdt=total_eq,
-                profit_amount=profit_amount,
-                profit_percent=profit_percent,
-            )
-        except Exception as e:
-            _db.log_insert(
-                "WARN",
-                "account_snapshot_failed",
-                source="timer",
-                extra={"bot_id": bot_id, "error": str(e)},
-            )
 
 
 def _start_account_snapshot_timer() -> None:
@@ -450,13 +432,13 @@ def _start_account_snapshot_timer() -> None:
             try:
                 _job_fetch_account_and_save_snapshots()
                 app.logger.info(
-                    "account_sync_timer: cycle completed (interval=%ss)",
+                    "账号信息同步器：周期完成（间隔=%ss）",
                     _ACCOUNT_SYNC_INTERVAL_SEC,
                 )
             except Exception as e:
                 _db.log_insert(
                     "WARN",
-                    "account_snapshot_timer_error",
+                    "账号信息同步器：周期错误",
                     source="timer",
                     extra={"error": str(e)},
                 )
@@ -890,6 +872,62 @@ def api_bot_profit_history(bot_id):
         return jsonify({"success": True, "bot_id": bot_id, "snapshots": snapshots})
     rows = _db.bot_profit_query_by_bot(bot_id, limit=limit)
     return jsonify({"success": True, "bot_id": bot_id, "snapshots": rows})
+
+
+@app.route("/api/tradingbots/<bot_id>/strategy-daily-efficiency", methods=["GET"])
+@require_auth
+def api_strategy_daily_efficiency(bot_id):
+    """
+    策略效能：OKX 日线 True Range（公开 K 线）与账户快照的每日现金余额增量（UTC 日）。
+    Query: inst_id=PEPE-USDT-SWAP&days=90
+    """
+    denied = _customer_bot_forbidden(bot_id)
+    if denied:
+        return denied
+    inst_id = (request.args.get("inst_id") or "PEPE-USDT-SWAP").strip()
+    try:
+        days = int(request.args.get("days", 90))
+    except (TypeError, ValueError):
+        days = 90
+    days = max(7, min(366, days))
+    bars, m_err = _okx.okx_fetch_daily_ohlcv_with_tr(inst_id, limit=days + 5)
+    if m_err or not bars:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "message": m_err or "no market data",
+                    "inst_id": inst_id,
+                }
+            ),
+            502,
+        )
+
+    account_ids = {
+        x["account_id"] for x in _account_mgr.list_account_basics(enabled_only=False)
+    }
+    cash_by_day: dict = {}
+    cash_basis = "none"
+    if bot_id in account_ids:
+        since_dt = datetime.now(timezone.utc) - timedelta(days=days + 3)
+        since = since_dt.strftime("%Y-%m-%dT00:00:00.000Z")
+        snaps = _db.account_snapshot_query_by_account_since(
+            bot_id, since_snapshot_at=since, max_rows=50000
+        )
+        cash_by_day = _strategy_efficiency.daily_cash_delta_by_utc_day(snaps)
+        cash_basis = "account_snapshots_cash"
+
+    rows = _strategy_efficiency.merge_daily_efficiency_rows(bars, cash_by_day)
+    return jsonify(
+        {
+            "success": True,
+            "bot_id": bot_id,
+            "inst_id": inst_id,
+            "day_basis": "utc",
+            "cash_basis": cash_basis,
+            "rows": rows,
+        }
+    )
 
 
 @app.route("/api/tradingbots/<bot_id>/daily-realized-pnl", methods=["GET"])

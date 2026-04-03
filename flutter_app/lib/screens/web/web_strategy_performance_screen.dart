@@ -7,7 +7,7 @@ import '../../theme/finance_style.dart';
 import '../../widgets/profit_percent_line_chart.dart';
 import '../../widgets/water_background.dart';
 
-/// Web：按账户查看收益率曲线；赛季为**每张赛季一张卡片**的网格布局。
+/// Web：按账户查看收益率曲线、赛季网格与策略日线能效（OKX TR 与现金日变动比值）。
 /// 与 APK [AccountProfitScreen] 中单卡内「赛季盈利」列表式展示区分。
 class WebStrategyPerformanceScreen extends StatefulWidget {
   const WebStrategyPerformanceScreen({super.key, this.sharedBots = const []});
@@ -26,8 +26,10 @@ class _WebStrategyPerformanceScreenState
   String? _selectedId;
   List<BotProfitSnapshot> _snapshots = [];
   List<BotSeason> _seasons = [];
+  StrategyDailyEfficiencyResponse? _efficiency;
   bool _loading = true;
-  String? _error;
+  String? _metricsError;
+  String? _efficiencyLoadError;
 
   Future<void> _loadBots() async {
     if (widget.sharedBots.isNotEmpty) {
@@ -50,33 +52,65 @@ class _WebStrategyPerformanceScreenState
     });
   }
 
-  Future<void> _loadMetrics() async {
+  Future<void> _loadData() async {
     final botId = _selectedId;
     if (botId == null || botId.isEmpty) return;
     setState(() {
       _loading = true;
-      _error = null;
+      _metricsError = null;
+      _efficiencyLoadError = null;
     });
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
       final api = ApiClient(baseUrl, token: token);
-      final r = await Future.wait([
-        api.getBotProfitHistory(botId, limit: 500),
-        api.getTradingbotSeasons(botId, limit: 50),
+
+      String? mErr;
+      String? eErr;
+      BotProfitHistoryResponse? hResp;
+      TradingbotSeasonsResponse? sResp;
+      StrategyDailyEfficiencyResponse? effResp;
+
+      await Future.wait([
+        (() async {
+          try {
+            final r = await Future.wait([
+              api.getBotProfitHistory(botId, limit: 500),
+              api.getTradingbotSeasons(botId, limit: 50),
+            ]);
+            hResp = r[0] as BotProfitHistoryResponse;
+            sResp = r[1] as TradingbotSeasonsResponse;
+          } catch (e) {
+            mErr = e.toString();
+          }
+        })(),
+        (() async {
+          try {
+            effResp = await api.getStrategyDailyEfficiency(botId);
+          } catch (e) {
+            eErr = e.toString();
+          }
+        })(),
       ]);
+
       if (!mounted) return;
-      final h = r[0] as BotProfitHistoryResponse;
-      final s = r[1] as TradingbotSeasonsResponse;
       setState(() {
-        _snapshots = h.snapshots;
-        _seasons = s.seasons;
+        if (hResp != null && sResp != null) {
+          _snapshots = hResp!.snapshots;
+          _seasons = sResp!.seasons;
+        } else {
+          _snapshots = [];
+          _seasons = [];
+        }
+        _efficiency = effResp;
+        _metricsError = mErr;
+        _efficiencyLoadError = eErr;
         _loading = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = e.toString();
+        _metricsError = e.toString();
         _loading = false;
       });
     }
@@ -95,12 +129,17 @@ class _WebStrategyPerformanceScreenState
       setState(() => _loading = false);
       return;
     }
-    await _loadMetrics();
+    await _loadData();
   }
 
   String _fmtPct(double v) => '${v.toStringAsFixed(2)}%';
 
   String _fmt(double v) => v.toStringAsFixed(2);
+
+  String _fmtOpt(double? v, {int digits = 2}) {
+    if (v == null || !v.isFinite) return '—';
+    return v.toStringAsFixed(digits);
+  }
 
   /// 与移动端赛季时间展示一致：月-日 时:分
   String _formatSeasonTime(String? value) {
@@ -120,6 +159,120 @@ class _WebStrategyPerformanceScreenState
     }
   }
 
+  Widget _buildEfficiencySection(BuildContext context) {
+    if (_efficiencyLoadError != null) {
+      return FinanceCard(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '策略能效评估',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: AppFinanceStyle.labelColor,
+                    fontWeight: FontWeight.w600,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              _efficiencyLoadError!,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ],
+        ),
+      );
+    }
+    final eff = _efficiency;
+    if (eff == null) {
+      return const SizedBox.shrink();
+    }
+    if (!eff.success) {
+      return FinanceCard(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '策略能效评估',
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    color: AppFinanceStyle.labelColor,
+                    fontWeight: FontWeight.w600,
+                  ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              eff.message ?? '市场数据不可用（请检查网络或交易对代码）',
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ],
+        ),
+      );
+    }
+    final rows = eff.rows.take(90).toList();
+    final cashNote = eff.cashBasis == 'account_snapshots_cash'
+        ? '现金变动来自 account_snapshots（availEq），按 UTC 自然日汇总。'
+        : '非 Account_List 账户无现金快照列；仍显示 OKX 日线 TR。';
+    return FinanceCard(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '策略能效评估',
+            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  color: AppFinanceStyle.labelColor,
+                  fontWeight: FontWeight.w600,
+                ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '${eff.instId} 日线 True Range（OKX 公开 K 线）；比值 = 现金日变动% ÷ TR 占收盘价%。$cashNote',
+            style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 12),
+          ),
+          const SizedBox(height: 16),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: DataTable(
+              headingRowHeight: 40,
+              dataRowMinHeight: 36,
+              dataRowMaxHeight: 48,
+              columns: const [
+                DataColumn(label: Text('日期(UTC)')),
+                DataColumn(label: Text('TR'), numeric: true),
+                DataColumn(label: Text('TR%'), numeric: true),
+                DataColumn(label: Text('现金Δ USDT'), numeric: true),
+                DataColumn(label: Text('现金Δ%'), numeric: true),
+                DataColumn(label: Text('比值'), numeric: true),
+              ],
+              rows: [
+                for (final e in rows)
+                  DataRow(
+                    cells: [
+                      DataCell(Text(e.day)),
+                      DataCell(Text(_fmtOpt(e.tr, digits: 6))),
+                      DataCell(Text(_fmtOpt(e.trPct))),
+                      DataCell(
+                        Text(
+                          _fmtOpt(e.cashDeltaUsdt),
+                          style: TextStyle(
+                            color: (e.cashDeltaUsdt ?? 0) >= 0
+                                ? AppFinanceStyle.profitGreenEnd
+                                : Colors.red,
+                          ),
+                        ),
+                      ),
+                      DataCell(Text(_fmtOpt(e.cashDeltaPct))),
+                      DataCell(Text(_fmtOpt(e.efficiencyRatio))),
+                    ],
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ColoredBox(
@@ -128,7 +281,7 @@ class _WebStrategyPerformanceScreenState
         child: RefreshIndicator(
           onRefresh: () async {
             await _loadBots();
-            await _loadMetrics();
+            await _loadData();
           },
           child: CustomScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
@@ -150,7 +303,9 @@ class _WebStrategyPerformanceScreenState
                           ConstrainedBox(
                             constraints: const BoxConstraints(maxWidth: 360),
                             child: DropdownButtonFormField<String>(
-                              value: _selectedId ?? _bots.first.tradingbotId,
+                              key: ValueKey(_selectedId),
+                              initialValue:
+                                  _selectedId ?? _bots.first.tradingbotId,
                               isExpanded: true,
                               dropdownColor: AppFinanceStyle.cardBackground,
                               style: const TextStyle(color: AppFinanceStyle.valueColor),
@@ -175,7 +330,7 @@ class _WebStrategyPerformanceScreenState
                               onChanged: (v) async {
                                 if (v == null) return;
                                 setState(() => _selectedId = v);
-                                await _loadMetrics();
+                                await _loadData();
                               },
                             ),
                           ),
@@ -184,12 +339,12 @@ class _WebStrategyPerformanceScreenState
                   ),
                 ),
               ),
-              if (_error != null)
+              if (_metricsError != null)
                 SliverPadding(
                   padding: const EdgeInsets.symmetric(horizontal: 24),
                   sliver: SliverToBoxAdapter(
                     child: Text(
-                      _error!,
+                      '收益/赛季：${_metricsError!}',
                       style: TextStyle(color: Theme.of(context).colorScheme.error),
                     ),
                   ),
@@ -234,7 +389,7 @@ class _WebStrategyPerformanceScreenState
                   ),
                 ),
                 SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(24, 0, 24, 48),
+                  padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
                   sliver: SliverToBoxAdapter(
                     child: LayoutBuilder(
                       builder: (context, constraints) {
@@ -369,7 +524,17 @@ class _WebStrategyPerformanceScreenState
                                   ),
                             ),
                             const SizedBox(height: 16),
-                            if (_seasons.isEmpty)
+                            if (_metricsError != null)
+                              FinanceCard(
+                                padding: const EdgeInsets.all(24),
+                                child: Center(
+                                  child: Text(
+                                    '赛季数据加载失败',
+                                    style: AppFinanceStyle.labelTextStyle(context),
+                                  ),
+                                ),
+                              )
+                            else if (_seasons.isEmpty)
                               FinanceCard(
                                 padding: const EdgeInsets.all(24),
                                 child: Center(
@@ -394,6 +559,10 @@ class _WebStrategyPerformanceScreenState
                     ),
                   ),
                 ),
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(24, 0, 24, 48),
+                  sliver: SliverToBoxAdapter(child: _buildEfficiencySection(context)),
+                ),
               ],
             ],
           ),
@@ -402,4 +571,3 @@ class _WebStrategyPerformanceScreenState
     );
   }
 }
-

@@ -35,4 +35,5 @@ Future<void> debugIngestLog({
   } catch (_) {}
   debugPrint('[cad3d8] $location $message ${jsonEncode(data)}');
 }
+
 // #endregion

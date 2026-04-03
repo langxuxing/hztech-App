@@ -8,7 +8,7 @@ import '../account_profit_screen.dart';
 /// 固定开启 [AccountProfitScreen.webLayout]，在视口宽度 ≥960px 时采用
 /// 左（概览+曲线+月度）右（持仓+赛季）分栏。
 ///
-/// - 从 [WebDashboardScreen] 经 [Navigator.push] 进入时，显示自带返回的标题栏。
+/// - 从「策略启动」或「仪表盘」等页经 [Navigator.push] 进入时显示自带返回的标题栏。
 /// - 若将来嵌入 [WebMainShell] 等外壳，可将 [embedInShell] 设为 `true` 以隐藏本页 [AppBar]。
 class WebAccountProfitScreen extends StatefulWidget {
   const WebAccountProfitScreen({

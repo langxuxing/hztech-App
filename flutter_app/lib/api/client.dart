@@ -114,6 +114,48 @@ class ApiClient {
     return LoginResponse.fromJson(map);
   }
 
+  Future<MeResponse> getMe() async {
+    final uri = Uri.parse('${_normalizedBase}api/me');
+    final resp = await _getWithRetry(uri, _headers);
+    final map = jsonDecode(resp.body) as Map<String, dynamic>;
+    return MeResponse.fromJson(map);
+  }
+
+  Future<List<ManagedUserRow>> getUsersList() async {
+    final uri = Uri.parse('${_normalizedBase}api/users');
+    final resp = await _getWithRetry(uri, _headers);
+    final map = jsonDecode(resp.body) as Map<String, dynamic>;
+    if (map['success'] != true) {
+      throw StateError(map['message']?.toString() ?? 'users failed');
+    }
+    final raw = map['users'] as List<dynamic>? ?? [];
+    return raw
+        .map((e) => ManagedUserRow.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  Future<ManagedUserRow?> patchUser(
+    int userId, {
+    String? role,
+    List<String>? linkedAccountIds,
+  }) async {
+    final uri = Uri.parse('${_normalizedBase}api/users/$userId');
+    final body = <String, dynamic>{};
+    if (role != null) body['role'] = role;
+    if (linkedAccountIds != null) body['linked_account_ids'] = linkedAccountIds;
+    final resp =
+        await http.patch(uri, headers: _headers, body: jsonEncode(body)).timeout(_timeout);
+    return _parsePatchUser(resp);
+  }
+
+  ManagedUserRow? _parsePatchUser(http.Response resp) {
+    final map = jsonDecode(resp.body) as Map<String, dynamic>;
+    if (map['success'] != true) return null;
+    final u = map['user'] as Map<String, dynamic>?;
+    if (u == null) return null;
+    return ManagedUserRow.fromJson(u);
+  }
+
   Future<AccountProfitResponse> getAccountProfit() async {
     final uri = Uri.parse('${_normalizedBase}api/account-profit');
     final resp = await _getWithRetry(uri, _headers);
@@ -204,5 +246,20 @@ class ApiClient {
     final resp = await _getWithRetry(uri, _headers);
     final map = jsonDecode(resp.body) as Map<String, dynamic>;
     return TradingbotSeasonsResponse.fromJson(map);
+  }
+
+  /// OKX 日线 TR + 账户现金日增量（UTC）。失败时 success=false，message 为原因。
+  Future<StrategyDailyEfficiencyResponse> getStrategyDailyEfficiency(
+    String botId, {
+    String instId = 'PEPE-USDT-SWAP',
+    int days = 90,
+  }) async {
+    final uri = Uri.parse(
+      '${_normalizedBase}api/tradingbots/$botId/strategy-daily-efficiency'
+      '?inst_id=${Uri.encodeQueryComponent(instId)}&days=$days',
+    );
+    final resp = await _getWithRetry(uri, _headers);
+    final map = jsonDecode(resp.body) as Map<String, dynamic>;
+    return StrategyDailyEfficiencyResponse.fromJson(map);
   }
 }

@@ -829,6 +829,40 @@ def account_snapshot_query_by_account(account_id: str, limit: int = 500) -> list
         conn.close()
 
 
+def account_snapshot_query_by_account_since(
+    account_id: str, *, since_snapshot_at: str, max_rows: int = 40000
+) -> list[dict]:
+    """按 snapshot_at 升序返回自 since_snapshot_at（含）起的快照，用于按日汇总现金变化。"""
+    cap = max(100, min(100000, int(max_rows)))
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """SELECT id, account_id, snapshot_at, cash_balance, equity_usdt, initial_capital,
+                      profit_amount, profit_percent, created_at
+               FROM account_snapshots
+               WHERE account_id = ? AND snapshot_at >= ?
+               ORDER BY snapshot_at ASC
+               LIMIT ?""",
+            (account_id.strip(), (since_snapshot_at or "").strip(), cap),
+        )
+        return [
+            {
+                "id": r[0],
+                "account_id": r[1],
+                "snapshot_at": r[2],
+                "cash_balance": r[3],
+                "equity_usdt": r[4],
+                "initial_capital": r[5],
+                "profit_amount": r[6],
+                "profit_percent": r[7],
+                "created_at": r[8],
+            }
+            for r in cur.fetchall()
+        ]
+    finally:
+        conn.close()
+
+
 def account_month_open_get(account_id: str, year_month: str) -> dict | None:
     """year_month 形如 2026-04。"""
     conn = get_conn()

@@ -265,6 +265,42 @@ class TestUsersApi:
         assert "users" in data
         assert isinstance(data["users"], list)
 
+    def test_users_forbidden_for_trader(self, client, trader_headers):
+        r = client.get("/api/users", headers=trader_headers)
+        assert r.status_code == 403
+
+
+class TestCustomerScope:
+    """客户仅能看到绑定账户（linked_account_ids）。"""
+
+    def test_customer_tradingbots_filtered(self, client):
+        import hashlib
+
+        import db as tdb
+
+        tdb.user_create("cust_rb", hashlib.sha256(b"x").hexdigest())
+        conn = tdb.get_conn()
+        conn.execute(
+            "UPDATE users SET role = ?, linked_account_ids = ? WHERE LOWER(username) = LOWER(?)",
+            ("customer", '["simpleserver-lhg"]', "cust_rb"),
+        )
+        conn.commit()
+        conn.close()
+        lr = client.post(
+            "/api/login",
+            json={"username": "cust_rb", "password": "x"},
+            content_type="application/json",
+        )
+        assert lr.status_code == 200
+        tok = lr.get_json()["token"]
+        assert lr.get_json().get("role") == "customer"
+        h = {"Authorization": f"Bearer {tok}"}
+        r = client.get("/api/tradingbots", headers=h)
+        assert r.status_code == 200
+        bots = r.get_json().get("bots") or []
+        ids = {b.get("tradingbot_id") for b in bots}
+        assert ids == {"simpleserver-lhg"}
+
 
 class TestAccountProfitApi:
     """GET /api/account-profit 账户盈亏（需 token）"""

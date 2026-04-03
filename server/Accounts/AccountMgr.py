@@ -125,7 +125,7 @@ def sync_account_meta_from_json(db_module: Any) -> None:
         db_module.account_meta_upsert(aid, _initial_capital(row))
 
 
-def refresh_all_snapshots(db_module: Any, logger: logging.Logger | None = None) -> None:
+def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None = None) -> None:
     """
     拉取各 OKX 账户余额并写入 account_snapshots；维护当月月初权益记录。
     应在定时器内调用（建议每 5 分钟）。
@@ -185,6 +185,44 @@ def refresh_all_snapshots(db_module: Any, logger: logging.Logger | None = None) 
             cash,
         )
 
+def _fetch_and_save_tradingbot_snapshots() -> None:
+        """读取 tradingbots.json 中的 OKX 机器人余额，写入 bot_profit_snapshots 表。"""
+        bots = _load_tradingbots_config()
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        for b in bots:
+            bot_id = (b.get("tradingbot_id") or "").strip()
+            if not bot_id:
+                continue
+            config_path = _bot_okx_config_path(bot_id)
+            if not config_path:
+                continue
+            try:
+                balance = _okx.okx_fetch_balance(config_path=config_path)
+                if balance is None:
+                    continue
+                total_eq = float(balance.get("equity_usdt") or balance.get("total_eq") or 0.0)
+                prev = _db.bot_profit_latest_by_bot(bot_id)
+                initial = float(prev["initial_balance"]) if prev else total_eq
+                if prev is None and total_eq > 0:
+                    initial = total_eq
+                profit_amount = total_eq - initial
+                profit_percent = (profit_amount / initial * 100.0) if initial else 0.0
+                _db.bot_profit_insert(
+                    bot_id=bot_id,
+                    snapshot_at=ts,
+                    initial_balance=initial,
+                    current_balance=total_eq,
+                    equity_usdt=total_eq,
+                    profit_amount=profit_amount,
+                    profit_percent=profit_percent,
+                )
+            except Exception as e:
+                _db.log_insert(
+                    "WARN",
+                    "account_snapshot_failed",
+                    source="timer",
+                    extra={"bot_id": bot_id, "error": str(e)},
+                )
 
 def refresh_all_positions_history(
     db_module: Any, logger: logging.Logger | None = None
