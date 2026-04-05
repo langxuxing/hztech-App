@@ -954,6 +954,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                 );
               }
               return Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   for (var i = 0; i < children.length; i++) ...[
                     if (i > 0) const SizedBox(width: 16),
@@ -1052,8 +1053,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
             MonthEndValueBarPanel(
               snapshots: snap,
               title: '每日权益',
-              description:
-                  '按日展示：当日最后一条快照权益相对前一有效时点的变化（与右侧日历一致）。',
+              description: '按日展示：当日最后一条快照权益相对前一有效时点的变化（与右侧日历一致）。',
               valueAt: (s) => s.equityUsdt,
               emptyMessage: '暂无历史快照，无法统计月度权益',
               showMonthNavigator: false,
@@ -1102,61 +1102,6 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
               Expanded(
                 child: _tripleMetricCard(
                   child: SizedBox.expand(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      mainAxisSize: MainAxisSize.max,
-                      children: [
-                        Text(
-                          '权益曲线',
-                          style:
-                              (Theme.of(context).textTheme.titleMedium ??
-                                      const TextStyle())
-                                  .copyWith(
-                                    color: AppFinanceStyle.labelColor,
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 15,
-                                  ),
-                        ),
-                        const SizedBox(height: 6),
-                        const SizedBox(height: 2),
-                        Expanded(
-                          child: SnapshotPercentLineChart(
-                            snapshots: snap,
-                            series: SnapshotReturnSeries.equity,
-                            compact: true,
-                            focusedMonth: month,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              SizedBox(width: _kTripleGutter),
-              Expanded(
-                child: _tripleMetricCard(
-                  child: SizedBox.expand(
-                    child: MonthEndValueBarPanel(
-                      snapshots: snap,
-                      title: '每日权益',
-                      description: '',
-                      valueAt: (s) => s.equityUsdt,
-                      emptyMessage: '暂无历史快照',
-                      compact: true,
-                      showMonthNavigator: false,
-                      selectedEndMonth: month,
-                      onSelectedEndMonthChanged: setEquityMonth,
-                      expandChartArea: true,
-                      maxBars: 8,
-                      useDailyBarsForEndMonth: true,
-                    ),
-                  ),
-                ),
-              ),
-              SizedBox(width: _kTripleGutter),
-              Expanded(
-                child: _tripleMetricCard(
-                  child: SizedBox.expand(
                     child: MonthEndValueCalendarPanel(
                       snapshots: snap,
                       title: '权益日历',
@@ -1171,6 +1116,70 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                       dailyCloseCounts: _equityCalendarCloseCounts,
                     ),
                   ),
+                ),
+              ),
+              SizedBox(width: _kTripleGutter),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    SizedBox(
+                      height: _kTripleRowHeight / 2,
+                      child: _tripleMetricCard(
+                        child: SizedBox.expand(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            mainAxisSize: MainAxisSize.max,
+                            children: [
+                              Text(
+                                '权益曲线',
+                                style:
+                                    (Theme.of(context).textTheme.titleMedium ??
+                                            const TextStyle())
+                                        .copyWith(
+                                          color: AppFinanceStyle.labelColor,
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 15,
+                                        ),
+                              ),
+                              const SizedBox(height: 6),
+                              const SizedBox(height: 2),
+                              Expanded(
+                                child: SnapshotPercentLineChart(
+                                  snapshots: snap,
+                                  series: SnapshotReturnSeries.equity,
+                                  compact: true,
+                                  focusedMonth: month,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    SizedBox(height: _kTripleGutter),
+                    SizedBox(
+                      height: _kTripleRowHeight / 2,
+                      child: _tripleMetricCard(
+                        child: SizedBox.expand(
+                          child: MonthEndValueBarPanel(
+                            snapshots: snap,
+                            title: '每日权益',
+                            description: '',
+                            valueAt: (s) => s.equityUsdt,
+                            emptyMessage: '暂无历史快照',
+                            compact: true,
+                            showMonthNavigator: false,
+                            selectedEndMonth: month,
+                            onSelectedEndMonthChanged: setEquityMonth,
+                            expandChartArea: true,
+                            maxBars: 8,
+                            useDailyBarsForEndMonth: true,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -1231,8 +1240,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
             MonthEndValueBarPanel(
               snapshots: snap,
               title: '每日现金',
-              description:
-                  '按日展示：当日最后一条快照现金余额相对前一有效时点的变化（与右侧日历一致）。',
+              description: '按日展示：当日最后一条快照现金余额相对前一有效时点的变化（与右侧日历一致）。',
               valueAt: (s) => s.currentBalance,
               emptyMessage: '暂无历史快照，无法统计月度现金余额',
               showMonthNavigator: false,
@@ -1281,61 +1289,6 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
               Expanded(
                 child: _tripleMetricCard(
                   child: SizedBox.expand(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      mainAxisSize: MainAxisSize.max,
-                      children: [
-                        Text(
-                          '收益率（现金）%',
-                          style:
-                              (Theme.of(context).textTheme.titleMedium ??
-                                      const TextStyle())
-                                  .copyWith(
-                                    color: AppFinanceStyle.labelColor,
-                                    fontWeight: FontWeight.w700,
-                                    fontSize: 15,
-                                  ),
-                        ),
-                        const SizedBox(height: 6),
-                        const SizedBox(height: 2),
-                        Expanded(
-                          child: SnapshotPercentLineChart(
-                            snapshots: snap,
-                            series: SnapshotReturnSeries.cash,
-                            compact: true,
-                            focusedMonth: month,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              SizedBox(width: _kTripleGutter),
-              Expanded(
-                child: _tripleMetricCard(
-                  child: SizedBox.expand(
-                    child: MonthEndValueBarPanel(
-                      snapshots: snap,
-                      title: '每日现金',
-                      description: '',
-                      valueAt: (s) => s.currentBalance,
-                      emptyMessage: '暂无历史快照',
-                      compact: true,
-                      showMonthNavigator: false,
-                      selectedEndMonth: month,
-                      onSelectedEndMonthChanged: setCashMonth,
-                      expandChartArea: true,
-                      maxBars: 8,
-                      useDailyBarsForEndMonth: true,
-                    ),
-                  ),
-                ),
-              ),
-              SizedBox(width: _kTripleGutter),
-              Expanded(
-                child: _tripleMetricCard(
-                  child: SizedBox.expand(
                     child: MonthEndValueCalendarPanel(
                       snapshots: snap,
                       title: '现金日历',
@@ -1350,6 +1303,70 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                       dailyCloseCounts: _cashCalendarCloseCounts,
                     ),
                   ),
+                ),
+              ),
+              SizedBox(width: _kTripleGutter),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    SizedBox(
+                      height: _kTripleRowHeight / 2,
+                      child: _tripleMetricCard(
+                        child: SizedBox.expand(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            mainAxisSize: MainAxisSize.max,
+                            children: [
+                              Text(
+                                '现金曲线',
+                                style:
+                                    (Theme.of(context).textTheme.titleMedium ??
+                                            const TextStyle())
+                                        .copyWith(
+                                          color: AppFinanceStyle.labelColor,
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 15,
+                                        ),
+                              ),
+                              const SizedBox(height: 6),
+                              const SizedBox(height: 2),
+                              Expanded(
+                                child: SnapshotPercentLineChart(
+                                  snapshots: snap,
+                                  series: SnapshotReturnSeries.cash,
+                                  compact: true,
+                                  focusedMonth: month,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    SizedBox(height: _kTripleGutter),
+                    SizedBox(
+                      height: _kTripleRowHeight / 2,
+                      child: _tripleMetricCard(
+                        child: SizedBox.expand(
+                          child: MonthEndValueBarPanel(
+                            snapshots: snap,
+                            title: '每日现金',
+                            description: '',
+                            valueAt: (s) => s.currentBalance,
+                            emptyMessage: '暂无历史快照',
+                            compact: true,
+                            showMonthNavigator: false,
+                            selectedEndMonth: month,
+                            onSelectedEndMonthChanged: setCashMonth,
+                            expandChartArea: true,
+                            maxBars: 8,
+                            useDailyBarsForEndMonth: true,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -1382,10 +1399,6 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
       fontSize: 20,
     ).copyWith(color: c);
     // 成本/均价/现价/标记：与账号详情数值同档字号；合约价经 [_fmtOkxContractPxForUi] ×1e9 再整数分组，避免极小价落成 0。
-    final positionPriceStyle = AppFinanceStyle.valueTextStyle(
-      context,
-      fontSize: 20,
-    ).copyWith(color: AppFinanceStyle.labelColor, fontWeight: FontWeight.w700);
     final plWhiteStyle = AppFinanceStyle.valueTextStyle(
       context,
       fontSize: 20,
@@ -1441,6 +1454,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      const SizedBox(height: 12),
                       Text(
                         '空仓',
                         style: sideTitleStyle.copyWith(
@@ -1449,7 +1463,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                           fontWeight: FontWeight.bold,
                         ),
                       ),
-                      const SizedBox(height: 6),
+                      const SizedBox(height: 12),
                       Text(
                         '数量：${shorts.fold<int>(0, (s, p) => s + p.pos.abs().round())}',
                         style: posQtyStyle(Colors.red),
@@ -1477,6 +1491,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                             ),
                           ),
                         ),
+                      const SizedBox(height: 12),
                     ],
                   ),
                 ),
@@ -1484,6 +1499,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
+                      const SizedBox(height: 12),
                       Text(
                         '多仓',
                         style: sideTitleStyle.copyWith(
@@ -1492,7 +1508,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                           fontWeight: FontWeight.bold,
                         ),
                       ),
-                      const SizedBox(height: 6),
+                      const SizedBox(height: 12),
                       Text(
                         '数量：${longs.fold<int>(0, (s, p) => s + p.pos.round())}',
                         style: posQtyStyle(AppFinanceStyle.profitGreenEnd),
@@ -1520,6 +1536,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                             ),
                           ),
                         ),
+                      const SizedBox(height: 12),
                     ],
                   ),
                 ),
@@ -1780,7 +1797,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   }
 }
 
-/// 与 [WebDashboardScreen] 中 `_SummaryCell` 一致：标签与数值横排、6px 间距、底部对齐；`trailingLabel` 控制 `textAlign`。
+/// 与 [WebDashboardScreen] 中 `_SummaryCell` 一致：标签与数值横排、6px 间距、基线对齐；`trailingLabel` 控制 `textAlign`。
 class _AccountDetailMetricCell extends StatelessWidget {
   const _AccountDetailMetricCell({
     required this.label,
@@ -1804,7 +1821,8 @@ class _AccountDetailMetricCell extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.end,
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
       children: [
         Text(label, style: labelStyle, textAlign: ta),
         const SizedBox(width: 6),
@@ -1942,7 +1960,7 @@ class _PriceAxisBar extends StatelessWidget {
                   ),
                   Positioned(
                     left: xCur,
-                    top: 0,
+                    top: 18, // 将top值下移，让"最新价格"在下方，"总浮动亏损"在上方
                     child: Transform.translate(
                       offset: Offset(-topColW / 2, 0),
                       child: SizedBox(
@@ -1952,17 +1970,18 @@ class _PriceAxisBar extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
                             Text(
+                              '总浮动亏损：${formatUiSignedInteger(totalDynUpl)}',
+                              textAlign: TextAlign.center,
+                              maxLines: 2,
+                              style: floatPlStyle.copyWith(fontSize: 18),
+                            ),
+                            const SizedBox(height: 12),
+
+                            Text(
                               '最新价格： ${_fmtOkxContractPxForUi(liveLastPx)}',
                               textAlign: TextAlign.center,
                               maxLines: 2,
-                              style: curPxStyle,
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              '总浮动盈亏：${formatUiSignedInteger(totalDynUpl)}',
-                              textAlign: TextAlign.center,
-                              maxLines: 2,
-                              style: floatPlStyle,
+                              style: curPxStyle.copyWith(fontSize: 18),
                             ),
                           ],
                         ),
@@ -1985,7 +2004,7 @@ class _PriceAxisBar extends StatelessWidget {
                         style:
                             AppFinanceStyle.valueTextStyle(
                               context,
-                              fontSize: 20,
+                              fontSize: 18,
                             ).copyWith(
                               color: Colors.red,
                               fontWeight: FontWeight.w700,
@@ -1999,11 +2018,11 @@ class _PriceAxisBar extends StatelessWidget {
                 alignment: Alignment.centerRight,
                 child: longCost != null && longCost! > 0
                     ? Text(
-                        '多 ${_fmtOkxContractPxForUi(longCost!)}',
+                        '${_fmtOkxContractPxForUi(longCost!)} 多',
                         style:
                             AppFinanceStyle.valueTextStyle(
                               context,
-                              fontSize: 24,
+                              fontSize: 18,
                             ).copyWith(
                               color: AppFinanceStyle.profitGreenEnd,
                               fontWeight: FontWeight.w700,

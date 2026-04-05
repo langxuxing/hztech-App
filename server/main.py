@@ -27,6 +27,7 @@ App 所需 API（与 QtraderApi.kt 一致）：
   POST /api/tradingbots/{id}/position-history/sync  手动拉取该账户 OKX 历史仓位（仅管理员）
   POST /api/tradingbots/{id}/balance-snapshot/sync  立即拉取 OKX 余额写入库（account_snapshots / bot_profit；仅管理员）
   POST /api/admin/balance-snapshots/sync  全量余额快照同步（与定时任务相同；仅管理员）
+  POST /api/admin/balance-snapshots/backfill-bills  按 OKX bills-archive 为各启用账户补全缺日 account_snapshots（仅管理员）
   GET|POST|PUT|DELETE /api/admin/accounts  Account_List.json + account_meta 库表同步（仅管理员）
   POST /api/admin/accounts/{id}/test-connection  测连 OKX + 检查 SWAP/双向持仓/50x 杠杆（仅管理员）
   GET  /api/me/customer-accounts  客户已绑定账户列表与密钥文件是否存在（仅客户）
@@ -1193,7 +1194,7 @@ def api_bot_profit_history(bot_id):
                 "bot_id": bot_id,
                 "snapshot_at": r["snapshot_at"],
                 "initial_balance": r["initial_capital"],
-                "current_balance": r["equity_usdt"],
+                "current_balance": r["cash_balance"],
                 "equity_usdt": r["equity_usdt"],
                 "profit_amount": r["profit_amount"],
                 "profit_percent": r["profit_percent"],
@@ -1215,16 +1216,16 @@ def api_strategy_daily_efficiency(bot_id):
     现金：Account_List 账户读 account_snapshots（cash_basis=account_snapshots_cash）；
     其余 bot 读 bot_profit_snapshots 的 equity_usdt 作日权益变动（cash_basis=bot_profit_equity）；
     无任何快照时按 K 线日期补 sod=eod=0、增量 0（cash_basis=none），仍合并计算能效（增量为 0 则能效为 0）。
-    Query: inst_id=PEPE-USDT-SWAP&days=90
+    Query: inst_id=PEPE-USDT-SWAP&days=31（默认约最近一个月，按 UTC 日）
     """
     denied = _customer_bot_forbidden(bot_id)
     if denied:
         return denied
     inst_id = (request.args.get("inst_id") or "PEPE-USDT-SWAP").strip()
     try:
-        days = int(request.args.get("days", 90))
+        days = int(request.args.get("days", 31))
     except (TypeError, ValueError):
-        days = 90
+        days = 31
     days = max(7, min(366, days))
     bars, m_err = _strategy_efficiency.load_market_bars_for_efficiency(
         _db, _okx, inst_id, days
@@ -1285,6 +1286,9 @@ def api_strategy_daily_efficiency(bot_id):
     rows = _strategy_efficiency.merge_daily_efficiency_rows(
         bars, cash_by_day, month_bases or None
     )
+    # merge 会覆盖 span=days+12 的 K 线，行数可能多于请求天数；仅返回最近 days 个 UTC 自然日（merge 已按日倒序）
+    if len(rows) > days:
+        rows = rows[:days]
     return jsonify(
         {
             "success": True,
@@ -1302,6 +1306,8 @@ def api_strategy_daily_efficiency(bot_id):
 def api_bot_daily_realized_pnl(bot_id):
     """
     历史平仓按 UTC 自然日汇总（account_positions_history），用于月度盈亏日历与柱状图。
+    若已跑过 account_daily_close_performance 重建，则每日额外含 equity_base、pnl_pct（相对日初权益%）、
+    benchmark_inst_id、market_tr、efficiency_ratio（平仓净盈亏÷(TR×1e9)）等字段。
     Query: year=2026&month=4
     """
     denied = _customer_bot_forbidden(bot_id)
@@ -1316,6 +1322,18 @@ def api_bot_daily_realized_pnl(bot_id):
         return jsonify({"success": False, "message": "year/month 超出范围"}), 400
     bid = (bot_id or "").strip()
     rows = _db.account_positions_daily_realized(bid, y, m)
+    perf_rows = _db.account_daily_close_performance_query_month(bid, y, m)
+    perf_by_day = {str(p["day"]): p for p in perf_rows}
+    for r in rows:
+        p = perf_by_day.get(str(r["day"]))
+        if not p:
+            continue
+        r["equity_base"] = p.get("equity_base")
+        r["pnl_pct"] = p.get("pnl_pct")
+        r["benchmark_inst_id"] = p.get("benchmark_inst_id")
+        r["market_tr"] = p.get("market_tr")
+        r["efficiency_ratio"] = p.get("efficiency_ratio")
+        r["performance_updated_at"] = p.get("updated_at")
     total = sum(float(r["net_pnl"]) for r in rows)
     return jsonify(
         {
@@ -1545,6 +1563,38 @@ def api_admin_balance_snapshots_sync():
             "errors": errors,
         }
     ), (200 if ok else 500)
+
+
+@app.route("/api/admin/balance-snapshots/backfill-bills", methods=["POST"])
+@require_auth
+def api_admin_balance_snapshots_backfill_bills():
+    """对 Account_List 启用账户：用 OKX 近 3 月账单中的 USDT 余额补全缺日快照（不覆盖已有日期）。"""
+    denied = _require_admin()
+    if denied:
+        return denied
+    total = 0
+    details: list[dict] = []
+    for row in _account_mgr.list_account_basics(enabled_only=True):
+        aid = str(row.get("account_id") or "").strip()
+        if not aid:
+            continue
+        try:
+            n, msg = _account_mgr.backfill_account_snapshots_from_okx_bills(
+                _db, aid, app.logger, days=40
+            )
+        except Exception as e:
+            details.append({"account_id": aid, "inserted": 0, "message": str(e)})
+            continue
+        total += n
+        if n or msg:
+            details.append({"account_id": aid, "inserted": n, "message": msg})
+    return jsonify(
+        {
+            "success": True,
+            "total_inserted": total,
+            "accounts": details,
+        }
+    )
 
 
 @app.route("/api/tradingbots/<bot_id>/pending-orders", methods=["GET"])

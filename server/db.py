@@ -174,6 +174,21 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_aph_account ON account_positions_history(account_id);
             CREATE INDEX IF NOT EXISTS idx_aph_utime ON account_positions_history(u_time_ms);
+            CREATE TABLE IF NOT EXISTS account_daily_close_performance (
+                account_id TEXT NOT NULL,
+                day TEXT NOT NULL,
+                net_realized_pnl REAL NOT NULL DEFAULT 0,
+                close_count INTEGER NOT NULL DEFAULT 0,
+                equity_base REAL,
+                pnl_pct REAL,
+                benchmark_inst_id TEXT NOT NULL DEFAULT '',
+                market_tr REAL,
+                efficiency_ratio REAL,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (account_id, day)
+            );
+            CREATE INDEX IF NOT EXISTS idx_adcp_account ON account_daily_close_performance(account_id);
+            CREATE INDEX IF NOT EXISTS idx_adcp_day ON account_daily_close_performance(day);
             CREATE TABLE IF NOT EXISTS market_daily_bars (
                 inst_id TEXT NOT NULL,
                 day TEXT NOT NULL,
@@ -984,6 +999,57 @@ def account_snapshot_query_by_account_since(
         conn.close()
 
 
+def account_snapshot_exists_on_utc_date(account_id: str, day_yyyy_mm_dd: str) -> bool:
+    """该 account 在 UTC 自然日 day 是否已有任意一条 account_snapshots（date 与 SQLite date() 对齐）。"""
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """SELECT 1 FROM account_snapshots
+               WHERE account_id = ? AND date(snapshot_at) = date(?)
+               LIMIT 1""",
+            (account_id.strip(), (day_yyyy_mm_dd or "").strip()[:10]),
+        )
+        return cur.fetchone() is not None
+    finally:
+        conn.close()
+
+
+def account_snapshot_last_before_instant(
+    account_id: str, instant_iso: str
+) -> dict | None:
+    """snapshot_at 严格早于 instant_iso 的最后一条（用于账单补全前取权益/现金比例）。"""
+    inst = (instant_iso or "").strip()
+    if not inst:
+        return None
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """SELECT id, account_id, snapshot_at, cash_balance, equity_usdt, initial_capital,
+                      profit_amount, profit_percent, created_at
+               FROM account_snapshots
+               WHERE account_id = ? AND snapshot_at < ?
+               ORDER BY snapshot_at DESC
+               LIMIT 1""",
+            (account_id.strip(), inst),
+        )
+        r = cur.fetchone()
+        if not r:
+            return None
+        return {
+            "id": r[0],
+            "account_id": r[1],
+            "snapshot_at": r[2],
+            "cash_balance": r[3],
+            "equity_usdt": r[4],
+            "initial_capital": r[5],
+            "profit_amount": r[6],
+            "profit_percent": r[7],
+            "created_at": r[8],
+        }
+    finally:
+        conn.close()
+
+
 def account_month_open_get(account_id: str, year_month: str) -> dict | None:
     """year_month 形如 2026-04。"""
     conn = get_conn()
@@ -1224,6 +1290,188 @@ def account_positions_daily_realized(
             for r in cur.fetchall()
             if r[0]
         ]
+    finally:
+        conn.close()
+
+
+def account_daily_close_performance_query_month(
+    account_id: str, year: int, month: int
+) -> list[dict[str, Any]]:
+    """读库表 account_daily_close_performance（UTC 自然日）。"""
+    from datetime import datetime, timezone
+
+    aid = (account_id or "").strip()
+    if not aid or year < 2000 or year > 2100 or month < 1 or month > 12:
+        return []
+    try:
+        start = datetime(year, month, 1, tzinfo=timezone.utc)
+    except ValueError:
+        return []
+    if month == 12:
+        end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+    else:
+        end = datetime(year, month + 1, 1, tzinfo=timezone.utc)
+    start_s = start.strftime("%Y-%m-%d")
+    end_s = end.strftime("%Y-%m-%d")
+
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT day, net_realized_pnl, close_count, equity_base, pnl_pct,
+                   benchmark_inst_id, market_tr, efficiency_ratio, updated_at
+            FROM account_daily_close_performance
+            WHERE account_id = ? AND day >= ? AND day < ?
+            ORDER BY day
+            """,
+            (aid, start_s, end_s),
+        )
+        return [
+            {
+                "day": str(r[0]),
+                "net_pnl": float(r[1] or 0),
+                "close_count": int(r[2] or 0),
+                "equity_base": float(r[3]) if r[3] is not None else None,
+                "pnl_pct": float(r[4]) if r[4] is not None else None,
+                "benchmark_inst_id": str(r[5] or ""),
+                "market_tr": float(r[6]) if r[6] is not None else None,
+                "efficiency_ratio": float(r[7]) if r[7] is not None else None,
+                "updated_at": str(r[8] or ""),
+            }
+            for r in cur.fetchall()
+        ]
+    finally:
+        conn.close()
+
+
+def account_daily_close_performance_rebuild_for_accounts(
+    account_ids: list[str],
+    benchmark_inst_by_account: dict[str, str],
+    *,
+    default_benchmark_inst: str = "PEPE-USDT-SWAP",
+) -> None:
+    """
+    按 account_positions_history 按日汇总平仓净盈亏，写入 account_daily_close_performance。
+    equity_base：该 UTC 日 00:00 前最后一笔 account_snapshots.equity_usdt；无快照则用 account_meta.initial_capital。
+    pnl_pct = net / equity_base * 100（权益为 0 或缺失则为 NULL）。
+    efficiency_ratio：与 strategy_efficiency 一致，net / (market_tr * 1e9)，无 TR 则为 NULL。
+    """
+    from datetime import datetime, timezone
+
+    from strategy_efficiency import close_pnl_efficiency_ratio
+
+    def _day_boundary_iso(day_yyyy_mm_dd: str) -> str:
+        d = (day_yyyy_mm_dd or "").strip()
+        return f"{d}T00:00:00.000Z" if d else ""
+
+    conn = get_conn()
+    try:
+        now_s = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        for aid_raw in account_ids:
+            aid = (aid_raw or "").strip()
+            if not aid:
+                continue
+            bench = (
+                (benchmark_inst_by_account.get(aid) or "").strip()
+                or default_benchmark_inst
+            )
+            meta = account_meta_get(aid)
+            initial = float(meta["initial_capital"]) if meta else 0.0
+
+            cur = conn.execute(
+                """
+                SELECT strftime('%Y-%m-%d',
+                       datetime(CAST(u_time_ms AS INTEGER) / 1000, 'unixepoch')) AS d,
+                       SUM(COALESCE(pnl, 0) + COALESCE(fee, 0) + COALESCE(funding_fee, 0)) AS net_pnl,
+                       COUNT(*) AS close_count
+                FROM account_positions_history
+                WHERE account_id = ?
+                GROUP BY d
+                HAVING d IS NOT NULL AND d != ''
+                ORDER BY d
+                """,
+                (aid,),
+            )
+            day_rows = [(str(r[0]), float(r[1] or 0), int(r[2] or 0)) for r in cur.fetchall()]
+            conn.execute(
+                "DELETE FROM account_daily_close_performance WHERE account_id = ?",
+                (aid,),
+            )
+            if not day_rows:
+                continue
+
+            cur_sn = conn.execute(
+                """
+                SELECT snapshot_at, equity_usdt
+                FROM account_snapshots
+                WHERE account_id = ?
+                ORDER BY snapshot_at ASC
+                """,
+                (aid,),
+            )
+            snaps = [(str(r[0]), float(r[1] or 0.0)) for r in cur_sn.fetchall()]
+
+            days_list = [d for d, _, _ in day_rows]
+            tr_map: dict[str, float] = {}
+            if days_list and bench:
+                placeholders = ",".join("?" * len(days_list))
+                cur_tr = conn.execute(
+                    f"""
+                    SELECT day, tr FROM market_daily_bars
+                    WHERE inst_id = ? AND day IN ({placeholders})
+                    """,
+                    (bench, *days_list),
+                )
+                for r in cur_tr.fetchall():
+                    tr_map[str(r[0])] = float(r[1] or 0.0)
+
+            si = 0
+            last_eq_before: float | None = None
+            for day, net_pnl, close_count in day_rows:
+                boundary = _day_boundary_iso(day)
+                while si < len(snaps) and snaps[si][0] < boundary:
+                    last_eq_before = snaps[si][1]
+                    si += 1
+                if last_eq_before is not None and last_eq_before > 0:
+                    equity_base = last_eq_before
+                elif initial > 0:
+                    equity_base = initial
+                else:
+                    equity_base = None
+
+                pnl_pct: float | None = None
+                if equity_base is not None and float(equity_base) > 0:
+                    pnl_pct = float(net_pnl) / float(equity_base) * 100.0
+
+                mtr = tr_map.get(day)
+                market_tr_v = float(mtr) if mtr is not None else None
+                eff = (
+                    close_pnl_efficiency_ratio(net_pnl, market_tr_v)
+                    if market_tr_v is not None
+                    else None
+                )
+
+                conn.execute(
+                    """
+                    INSERT INTO account_daily_close_performance
+                    (account_id, day, net_realized_pnl, close_count, equity_base, pnl_pct,
+                     benchmark_inst_id, market_tr, efficiency_ratio, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        aid,
+                        day,
+                        net_pnl,
+                        close_count,
+                        equity_base,
+                        pnl_pct,
+                        bench,
+                        market_tr_v,
+                        eff,
+                        now_s,
+                    ),
+                )
+            conn.commit()
     finally:
         conn.close()
 

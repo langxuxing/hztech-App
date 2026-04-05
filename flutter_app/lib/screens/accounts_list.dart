@@ -8,9 +8,13 @@ import '../utils/number_display_format.dart';
 import '../widgets/water_background.dart';
 import 'account_profit_screen.dart';
 
-/// 账户管理：汇总视图；各账户策略、收益曲线与启停见「策略启停」页。
+/// 移动端「账户管理」汇总列表；点击进「账户收益」，数据字段与 Web「账户画像」一致（权益、现金、浮动、收益率等）。
+///
+/// [sharedBots] 由 [MainScreen] 下发时与账户收益页同源，避免下拉框空窗；为空则本页并行请求 `/api/tradingbots`。
 class AccountsList extends StatefulWidget {
-  const AccountsList({super.key});
+  const AccountsList({super.key, this.sharedBots = const []});
+
+  final List<UnifiedTradingBot> sharedBots;
 
   @override
   State<AccountsList> createState() => _AccountsListState();
@@ -19,8 +23,50 @@ class AccountsList extends StatefulWidget {
 class _AccountsListState extends State<AccountsList> {
   final _prefs = SecurePrefs();
   List<AccountProfit> _accounts = [];
+  /// 仅当 [widget.sharedBots] 为空时由本页拉取填充。
+  List<UnifiedTradingBot> _fetchedBots = [];
   bool _loading = true;
   String? _error;
+
+  List<UnifiedTradingBot> get _effectiveBots =>
+      widget.sharedBots.isNotEmpty ? widget.sharedBots : _fetchedBots;
+
+  UnifiedTradingBot? _botFor(String botId) {
+    if (botId.isEmpty) return null;
+    for (final b in _effectiveBots) {
+      if (b.tradingbotId == botId) return b;
+    }
+    return null;
+  }
+
+  /// 与 Web 顶栏账户顺序一致：按 tradingbots 列表排序，其余账户排在后面。
+  List<AccountProfit> get _orderedAccounts {
+    final list = List<AccountProfit>.from(_accounts);
+    final order = _effectiveBots.map((b) => b.tradingbotId).toList();
+    if (order.isEmpty) return list;
+    int rank(String id) {
+      final i = order.indexOf(id);
+      return i < 0 ? 1 << 30 : i;
+    }
+
+    list.sort((a, b) => rank(a.botId).compareTo(rank(b.botId)));
+    return list;
+  }
+
+  String _primaryLabel(AccountProfit a) {
+    final ex = a.exchangeAccount.trim();
+    if (ex.isNotEmpty) return ex;
+    return a.botId.isNotEmpty ? a.botId : '—';
+  }
+
+  String? _secondaryLabel(AccountProfit a) {
+    final bot = _botFor(a.botId);
+    final name = bot?.tradingbotName?.trim();
+    final primary = _primaryLabel(a);
+    if (name != null && name.isNotEmpty && name != primary) return name;
+    if (a.botId.isNotEmpty && a.botId != primary) return a.botId;
+    return null;
+  }
 
   Future<void> _load() async {
     setState(() {
@@ -31,10 +77,22 @@ class _AccountsListState extends State<AccountsList> {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
       final api = ApiClient(baseUrl, token: token);
-      final profitResp = await api.getAccountProfit();
+      late final AccountProfitResponse profitResp;
+      List<UnifiedTradingBot> bots = List.from(widget.sharedBots);
+      if (widget.sharedBots.isEmpty) {
+        final pair = await Future.wait([
+          api.getAccountProfit(),
+          api.getTradingBots(),
+        ]);
+        profitResp = pair[0] as AccountProfitResponse;
+        bots = (pair[1] as TradingBotsResponse).botList;
+      } else {
+        profitResp = await api.getAccountProfit();
+      }
       if (!mounted) return;
       setState(() {
         _accounts = profitResp.accounts ?? [];
+        _fetchedBots = bots;
         _loading = false;
       });
     } catch (e) {
@@ -116,7 +174,7 @@ class _AccountsListState extends State<AccountsList> {
                                   const SizedBox(width: 12),
                                   Expanded(
                                     child: Text(
-                                      '各账户策略列表、收益曲线与脚本启停已整合在底部「策略启停」。',
+                                      '点击账户进入「账户收益」：账户详情、持仓与赛季、权益/现金曲线与月历等与 Web「账户画像」一致。',
                                       style: AppFinanceStyle.labelTextStyle(context),
                                     ),
                                   ),
@@ -124,7 +182,7 @@ class _AccountsListState extends State<AccountsList> {
                               ),
                               const SizedBox(height: 12),
                               Text(
-                                '数据来源：后端 Account_List.json，启停对应 script_file（如 botctrl/*.sh start/stop）。',
+                                '脚本启停仍在底部「策略启停」。数据来源：/api/account-profit 与 /api/tradingbots。',
                                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
                                       color: Theme.of(context).colorScheme.outline,
                                     ),
@@ -152,7 +210,7 @@ class _AccountsListState extends State<AccountsList> {
                             ),
                           )
                         else
-                          ..._accounts.map(
+                          ..._orderedAccounts.map(
                             (a) => Padding(
                               padding: const EdgeInsets.only(bottom: 12),
                               child: Material(
@@ -162,6 +220,7 @@ class _AccountsListState extends State<AccountsList> {
                                     Navigator.of(context).push(
                                       MaterialPageRoute<void>(
                                         builder: (ctx) => AccountProfitScreen(
+                                          sharedBots: _effectiveBots,
                                           initialBotId:
                                               a.botId.isNotEmpty ? a.botId : null,
                                         ),
@@ -175,6 +234,8 @@ class _AccountsListState extends State<AccountsList> {
                                       vertical: 14,
                                     ),
                                     child: Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
                                         Expanded(
                                           child: Column(
@@ -182,9 +243,7 @@ class _AccountsListState extends State<AccountsList> {
                                                 CrossAxisAlignment.start,
                                             children: [
                                               Text(
-                                                a.exchangeAccount.isNotEmpty
-                                                    ? a.exchangeAccount
-                                                    : a.botId,
+                                                _primaryLabel(a),
                                                 style: Theme.of(context)
                                                     .textTheme.titleSmall
                                                     ?.copyWith(
@@ -193,10 +252,10 @@ class _AccountsListState extends State<AccountsList> {
                                                       fontWeight: FontWeight.w600,
                                                     ),
                                               ),
-                                              if (a.botId.isNotEmpty) ...[
+                                              if (_secondaryLabel(a) != null) ...[
                                                 const SizedBox(height: 4),
                                                 Text(
-                                                  a.botId,
+                                                  _secondaryLabel(a)!,
                                                   style: Theme.of(context)
                                                       .textTheme
                                                       .bodySmall
@@ -207,6 +266,18 @@ class _AccountsListState extends State<AccountsList> {
                                                       ),
                                                 ),
                                               ],
+                                              const SizedBox(height: 6),
+                                              Text(
+                                                '现金 ${formatUiInteger(a.balanceUsdt)} · 浮动 ${formatUiSignedInteger(a.floatingProfit)}',
+                                                style: Theme.of(context)
+                                                    .textTheme
+                                                    .bodySmall
+                                                    ?.copyWith(
+                                                      color: Theme.of(context)
+                                                          .colorScheme
+                                                          .outline,
+                                                    ),
+                                              ),
                                             ],
                                           ),
                                         ),
@@ -229,9 +300,14 @@ class _AccountsListState extends State<AccountsList> {
                                               formatUiPercentLabel(
                                                 a.profitPercent,
                                               ),
-                                              style: AppFinanceStyle.labelTextStyle(
-                                                context,
-                                              ),
+                                              style: AppFinanceStyle
+                                                  .labelTextStyle(context)
+                                                  .copyWith(
+                                                    color: a.profitPercent >= 0
+                                                        ? AppFinanceStyle
+                                                            .profitGreenEnd
+                                                        : Colors.redAccent,
+                                                  ),
                                             ),
                                           ],
                                         ),

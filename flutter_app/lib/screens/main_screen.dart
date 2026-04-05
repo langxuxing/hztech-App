@@ -134,7 +134,7 @@ class _MainScreenState extends State<MainScreen> {
         index: _index,
         sizing: StackFit.expand,
         children: [
-          const AccountsList(),
+          AccountsList(sharedBots: _sharedBots),
           const TradingBotControl(),
           AccountProfitScreen(
             sharedBots: _sharedBots,
@@ -159,7 +159,7 @@ class _MainScreenState extends State<MainScreen> {
         index: _index,
         sizing: StackFit.expand,
         children: [
-          const AccountsList(),
+          AccountsList(sharedBots: _sharedBots),
           AccountProfitScreen(
             sharedBots: _sharedBots,
             periodicRefreshActive: _index == 1,
@@ -175,7 +175,7 @@ class _MainScreenState extends State<MainScreen> {
       index: _index,
       sizing: StackFit.expand,
       children: [
-        const AccountsList(),
+        AccountsList(sharedBots: _sharedBots),
         const TradingBotControl(),
         AccountProfitScreen(
           sharedBots: _sharedBots,

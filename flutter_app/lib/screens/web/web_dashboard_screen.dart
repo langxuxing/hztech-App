@@ -278,6 +278,7 @@ class _SummaryStrip extends StatelessWidget {
             );
           }
           return Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               for (var i = 0; i < children.length; i++) ...[
                 if (i > 0) const SizedBox(width: 16),
@@ -316,7 +317,8 @@ class _SummaryCell extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.end,
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
       children: [
         Text(label, style: labelStyle, textAlign: ta),
         const SizedBox(width: 6),
@@ -411,6 +413,7 @@ class _OverviewGlassCard extends StatelessWidget {
           const SizedBox(height: 12),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
+            crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               _OverviewStatCol(
                 label: '月初',
@@ -467,7 +470,8 @@ class _OverviewStatCol extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.end,
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
       children: [
         Text(label, style: labelStyle),
         const SizedBox(width: 6),

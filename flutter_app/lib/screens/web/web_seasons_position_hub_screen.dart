@@ -55,6 +55,18 @@ class _WebSeasonsPositionHubScreenState extends State<WebSeasonsPositionHubScree
     super.dispose();
   }
 
+  String? _symbolForSelectedAccount() {
+    final id = _accountId;
+    if (id == null) return null;
+    for (final b in widget.sharedBots) {
+      if (b.tradingbotId == id) {
+        final s = b.symbol;
+        if (s != null && s.isNotEmpty) return s;
+      }
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     // 布局：账户选择置顶 → 其下为「赛季 | 历史仓位」Tab（子页不再重复账户下拉）。
@@ -112,10 +124,11 @@ class _WebSeasonsPositionHubScreenState extends State<WebSeasonsPositionHubScree
             ),
           ),
         ),
-        Material(
-          color: Colors.white.withValues(alpha: 0.04),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+          child: Material(
+            color: Colors.white.withValues(alpha: 0.04),
+            borderRadius: BorderRadius.circular(8),
             child: TabBar(
               controller: _tabController,
               labelColor: AppFinanceStyle.profitGreenEnd,
@@ -136,6 +149,7 @@ class _WebSeasonsPositionHubScreenState extends State<WebSeasonsPositionHubScree
                 sharedBots: widget.sharedBots,
                 embedInShell: true,
                 accountIdFromParent: _accountId,
+                marketSymbol: _symbolForSelectedAccount(),
               ),
               WebPositionHistoryScreen(
                 sharedBots: widget.sharedBots,

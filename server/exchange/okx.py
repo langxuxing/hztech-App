@@ -10,6 +10,7 @@ import hmac
 import json
 import logging
 import os
+import time
 from typing import Any
 from datetime import datetime, timezone
 from pathlib import Path
@@ -81,6 +82,15 @@ def _okx_sorted_query(params: dict) -> str:
     return urlencode(items) if items else ""
 
 
+def _okx_error_code_hint(code: object) -> str:
+    """OKX 常见业务码的简短中文说明（msg 为空时便于排查）。"""
+    c = str(code).strip() if code is not None else ""
+    hints = {
+        "50014": "必填参数缺失或为空（例如 leverage-info 须带 mgnMode=cross|isolated）",
+    }
+    return hints.get(c, "")
+
+
 def _okx_business_error_detail(data: dict) -> str:
     """HTTP 200 且 JSON code != '0'：用 OKX 返回的真实 code/msg（含 data[0] sCode/sMsg）。"""
     code: object = data.get("code")
@@ -96,7 +106,9 @@ def _okx_business_error_detail(data: dict) -> str:
             code = nc
         if nm:
             msg = nm
-    return f"OKX 业务错误 code={code!r} msg={msg or '未知'}"
+    base = f"OKX 业务错误 code={code!r} msg={msg or '未知'}"
+    hint = _okx_error_code_hint(code)
+    return f"{base}（{hint}）" if hint else base
 
 
 def okx_public_get(
@@ -354,17 +366,40 @@ def okx_request(
     if cfg.get("sandbox"):
         headers["x-simulated-trading"] = "1"
     try:
-        if m == "GET":
-            resp = requests.get(url, headers=headers, timeout=30)
-        elif m == "POST":
-            resp = requests.post(
-                url,
-                headers=headers,
-                data=body.encode() if body else None,
-                timeout=30,
+        resp = None
+        last_net_err: BaseException | None = None
+        for attempt in range(3):
+            try:
+                if m == "GET":
+                    resp = requests.get(url, headers=headers, timeout=30)
+                elif m == "POST":
+                    resp = requests.post(
+                        url,
+                        headers=headers,
+                        data=body.encode() if body else None,
+                        timeout=30,
+                    )
+                else:
+                    return (None, f"不支持的 HTTP 方法: {method}")
+                last_net_err = None
+                break
+            except (requests.exceptions.SSLError, requests.exceptions.ConnectionError) as e:
+                last_net_err = e
+                if attempt < 2:
+                    time.sleep(0.35 * (attempt + 1))
+                    continue
+                logger.warning(
+                    "OKX request network error after retries: %s %s -> %s",
+                    m,
+                    sign_path,
+                    e,
+                )
+                return (None, str(e) or "SSL/connection failed")
+        if resp is None:
+            return (
+                None,
+                str(last_net_err) if last_net_err else "request failed",
             )
-        else:
-            return (None, f"不支持的 HTTP 方法: {method}")
         if resp.status_code >= 400:
             err_body = (resp.text or "")[:500]
             primary_code, show_msg = _parse_okx_http_error_body(err_body)
@@ -391,6 +426,9 @@ def okx_request(
                 ),
             )
             reason = show_msg or "(OKX 响应体未解析出 msg)"
+            hint = _okx_error_code_hint(primary_code)
+            if hint and not (show_msg or "").strip():
+                reason = f"{reason} {hint}"
             detail = (
                 f"HTTP {resp.status_code} OKX业务码={primary_code!r} "
                 f"原因={reason} 原始响应={raw_log!r}"
@@ -467,6 +505,66 @@ def okx_fetch_balance(config_path: Path | None = None) -> dict | None:
         err_detail or "请检查 API 权限、网络与配置",
     )
     return None
+
+
+def okx_fetch_account_bills_archive_usdt(
+    config_path: Path | None,
+    *,
+    begin_ms: int,
+    end_ms: int,
+    max_pages: int = 400,
+) -> tuple[list[dict], str | None]:
+    """分页拉取 OKX `/api/v5/account/bills-archive`（近 3 个月）中 USDT 账单，用于按日还原余额走势。
+
+    返回的 ``bal`` 为账单时刻账户层 USDT 余额，与 ``/account/balance`` 的 totalEq（含浮盈）在持仓时可能不一致；
+    上层可结合最近一条真实快照的 equity/cash 比例估算权益。
+    """
+    if begin_ms > end_ms:
+        return [], "begin_ms > end_ms"
+    pages = max(1, min(800, int(max_pages)))
+    out: list[dict] = []
+    seen: set[str] = set()
+    after: str | None = None
+    for _ in range(pages):
+        params: dict[str, str] = {
+            "ccy": "USDT",
+            "limit": "100",
+            "begin": str(int(begin_ms)),
+            "end": str(int(end_ms)),
+        }
+        if after:
+            params["after"] = after
+        data, err = okx_request(
+            "GET",
+            "/api/v5/account/bills-archive",
+            config_path=config_path,
+            params=params,
+        )
+        if data is None:
+            return out, err or "bills-archive 请求失败"
+        if data.get("code") != "0":
+            return out, _okx_business_error_detail(data)
+        rows = data.get("data")
+        if not isinstance(rows, list) or not rows:
+            break
+        page_new = 0
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            bid = str(r.get("billId") or "")
+            if not bid or bid in seen:
+                continue
+            seen.add(bid)
+            out.append(r)
+            page_new += 1
+        if page_new == 0:
+            break
+        last_id = rows[-1].get("billId") if isinstance(rows[-1], dict) else None
+        after = str(last_id) if last_id else None
+        if after is None or len(rows) < 100:
+            break
+        time.sleep(0.45)
+    return out, None
 
 
 def _okx_fetch_positions_fallback(config_path: Path | None) -> tuple[list[dict], str | None]:
@@ -843,18 +941,19 @@ def okx_fetch_positions_history(
     *,
     inst_type: str = "SWAP",
     limit_per_page: int = 100,
-    max_pages: int = 5,
+    max_pages: int = 500,
 ) -> tuple[list[dict], str | None]:
     """
     历史仓位：GET /api/v5/account/positions-history（近约 3 个月，按 uTime 倒序）。
     分页拉取多页后合并为列表；用于定时入库去重。
+    max_pages 默认 500（每页最多 100 条），直至接口返回不足一页或无数据。
     """
     path = _resolve_path(config_path)
     cfg = load_okx_config(path) if path else None
     if not cfg or not (cfg.get("key") and cfg.get("secret")):
         return ([], "OKX 配置文件不存在或格式无效")
     lim = max(1, min(100, int(limit_per_page)))
-    pages = max(1, int(max_pages))
+    pages = max(1, min(2000, int(max_pages)))
     merged: list[dict] = []
     after_ms: str | None = None
 
@@ -897,6 +996,54 @@ def okx_fetch_positions_history(
             break
         after_ms = str(min(uts))
     return (merged, None)
+
+
+def okx_fetch_positions_history_contracts(
+    config_path: Path | None = None,
+    *,
+    inst_types: tuple[str, ...] = ("SWAP", "FUTURES"),
+    limit_per_page: int = 100,
+    max_pages: int = 500,
+) -> tuple[list[dict], str | None]:
+    """
+    合并永续与交割合约的历史仓位（分别请求 positions-history），
+    按 (posId, uTime) 去重。任一分支报错且无合并结果时返回错误信息。
+    """
+    seen: set[tuple[str, str]] = set()
+    out: list[dict] = []
+    last_err: str | None = None
+    any_ok = False
+    for it in inst_types:
+        it_s = (it or "").strip().upper()
+        if not it_s:
+            continue
+        batch, err = okx_fetch_positions_history(
+            config_path,
+            inst_type=it_s,
+            limit_per_page=limit_per_page,
+            max_pages=max_pages,
+        )
+        if err:
+            last_err = err
+            continue
+        any_ok = True  # 该 instType 请求成功（可无平仓记录）
+        for r in batch:
+            if not isinstance(r, dict):
+                continue
+            pid = str(r.get("posId") or "").strip()
+            ut = str(r.get("uTime") or "").strip()
+            if not pid or not ut:
+                continue
+            key = (pid, ut)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(r)
+    if not out:
+        if any_ok:
+            return ([], None)
+        return ([], last_err or "无历史仓位数据")
+    return (out, None)
 
 
 def okx_fetch_pending_orders(
@@ -950,6 +1097,98 @@ def _parse_okx_lever_value(value: object) -> float | None:
         return float(value) if value is not None and str(value).strip() != "" else None
     except (TypeError, ValueError):
         return None
+
+
+def _okx_get_leverage_info_rows(
+    config_path: Path | None,
+    inst_id: str,
+    preferred_mgn_mode: str,
+) -> tuple[list[dict] | None, dict | None, str | None]:
+    """按官方文档调用 leverage-info：须带 instId + mgnMode（不再传 instType）。
+
+    优先使用账户配置中的全仓/逐仓；若无则依次尝试 cross、isolated。
+    返回 (data 列表, 最后一次 JSON 响应, 错误文案)。
+    """
+    want = inst_id.strip()
+    modes: list[str] = []
+    pm = (preferred_mgn_mode or "").strip().lower()
+    if pm in ("cross", "isolated"):
+        modes.append(pm)
+    for m in ("cross", "isolated"):
+        if m not in modes:
+            modes.append(m)
+
+    last_raw: dict | None = None
+    last_err: str | None = None
+    for mgn in modes:
+        raw, err = okx_request(
+            "GET",
+            "/api/v5/account/leverage-info",
+            config_path=config_path,
+            params={"instId": want, "mgnMode": mgn},
+        )
+        if isinstance(raw, dict):
+            last_raw = raw
+        if err:
+            last_err = err
+            continue
+        if not isinstance(raw, dict) or raw.get("code") != "0":
+            last_err = (
+                _okx_business_error_detail(raw)
+                if isinstance(raw, dict)
+                else "leverage-info 返回异常"
+            )
+            continue
+        rows_in = raw.get("data")
+        if not isinstance(rows_in, list):
+            continue
+        matched = [
+            r
+            for r in rows_in
+            if isinstance(r, dict) and (r.get("instId") or "").strip() == want
+        ]
+        if matched:
+            return matched, raw, None
+        last_err = None
+    return None, last_raw, last_err
+
+
+def _okx_leverage_from_positions_api(
+    config_path: Path | None,
+    inst_id: str,
+) -> tuple[list[dict], str | None]:
+    """QTrader 思路：从持仓接口读取 lever/posSide（无持仓时可能无行，仅作补充）。"""
+    want = inst_id.strip()
+    data, err = okx_request(
+        "GET",
+        "/api/v5/account/positions",
+        config_path=config_path,
+        params={"instType": "SWAP", "instId": want},
+    )
+    if err:
+        return ([], err)
+    if data is None or data.get("code") != "0":
+        if isinstance(data, dict):
+            return ([], _okx_business_error_detail(data))
+        return ([], "positions 接口返回异常")
+    raw_list = data.get("data") or []
+    out: list[dict] = []
+    for d in raw_list:
+        if not isinstance(d, dict):
+            continue
+        if (d.get("instId") or "").strip() != want:
+            continue
+        lv = _parse_okx_lever_value(d.get("lever"))
+        if lv is None:
+            continue
+        ps = (d.get("posSide") or "net").strip().lower()
+        out.append({
+            "instId": want,
+            "posSide": ps,
+            "lever": str(int(lv)) if lv == int(lv) else str(lv),
+            "mgnMode": (d.get("mgnMode") or "").strip(),
+        })
+    return (out, None)
 
 
 def okx_test_account_full(
@@ -1035,62 +1274,81 @@ def okx_test_account_full(
             "Account_List 中 symbol 建议为永续 instId，例如 PEPE-USDT-SWAP"
         )
 
-    lev_raw, lev_err = okx_request(
-        "GET",
-        "/api/v5/account/leverage-info",
-        config_path=config_path,
-        params={"instType": "SWAP", "instId": inst_id},
-    )
-    if lev_err:
-        out["configuration_warnings"].append(f"杠杆查询失败: {lev_err}")
-    elif isinstance(lev_raw, dict) and lev_raw.get("code") == "0":
-        rows = lev_raw.get("data")
-        out["leverage_info"] = rows if isinstance(rows, list) else []
-        long_lev: float | None = None
-        short_lev: float | None = None
-        if isinstance(rows, list):
-            want = inst_id.strip()
-            for item in rows:
-                if not isinstance(item, dict):
-                    continue
-                if (item.get("instId") or "").strip() != want:
-                    continue
-                ps = (item.get("posSide") or "net").strip().lower()
-                lv = _parse_okx_lever_value(item.get("lever"))
-                if lv is None:
-                    continue
-                if ps == "long":
-                    long_lev = lv
-                elif ps == "short":
-                    short_lev = lv
-                elif ps == "net":
-                    long_lev = short_lev = lv
-        tol = 0.01
-        if long_lev is not None:
-            ok_l = abs(long_lev - target_leverage) <= tol
-            out["checks"]["leverage_long_ok"] = ok_l
-            if not ok_l:
-                out["configuration_warnings"].append(
-                    f"多仓杠杆为 {long_lev}，目标为 {target_leverage:g}x"
-                )
-        if short_lev is not None:
-            ok_s = abs(short_lev - target_leverage) <= tol
-            out["checks"]["leverage_short_ok"] = ok_s
-            if not ok_s:
-                out["configuration_warnings"].append(
-                    f"空仓杠杆为 {short_lev}，目标为 {target_leverage:g}x"
-                )
+    acfg = out.get("account_config") or {}
+    cfg_mgn_for_lever = str(acfg.get("mgn_mode") or "")
 
-        if long_lev is None and short_lev is None:
+    lev_rows, _, lev_err = _okx_get_leverage_info_rows(
+        config_path, inst_id, cfg_mgn_for_lever
+    )
+    pos_rows: list[dict] = []
+    pos_err: str | None = None
+    if not lev_rows:
+        pos_rows, pos_err = _okx_leverage_from_positions_api(
+            config_path, inst_id
+        )
+
+    if lev_rows:
+        out["leverage_info"] = lev_rows
+    elif pos_rows:
+        out["leverage_info"] = pos_rows
+        if lev_err:
+            out["configuration_warnings"].append(
+                f"已改用持仓接口读取杠杆（leverage-info 不可用: {lev_err}）"
+            )
+    else:
+        out["leverage_info"] = None
+        if lev_err:
+            out["configuration_warnings"].append(f"杠杆查询失败: {lev_err}")
+        elif pos_err:
+            out["configuration_warnings"].append(
+                f"持仓接口补充查询失败: {pos_err}"
+            )
+        elif not lev_err and not pos_err:
             out["configuration_warnings"].append(
                 "杠杆接口未返回该合约多空杠杆（可能尚未开仓或需在 OKX 将 "
                 f"{inst_id} 多空均设为 {target_leverage:g}x 双向持仓）"
             )
-    else:
-        if isinstance(lev_raw, dict):
+
+    rows_for_check = lev_rows if lev_rows else pos_rows
+    long_lev: float | None = None
+    short_lev: float | None = None
+    if rows_for_check:
+        want = inst_id.strip()
+        for item in rows_for_check:
+            if not isinstance(item, dict):
+                continue
+            if (item.get("instId") or "").strip() != want:
+                continue
+            ps = (item.get("posSide") or "net").strip().lower()
+            lv = _parse_okx_lever_value(item.get("lever"))
+            if lv is None:
+                continue
+            if ps == "long":
+                long_lev = lv
+            elif ps == "short":
+                short_lev = lv
+            elif ps == "net":
+                long_lev = short_lev = lv
+    tol = 0.01
+    if long_lev is not None:
+        ok_l = abs(long_lev - target_leverage) <= tol
+        out["checks"]["leverage_long_ok"] = ok_l
+        if not ok_l:
             out["configuration_warnings"].append(
-                _okx_business_error_detail(lev_raw)
+                f"多仓杠杆为 {long_lev}，目标为 {target_leverage:g}x"
             )
+    if short_lev is not None:
+        ok_s = abs(short_lev - target_leverage) <= tol
+        out["checks"]["leverage_short_ok"] = ok_s
+        if not ok_s:
+            out["configuration_warnings"].append(
+                f"空仓杠杆为 {short_lev}，目标为 {target_leverage:g}x"
+            )
+
+    if rows_for_check and long_lev is None and short_lev is None:
+        out["configuration_warnings"].append(
+            "已拉取杠杆相关数据但未解析到有效 lever 字段，请确认 API 权限与合约代码"
+        )
 
     chk = out["checks"]
     out["configuration_ok"] = bool(

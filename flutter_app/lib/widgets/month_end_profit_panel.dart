@@ -457,6 +457,23 @@ class _MonthEndValueBarPanelState extends State<MonthEndValueBarPanel> {
             alignment: BarChartAlignment.spaceAround,
             maxY: _barMaxY(visible),
             minY: _barMinY(visible),
+            barTouchData: BarTouchData(
+              enabled: true,
+              touchTooltipData: BarTouchTooltipData(
+                getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                  return BarTooltipItem(
+                    formatUiSignedInteger(rod.toY),
+                    TextStyle(
+                      color: rod.toY >= 0
+                          ? AppFinanceStyle.profitGreenEnd
+                          : Colors.red.withValues(alpha: 0.9),
+                      fontWeight: FontWeight.w600,
+                      fontSize: 11,
+                    ),
+                  );
+                },
+              ),
+            ),
             gridData: FlGridData(
               show: true,
               drawVerticalLine: false,
@@ -479,7 +496,7 @@ class _MonthEndValueBarPanelState extends State<MonthEndValueBarPanel> {
                   showTitles: true,
                   reservedSize: widget.compact ? 32 : 40,
                   getTitlesWidget: (v, m) => Text(
-                    v.toStringAsFixed(0),
+                    formatUiInteger(v),
                     style: TextStyle(
                       color: AppFinanceStyle.labelColor.withValues(alpha: 0.85),
                       fontSize: widget.compact ? 8 : 10,
@@ -521,7 +538,7 @@ class _MonthEndValueBarPanelState extends State<MonthEndValueBarPanel> {
                   x: i,
                   barRods: [
                     BarChartRodData(
-                      toY: visible[i].monthlyPnL,
+                      toY: visible[i].monthlyPnL.roundToDouble(),
                       width: 14,
                       borderRadius: const BorderRadius.vertical(
                         top: Radius.circular(4),
@@ -542,7 +559,8 @@ class _MonthEndValueBarPanelState extends State<MonthEndValueBarPanel> {
       final lastDay = DateTime(end.year, end.month + 1, 0).day;
       final daily = _dailyDeltaForMonth(sorted, end, widget.valueAt, fallback);
       final pnls = <double>[
-        for (var d = 1; d <= lastDay; d++) daily[d] ?? 0.0,
+        for (var d = 1; d <= lastDay; d++)
+          (daily[d] ?? 0.0).roundToDouble(),
       ];
       return SizedBox(
         height: height,
@@ -554,6 +572,23 @@ class _MonthEndValueBarPanelState extends State<MonthEndValueBarPanel> {
                 alignment: BarChartAlignment.spaceBetween,
                 maxY: _barMaxYFromPnls(pnls),
                 minY: _barMinYFromPnls(pnls),
+                barTouchData: BarTouchData(
+                  enabled: true,
+                  touchTooltipData: BarTouchTooltipData(
+                    getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                      return BarTooltipItem(
+                        formatUiSignedInteger(rod.toY),
+                        TextStyle(
+                          color: rod.toY >= 0
+                              ? AppFinanceStyle.profitGreenEnd
+                              : Colors.red.withValues(alpha: 0.9),
+                          fontWeight: FontWeight.w600,
+                          fontSize: 11,
+                        ),
+                      );
+                    },
+                  ),
+                ),
                 gridData: FlGridData(
                   show: true,
                   drawVerticalLine: false,
@@ -576,7 +611,7 @@ class _MonthEndValueBarPanelState extends State<MonthEndValueBarPanel> {
                       showTitles: true,
                       reservedSize: widget.compact ? 32 : 40,
                       getTitlesWidget: (v, m) => Text(
-                        v.toStringAsFixed(0),
+                        formatUiInteger(v),
                         style: TextStyle(
                           color: AppFinanceStyle.labelColor.withValues(
                             alpha: 0.85,

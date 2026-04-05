@@ -654,73 +654,80 @@ class _WebTradingBotControlScreenState
                             ),
                           )
                         else
-                          Builder(
-                            builder: (context) {
-                              final w = MediaQuery.sizeOf(context).width;
-                              var cross = 1;
-                              if (w >= 1200) {
-                                cross = 4;
-                              } else if (w >= 800) {
-                                cross = 3;
-                              }
-                              return SliverGrid(
-                                gridDelegate:
-                                    SliverGridDelegateWithFixedCrossAxisCount(
-                                      crossAxisCount: cross,
-                                      mainAxisSpacing: 28,
-                                      crossAxisSpacing: 28,
-                                      childAspectRatio: cross >= 3 ? 0.9 : 0.78,
-                                    ),
-                                delegate: SliverChildBuilderDelegate((
-                                  context,
-                                  index,
-                                ) {
-                                  final a = _accounts[index];
-                                  final bot = _botFor(a);
-                                  final seasons =
-                                      _seasonsByBot[a.botId] ?? const [];
-                                  final events =
-                                      _eventsByBot[a.botId] ?? const [];
-                                  final running =
-                                      bot != null &&
-                                      (bot.status == 'running' ||
-                                          bot.isRunning == true);
-                                  final season = _seasonRuntime(
-                                    seasons,
-                                    running,
-                                  );
-                                  final robot = _robotRuntime(events, running);
-                                  final openSeason = _hasOpenSeason(seasons);
-                                  return _AccountGlassCard(
-                                    account: a,
-                                    bot: bot,
-                                    seasonStart: season.seasonStart,
-                                    seasonDuration: season.seasonDuration,
-                                    robotStart: robot.robotStart,
-                                    robotDuration: robot.robotDuration,
-                                    hasOpenSeason: openSeason,
-                                    robotLoadingBotId: _loadingBotId,
-                                    seasonLoadingBotId: _seasonLoadingBotId,
-                                    onStart: bot != null && bot.canControl
-                                        ? () => _doStart(bot)
-                                        : null,
-                                    onStop: bot != null && bot.canControl
-                                        ? () => _onTapStop(bot)
-                                        : null,
-                                    onRestart: bot != null && bot.canControl
-                                        ? () => _doRestart(bot)
-                                        : null,
-                                    onSeasonStart: bot != null && bot.canControl
-                                        ? () => _doSeasonStart(bot)
-                                        : null,
-                                    onSeasonStop: bot != null && bot.canControl
-                                        ? () => _onTapSeasonStop(bot)
-                                        : null,
-                                    onOpenDetail: () => _openAccount(a),
-                                  );
-                                }, childCount: _accounts.length),
-                              );
-                            },
+                          SliverPadding(
+                            padding: const EdgeInsets.fromLTRB(24, 0, 24, 0),
+                            sliver: Builder(
+                              builder: (context) {
+                                final w = MediaQuery.sizeOf(context).width;
+                                var cross = 1;
+                                if (w >= 1200) {
+                                  cross = 4;
+                                } else if (w >= 800) {
+                                  cross = 3;
+                                }
+                                return SliverGrid(
+                                  gridDelegate:
+                                      SliverGridDelegateWithFixedCrossAxisCount(
+                                        crossAxisCount: cross,
+                                        mainAxisSpacing: 28,
+                                        crossAxisSpacing: 28,
+                                        childAspectRatio:
+                                            cross >= 3 ? 0.68 : 0.58,
+                                      ),
+                                  delegate: SliverChildBuilderDelegate((
+                                    context,
+                                    index,
+                                  ) {
+                                    final a = _accounts[index];
+                                    final bot = _botFor(a);
+                                    final seasons =
+                                        _seasonsByBot[a.botId] ?? const [];
+                                    final events =
+                                        _eventsByBot[a.botId] ?? const [];
+                                    final running =
+                                        bot != null &&
+                                        (bot.status == 'running' ||
+                                            bot.isRunning == true);
+                                    final season = _seasonRuntime(
+                                      seasons,
+                                      running,
+                                    );
+                                    final robot =
+                                        _robotRuntime(events, running);
+                                    final openSeason = _hasOpenSeason(seasons);
+                                    return _AccountGlassCard(
+                                      account: a,
+                                      bot: bot,
+                                      seasonStart: season.seasonStart,
+                                      seasonDuration: season.seasonDuration,
+                                      robotStart: robot.robotStart,
+                                      robotDuration: robot.robotDuration,
+                                      hasOpenSeason: openSeason,
+                                      robotLoadingBotId: _loadingBotId,
+                                      seasonLoadingBotId: _seasonLoadingBotId,
+                                      onStart: bot != null && bot.canControl
+                                          ? () => _doStart(bot)
+                                          : null,
+                                      onStop: bot != null && bot.canControl
+                                          ? () => _onTapStop(bot)
+                                          : null,
+                                      onRestart: bot != null && bot.canControl
+                                          ? () => _doRestart(bot)
+                                          : null,
+                                      onSeasonStart:
+                                          bot != null && bot.canControl
+                                          ? () => _doSeasonStart(bot)
+                                          : null,
+                                      onSeasonStop:
+                                          bot != null && bot.canControl
+                                          ? () => _onTapSeasonStop(bot)
+                                          : null,
+                                      onOpenDetail: () => _openAccount(a),
+                                    );
+                                  }, childCount: _accounts.length),
+                                );
+                              },
+                            ),
                           ),
                         const SliverPadding(
                           padding: EdgeInsets.only(bottom: 48),
@@ -799,17 +806,25 @@ class _GlobalBotStatsBar extends StatelessWidget {
             foregroundColor: const Color(0xFF3DFF9C),
             backgroundColor: const Color(0xFF3DFF9C).withValues(alpha: 0.14),
           ),
-          icon: const Icon(Icons.play_circle_outline, size: 20),
+          icon: Icon(
+            Icons.play_circle_outline,
+            size: 20,
+            color: bulkBusy ? null : const Color(0xFF3DFF9C),
+          ),
           label: const Text('全部启动'),
         ),
         const SizedBox(width: 10),
         FilledButton.tonalIcon(
           onPressed: bulkBusy ? null : onBulkStop,
           style: FilledButton.styleFrom(
-            foregroundColor: const Color(0xFFFF8A80),
-            backgroundColor: const Color(0xFFFF8A80).withValues(alpha: 0.12),
+            foregroundColor: Colors.red,
+            backgroundColor: Colors.red.withValues(alpha: 0.12),
           ),
-          icon: const Icon(Icons.stop_circle_outlined, size: 20),
+          icon: Icon(
+            Icons.stop_circle_outlined,
+            size: 20,
+            color: bulkBusy ? null : Colors.red,
+          ),
           label: const Text('全部停止'),
         ),
       ],
@@ -871,6 +886,7 @@ class _GlobalBotStatsBar extends StatelessWidget {
                 );
               }
               return Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
                   for (var i = 0; i < cells.length; i++) ...[
                     if (i > 0) const SizedBox(width: 16),
@@ -925,7 +941,8 @@ class _BotControlSummaryCell extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.end,
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
       children: [
         Text(label, style: labelStyle, textAlign: ta),
         const SizedBox(width: 6),
@@ -985,8 +1002,6 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
   static const _labelMuted = AppFinanceStyle.labelColor;
   static const _cyanAccent = Color(0xFF2EE6D6);
   static const _greenRun = Color(0xFF3DFF9C);
-  static const _redStop = Color(0xFFFF8A80);
-  static const _blueRestart = Color(0xFF4FC3F7);
 
   late final AnimationController _pulse;
 
@@ -1048,14 +1063,11 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
     return '已停止';
   }
 
-  /// 无启动时间、无有效时长或占位 00:00:00 时不展示该行。
-  static bool _showKickoffRuntime(String start, String duration) {
-    const dash = '—';
-    if (start.isEmpty || start == dash) return false;
-    if (duration.isEmpty || duration == dash || duration == '00:00:00') {
-      return false;
-    }
-    return true;
+  /// 占位（—、空、时长 00:00:00）在界面上显示为空，标题「启动」仍保留。
+  static String _runtimeFieldDisplay(String s, {required bool isDuration}) {
+    if (s.isEmpty || s == '—') return '';
+    if (isDuration && s == '00:00:00') return '';
+    return s;
   }
 
   @override
@@ -1109,13 +1121,21 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
         );
 
     final glowT = _running ? _pulse.value : 0.0;
-    final showSeasonKickoff = _showKickoffRuntime(
+    final seasonStartShown = _runtimeFieldDisplay(
       widget.seasonStart,
-      widget.seasonDuration,
+      isDuration: false,
     );
-    final showRobotKickoff = _showKickoffRuntime(
+    final seasonDurationShown = _runtimeFieldDisplay(
+      widget.seasonDuration,
+      isDuration: true,
+    );
+    final robotStartShown = _runtimeFieldDisplay(
       widget.robotStart,
+      isDuration: false,
+    );
+    final robotDurationShown = _runtimeFieldDisplay(
       widget.robotDuration,
+      isDuration: true,
     );
 
     return AnimatedBuilder(
@@ -1264,32 +1284,30 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
               const SizedBox(height: 14),
 
               Text('赛季控制', style: labelStyle),
-              if (showSeasonKickoff) ...[
-                const SizedBox(height: 6),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.baseline,
-                  textBaseline: TextBaseline.alphabetic,
-                  children: [
-                    Expanded(
-                      child: Row(
-                        children: [
-                          Text('启动 ', style: kickoffLabelStyle),
-                          Expanded(
-                            child: Text(
-                              widget.seasonStart,
-                              style: metaStyle,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
+              const SizedBox(height: 6),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
+                children: [
+                  Expanded(
+                    child: Row(
+                      children: [
+                        Text('启动 ', style: kickoffLabelStyle),
+                        Expanded(
+                          child: Text(
+                            seasonStartShown,
+                            style: metaStyle,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 8),
-                    Text(widget.seasonDuration, style: durationStyle),
-                  ],
-                ),
-              ],
+                  ),
+                  const SizedBox(width: 8),
+                  Text(seasonDurationShown, style: durationStyle),
+                ],
+              ),
               const SizedBox(height: 12),
 
               DecoratedBox(
@@ -1325,6 +1343,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                                 widget.onSeasonStart != null,
                             icon: Icons.play_circle_outline,
                             accent: _greenRun,
+                            iconColor: _greenRun,
                             onTap: widget.onSeasonStart,
                           ),
                           _CyberCircleIconButton(
@@ -1337,7 +1356,8 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                                 widget.hasOpenSeason &&
                                 widget.onSeasonStop != null,
                             icon: Icons.stop_circle_outlined,
-                            accent: _redStop,
+                            accent: Colors.red,
+                            iconColor: Colors.red,
                             onTap: widget.onSeasonStop,
                           ),
                         ],
@@ -1356,32 +1376,30 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
               const SizedBox(height: 12),
 
               Text('策略状态', style: labelStyle),
-              if (showRobotKickoff) ...[
-                const SizedBox(height: 6),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.baseline,
-                  textBaseline: TextBaseline.alphabetic,
-                  children: [
-                    Expanded(
-                      child: Row(
-                        children: [
-                          Text('启动 ', style: kickoffLabelStyle),
-                          Expanded(
-                            child: Text(
-                              widget.robotStart,
-                              style: metaStyle,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
+              const SizedBox(height: 6),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
+                children: [
+                  Expanded(
+                    child: Row(
+                      children: [
+                        Text('启动 ', style: kickoffLabelStyle),
+                        Expanded(
+                          child: Text(
+                            robotStartShown,
+                            style: metaStyle,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 8),
-                    Text(widget.robotDuration, style: durationStyle),
-                  ],
-                ),
-              ],
+                  ),
+                  const SizedBox(width: 8),
+                  Text(robotDurationShown, style: durationStyle),
+                ],
+              ),
 
               const SizedBox(height: 12),
               DecoratedBox(
@@ -1436,6 +1454,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                               enabled: !robotBusy && !_running,
                               icon: Icons.play_circle_outline,
                               accent: _greenRun,
+                              iconColor: _greenRun,
                               onTap: widget.onStart,
                             ),
                             _CyberCircleIconButton(
@@ -1444,7 +1463,8 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                               isLoading: robotBusy,
                               enabled: !robotBusy && _running,
                               icon: Icons.stop_circle_outlined,
-                              accent: _redStop,
+                              accent: Colors.red,
+                              iconColor: Colors.red,
                               onTap: widget.onStop,
                             ),
                             _CyberCircleIconButton(
@@ -1453,7 +1473,8 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                               isLoading: robotBusy,
                               enabled: !robotBusy,
                               icon: Icons.restart_alt_outlined,
-                              accent: _blueRestart,
+                              accent: Colors.yellow,
+                              iconColor: Colors.yellow,
                               onTap: widget.onRestart,
                             ),
                           ],
@@ -1482,6 +1503,7 @@ class _CyberCircleIconButton extends StatefulWidget {
     required this.enabled,
     required this.icon,
     required this.accent,
+    this.iconColor,
     required this.onTap,
   });
 
@@ -1490,7 +1512,10 @@ class _CyberCircleIconButton extends StatefulWidget {
   final bool isLoading;
   final bool enabled;
   final IconData icon;
+  /// 描边、底色与光晕。
   final Color accent;
+  /// 图标与进度环；默认同 [accent]。
+  final Color? iconColor;
   final VoidCallback? onTap;
 
   @override
@@ -1506,6 +1531,7 @@ class _CyberCircleIconButtonState extends State<_CyberCircleIconButton> {
     final canPress =
         widget.enabled && !widget.isLoading && widget.onTap != null;
     final a = widget.accent;
+    final iconTint = widget.iconColor ?? a;
     final borderA = canPress ? (_pressed ? 0.95 : (_hover ? 0.75 : 0.4)) : 0.15;
     final fillA = canPress ? (_pressed ? 0.22 : (_hover ? 0.14 : 0.08)) : 0.04;
 
@@ -1543,13 +1569,15 @@ class _CyberCircleIconButtonState extends State<_CyberCircleIconButton> {
                   height: widget.iconSize,
                   child: CircularProgressIndicator(
                     strokeWidth: 2,
-                    color: a.withValues(alpha: 0.85),
+                    color: iconTint.withValues(alpha: 0.9),
                   ),
                 )
               : Icon(
                   widget.icon,
                   size: widget.iconSize,
-                  color: canPress ? a : a.withValues(alpha: 0.28),
+                  color: canPress
+                      ? iconTint
+                      : iconTint.withValues(alpha: 0.4),
                 ),
         ),
       ),

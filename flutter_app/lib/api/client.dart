@@ -361,7 +361,7 @@ class ApiClient {
   Future<StrategyDailyEfficiencyResponse> getStrategyDailyEfficiency(
     String botId, {
     String instId = 'PEPE-USDT-SWAP',
-    int days = 90,
+    int days = 31,
   }) async {
     final uri = Uri.parse(
       '${_normalizedBase}api/tradingbots/$botId/strategy-daily-efficiency'

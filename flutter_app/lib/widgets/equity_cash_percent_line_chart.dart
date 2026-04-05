@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../api/models.dart';
 import '../theme/finance_style.dart';
+import '../utils/number_display_format.dart';
 
 /// 深色背景上 X 轴日期刻度（与日历无数据格同档可读性）。
 const _kChartAxisDateLabel = Color(0xFFC8C8C8);
@@ -21,6 +22,25 @@ List<BotProfitSnapshot> _sortedByTime(List<BotProfitSnapshot> raw) {
   }
   withDates.sort((a, b) => a.d.compareTo(b.d));
   return withDates.map((e) => e.s).toList();
+}
+
+/// 使用按时间排序的全量快照：取 `instant` 当日及之前最后一条快照的字段值。
+double _snapshotValueAtOrBefore(
+  List<BotProfitSnapshot> sortedChronological,
+  DateTime instant,
+  double Function(BotProfitSnapshot s) pick,
+) {
+  double? v;
+  for (final s in sortedChronological) {
+    final d = _parseSnapshotAt(s.snapshotAt);
+    if (d == null) continue;
+    if (!d.isAfter(instant)) {
+      v = pick(s);
+    } else {
+      break;
+    }
+  }
+  return v ?? double.nan;
 }
 
 /// X 轴刻度：点很多时只标若干处，避免重叠。
@@ -83,10 +103,10 @@ class SnapshotPercentLineChart extends StatelessWidget {
         return !d.isBefore(monthStart) && !d.isAfter(monthEnd);
       }).toList();
     }
-    if (sorted.isEmpty) {
+    if (fullSorted.isEmpty) {
       return Center(
         child: Text(
-          focusedMonth != null ? '该月无快照' : '暂无快照',
+          '暂无快照',
           style: TextStyle(
             color: AppFinanceStyle.labelColor,
             fontSize: compact ? 11 : 13,
@@ -107,18 +127,72 @@ class SnapshotPercentLineChart extends StatelessWidget {
       );
     }
 
+    final monthMode = focusedMonth != null;
     final spots = <FlSpot>[];
     var minY = 0.0;
     var maxY = 0.0;
-    for (var i = 0; i < sorted.length; i++) {
-      final s = sorted[i];
-      final pct = series == SnapshotReturnSeries.equity
-          ? (s.equityUsdt / denom - 1) * 100
-          : (s.currentBalance / denom - 1) * 100;
-      spots.add(FlSpot(i.toDouble(), pct));
-      if (pct < minY) minY = pct;
-      if (pct > maxY) maxY = pct;
+
+    int? lastDayInMonth;
+    int? monthForAxis;
+    final pick = series == SnapshotReturnSeries.equity
+        ? (BotProfitSnapshot s) => s.equityUsdt
+        : (BotProfitSnapshot s) => s.currentBalance;
+
+    if (monthMode) {
+      final y = focusedMonth!.year;
+      final m = focusedMonth!.month;
+      monthForAxis = m;
+      lastDayInMonth = DateTime(y, m + 1, 0).day;
+      final beforeFirstDay =
+          DateTime(y, m, 1).subtract(const Duration(microseconds: 1));
+      double? runCarry;
+      final startVal = _snapshotValueAtOrBefore(fullSorted, beforeFirstDay, pick);
+      if (startVal.isFinite) runCarry = startVal;
+
+      for (var day = 1; day <= lastDayInMonth; day++) {
+        final end = DateTime(y, m, day, 23, 59, 59, 999);
+        final vRaw = _snapshotValueAtOrBefore(fullSorted, end, pick);
+        late final double v;
+        if (vRaw.isFinite) {
+          runCarry = vRaw;
+          v = vRaw;
+        } else if (runCarry != null) {
+          v = runCarry;
+        } else if (startVal.isFinite) {
+          v = startVal;
+        } else {
+          // 整月无 prior 快照时仍铺满 X 轴，收益率按 0% 水平线展示
+          v = denom;
+        }
+        final pct = (v / denom - 1) * 100;
+        spots.add(FlSpot((day - 1).toDouble(), pct));
+        if (pct < minY) minY = pct;
+        if (pct > maxY) maxY = pct;
+      }
+    } else {
+      for (var i = 0; i < sorted.length; i++) {
+        final s = sorted[i];
+        final pct = series == SnapshotReturnSeries.equity
+            ? (s.equityUsdt / denom - 1) * 100
+            : (s.currentBalance / denom - 1) * 100;
+        spots.add(FlSpot(i.toDouble(), pct));
+        if (pct < minY) minY = pct;
+        if (pct > maxY) maxY = pct;
+      }
     }
+
+    if (spots.isEmpty) {
+      return Center(
+        child: Text(
+          focusedMonth != null ? '该月无快照' : '暂无快照',
+          style: TextStyle(
+            color: AppFinanceStyle.labelColor,
+            fontSize: compact ? 11 : 13,
+          ),
+        ),
+      );
+    }
+
     if (minY == maxY) {
       minY -= 1;
       maxY += 1;
@@ -128,15 +202,58 @@ class SnapshotPercentLineChart extends StatelessWidget {
         ? AppFinanceStyle.profitGreenEnd
         : _cashLineColor;
 
-    final xLabelIdx = _lineChartXLabelIndices(sorted.length);
+    final xSpan = monthMode
+        ? ((lastDayInMonth ?? 1) - 1).clamp(0, 999).toDouble()
+        : (sorted.length - 1).clamp(0, double.infinity).toDouble();
+    final xLabelIdx = monthMode
+        ? _lineChartXLabelIndices(lastDayInMonth ?? 1)
+        : _lineChartXLabelIndices(sorted.length);
 
     final chart = LineChart(
       LineChartData(
         minX: 0,
-        maxX: (sorted.length - 1).clamp(0, double.infinity).toDouble(),
+        maxX: xSpan,
         minY: minY - pad,
         maxY: maxY + pad,
         gridData: const FlGridData(show: false),
+        lineTouchData: LineTouchData(
+          enabled: true,
+          touchTooltipData: LineTouchTooltipData(
+            getTooltipItems: (touchedSpots) {
+              return touchedSpots.map((spot) {
+                if (monthMode && monthForAxis != null && lastDayInMonth != null) {
+                  final day = spot.x.round().clamp(0, lastDayInMonth - 1) + 1;
+                  final y = focusedMonth!.year;
+                  final mo = focusedMonth!.month;
+                  final end = DateTime(y, mo, day, 23, 59, 59, 999);
+                  final raw = _snapshotValueAtOrBefore(fullSorted, end, pick);
+                  final amt =
+                      raw.isFinite ? formatUiInteger(raw) : '—';
+                  return LineTooltipItem(
+                    '$day日 $amt（${formatUiInteger(spot.y)}%）',
+                    TextStyle(
+                      color: lineColor,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 11,
+                    ),
+                  );
+                }
+                final idx = spot.x.round().clamp(0, sorted.length - 1);
+                final d = _parseSnapshotAt(sorted[idx].snapshotAt);
+                final head =
+                    d == null ? '' : '${d.month}/${d.day} ';
+                return LineTooltipItem(
+                  '$head${formatUiInteger(spot.y)}%',
+                  TextStyle(
+                    color: lineColor,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 11,
+                  ),
+                );
+              }).toList();
+            },
+          ),
+        ),
         titlesData: FlTitlesData(
           show: true,
           topTitles: const AxisTitles(
@@ -145,8 +262,21 @@ class SnapshotPercentLineChart extends StatelessWidget {
           rightTitles: const AxisTitles(
             sideTitles: SideTitles(showTitles: false),
           ),
-          leftTitles: const AxisTitles(
-            sideTitles: SideTitles(showTitles: false),
+          leftTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: monthMode,
+              reservedSize: compact ? 30 : 36,
+              interval: 1,
+              getTitlesWidget: (v, meta) {
+                return Text(
+                  '${formatUiInteger(v)}%',
+                  style: TextStyle(
+                    color: AppFinanceStyle.labelColor.withValues(alpha: 0.85),
+                    fontSize: compact ? 8 : 10,
+                  ),
+                );
+              },
+            ),
           ),
           bottomTitles: AxisTitles(
             sideTitles: SideTitles(
@@ -154,6 +284,23 @@ class SnapshotPercentLineChart extends StatelessWidget {
               reservedSize: compact ? 18 : 24,
               interval: 1,
               getTitlesWidget: (v, meta) {
+                if (monthMode) {
+                  final ld = lastDayInMonth ?? 1;
+                  if (ld <= 0) return const SizedBox.shrink();
+                  final i = v.round().clamp(0, ld - 1);
+                  if (!xLabelIdx.contains(i)) return const SizedBox.shrink();
+                  final t = monthForAxis == null ? '' : '$monthForAxis/${i + 1}';
+                  return Padding(
+                    padding: EdgeInsets.only(top: compact ? 2 : 4),
+                    child: Text(
+                      t,
+                      style: TextStyle(
+                        color: _kChartAxisDateLabel,
+                        fontSize: compact ? 8 : 10,
+                      ),
+                    ),
+                  );
+                }
                 final nPts = sorted.length;
                 if (nPts == 0) return const SizedBox.shrink();
                 final i = v.round().clamp(0, nPts - 1);

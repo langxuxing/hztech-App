@@ -8,15 +8,18 @@ positions / profit-history / ticker / pending-orders 等通过本模块解析密
 
 定时任务由 main 每 5 分钟调用，写入 SQLite：
 - 现金余额（avail_eq）、权益（total_eq）→ account_snapshots（Account_List）；tradingbots.json → bot_profit_snapshots
+- 管理员「余额同步」可对缺日调用 OKX bills-archive（USDT bal）补全 account_snapshots；权益按最近快照 equity/cash 比例估算
 - 多时点快照经 strategy_efficiency.daily_cash_delta_by_utc_day 汇总为 UTC 自然日现金增量，再算现金收益率%、策略能效
-- OKX 历史仓位 → account_positions_history；各账户初始资金（Initial_capital）、当月 account_month_open
+- OKX 历史仓位 → account_positions_history（SWAP+FUTURES 合并去重，深分页）；
+  再汇总写入 account_daily_close_performance（按 UTC 日平仓净盈亏、权益口径日收益率%、对标合约 TR 的策略能效）
+- 各账户初始资金（Initial_capital）、当月 account_month_open
 """
 from __future__ import annotations
 
 import importlib.util
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -228,6 +231,120 @@ def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None 
         )
 
 
+def backfill_account_snapshots_from_okx_bills(
+    db_module: Any,
+    account_id: str,
+    logger: logging.Logger | None = None,
+    *,
+    days: int = 40,
+) -> tuple[int, str]:
+    """用 OKX ``/api/v5/account/bills-archive`` 的 USDT ``bal`` 补全近期缺日的 ``account_snapshots``（UTC 自然日）。
+
+    仅插入「该日尚无任何快照」的日期；现金取账单余额，权益按补全前最近一条快照的 equity/cash 比例估算
+    （持仓时与 OKX totalEq 可能略有偏差）。
+    """
+    import exchange.okx as okx_mod
+
+    log = logger or logging.getLogger(__name__)
+    aid = str(account_id or "").strip()
+    if not aid:
+        return 0, "缺少 account_id"
+    path = resolve_okx_config_path(aid)
+    if not path or not path.is_file():
+        return 0, "无密钥"
+
+    nd = max(7, min(92, int(days)))
+    now = datetime.now(timezone.utc)
+    end_d = now.date()
+    start_d = end_d - timedelta(days=nd - 1)
+    begin_ms = int(
+        datetime(
+            start_d.year, start_d.month, start_d.day, tzinfo=timezone.utc
+        ).timestamp()
+        * 1000
+    )
+    end_ms = int(now.timestamp() * 1000)
+
+    rows, err = okx_mod.okx_fetch_account_bills_archive_usdt(
+        path, begin_ms=begin_ms, end_ms=end_ms
+    )
+    if err and not rows:
+        return 0, err or "bills-archive 无数据"
+    if err:
+        log.warning("bills-archive: %s %s", _fmt_log_account_id(aid), err)
+
+    by_day: dict = {}
+    for r in rows:
+        if (r.get("ccy") or "").upper() != "USDT":
+            continue
+        try:
+            ts_i = int(float(r.get("ts") or 0))
+            bal_f = float(r.get("bal") or 0)
+        except (TypeError, ValueError):
+            continue
+        if ts_i <= 0:
+            continue
+        bd = datetime.fromtimestamp(ts_i / 1000.0, tz=timezone.utc).date()
+        prev = by_day.get(bd)
+        if prev is None or ts_i >= prev[0]:
+            by_day[bd] = (ts_i, bal_f)
+
+    filled_bal: dict = {}
+    carry = None
+    walk = start_d
+    while walk <= end_d:
+        if walk in by_day:
+            carry = by_day[walk][1]
+        if carry is not None:
+            filled_bal[walk] = carry
+        walk = walk + timedelta(days=1)
+
+    if not filled_bal:
+        return 0, "账单区间内无 USDT 余额记录"
+
+    meta = db_module.account_meta_get(aid)
+    initial = float(meta["initial_capital"]) if meta else 0.0
+    if initial <= 0:
+        for row in iter_okx_accounts(enabled_only=False):
+            if str(row.get("account_id") or "").strip() == aid:
+                initial = _initial_capital(row)
+                break
+
+    inserted = 0
+    cur_d = start_d
+    while cur_d <= end_d:
+        day_s = cur_d.isoformat()
+        if db_module.account_snapshot_exists_on_utc_date(aid, day_s):
+            cur_d = cur_d + timedelta(days=1)
+            continue
+        if cur_d not in filled_bal:
+            cur_d = cur_d + timedelta(days=1)
+            continue
+        cash_b = float(filled_bal[cur_d])
+        cutoff = f"{day_s}T23:59:58.000000Z"
+        prev = db_module.account_snapshot_last_before_instant(aid, cutoff)
+        cash_prev = float(prev["cash_balance"]) if prev else 0.0
+        eq_prev = float(prev["equity_usdt"]) if prev else 0.0
+        ratio = (eq_prev / cash_prev) if cash_prev > 1e-12 else 1.0
+        equity = cash_b * ratio
+        profit_amount = equity - initial
+        profit_percent = (profit_amount / initial * 100.0) if initial else 0.0
+        snap_at = f"{day_s}T23:59:59.000000Z"
+        db_module.account_snapshot_insert(
+            account_id=aid,
+            snapshot_at=snap_at,
+            cash_balance=cash_b,
+            equity_usdt=equity,
+            initial_capital=initial,
+            profit_amount=profit_amount,
+            profit_percent=profit_percent,
+        )
+        inserted += 1
+        cur_d = cur_d + timedelta(days=1)
+
+    return inserted, f"插入 {inserted} 条缺日快照"
+
+
 def refresh_balance_snapshot_one(
     db_module: Any, account_id: str, logger: logging.Logger | None = None
 ) -> tuple[bool, str]:
@@ -284,6 +401,19 @@ def refresh_balance_snapshot_one(
         int(round(total_eq)),
         int(round(cash)),
     )
+    try:
+        n_b, _bf = backfill_account_snapshots_from_okx_bills(
+            db_module, aid, log, days=40
+        )
+    except Exception as e:
+        log.warning(
+            "balance_snapshot_bills_backfill_failed: %s %s",
+            _fmt_log_account_id(aid),
+            e,
+        )
+        n_b = 0
+    if n_b > 0:
+        return True, f"已写入 account_snapshots；OKX 账单已补全 {n_b} 个缺日"
     return True, "已写入 account_snapshots"
 
 
@@ -395,18 +525,29 @@ def refresh_tradingbot_balance_snapshot_one(
     return True, "已写入 bot_profit_snapshots"
 
 
+def _account_benchmark_inst_map() -> dict[str, str]:
+    """account_id → Account_List.symbol（作 market_daily_bars 对标 TR），空则用库表重建时的默认值。"""
+    return {
+        str(b["account_id"] or "").strip(): (b.get("symbol") or "").strip()
+        for b in list_account_basics(enabled_only=False)
+        if str(b.get("account_id") or "").strip()
+    }
+
+
 def refresh_all_positions_history(
     db_module: Any, logger: logging.Logger | None = None
 ) -> None:
     """
-    拉取各 OKX 账户 positions-history（默认 SWAP，多页）并写入 account_positions_history。
+    拉取 Account_List 中全部 OKX 账户（含 enbaled=false）的 positions-history：
+    SWAP + FUTURES 合并去重、深分页写入 account_positions_history；
+    最后按账户重算 account_daily_close_performance。
     与 refresh_all_snapshots 同周期调用即可（建议每 5 分钟）。
     """
     log = logger or logging.getLogger(__name__)
     import exchange.okx as okx_mod
 
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    for row in iter_okx_accounts(enabled_only=True):
+    for row in iter_okx_accounts(enabled_only=False):
 
         aid = str(row.get("account_id") or "").strip()
         path = resolve_okx_config_path(aid)
@@ -417,7 +558,7 @@ def refresh_all_positions_history(
             )
             continue
 
-        hist, err = okx_mod.okx_fetch_positions_history(config_path=path)
+        hist, err = okx_mod.okx_fetch_positions_history_contracts(config_path=path)
         if err:
             db_module.log_insert(
                 "WARN",
@@ -436,6 +577,24 @@ def refresh_all_positions_history(
             n,
         )
 
+    try:
+        all_ids = [
+            str(b["account_id"] or "").strip()
+            for b in list_account_basics(enabled_only=False)
+            if str(b.get("account_id") or "").strip()
+        ]
+        db_module.account_daily_close_performance_rebuild_for_accounts(
+            all_ids, _account_benchmark_inst_map()
+        )
+    except Exception as ex:
+        log.warning("account_daily_close_performance 重建失败: %s", ex)
+        db_module.log_insert(
+            "WARN",
+            "account_daily_close_performance_rebuild_failed",
+            source="account_mgr",
+            extra={"error": str(ex)},
+        )
+
 
 def refresh_positions_history_one(
     db_module: Any, account_id: str, logger: logging.Logger | None = None
@@ -451,7 +610,7 @@ def refresh_positions_history_one(
     if not path:
         return False, "未找到密钥配置"
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    hist, err = okx_mod.okx_fetch_positions_history(config_path=path)
+    hist, err = okx_mod.okx_fetch_positions_history_contracts(config_path=path)
     if err:
         db_module.log_insert(
             "WARN",
@@ -461,6 +620,12 @@ def refresh_positions_history_one(
         )
         return False, err
     if not hist:
+        try:
+            db_module.account_daily_close_performance_rebuild_for_accounts(
+                [aid], _account_benchmark_inst_map()
+            )
+        except Exception:
+            pass
         return True, "无新历史仓位数据"
     n = db_module.account_positions_history_insert_batch(aid, hist, ts)
     log.info(
@@ -469,6 +634,12 @@ def refresh_positions_history_one(
         len(hist),
         n,
     )
+    try:
+        db_module.account_daily_close_performance_rebuild_for_accounts(
+            [aid], _account_benchmark_inst_map()
+        )
+    except Exception as ex:
+        log.warning("account_daily_close_performance 单账户重建失败 %s: %s", aid, ex)
     return True, f"已写入 {n} 条新记录"
 
 

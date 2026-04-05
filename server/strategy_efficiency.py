@@ -211,6 +211,17 @@ def month_start_cash_by_month_from_snapshots(
     return out
 
 
+def close_pnl_efficiency_ratio(net_realized_usdt: float, market_tr: float) -> float | None:
+    """
+    与 merge_daily_efficiency_rows 中策略能效同一量纲：
+    平仓净盈亏(USDT) ÷ (标的日线真实波幅 TR × 1e9)。TR≤0 时返回 None。
+    """
+    tr = float(market_tr or 0.0)
+    if tr <= 1e-18:
+        return None
+    return float(net_realized_usdt) / (tr * 1e9)
+
+
 def merge_daily_efficiency_rows(
     market_bars: list[dict[str, Any]],
     cash_by_day: dict[str, dict[str, float]],

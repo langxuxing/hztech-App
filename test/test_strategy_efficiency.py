@@ -35,6 +35,12 @@ def test_daily_cash_delta_negative_clamped_to_zero():
     assert by["2026-04-01"]["cash_delta_usdt"] == 0.0
 
 
+def test_close_pnl_efficiency_ratio():
+    assert se.close_pnl_efficiency_ratio(10.0, 0.2) is not None
+    assert abs(se.close_pnl_efficiency_ratio(10.0, 0.2) - 5e-8) < 1e-15
+    assert se.close_pnl_efficiency_ratio(10.0, 0.0) is None
+
+
 def test_merge_efficiency_ratio():
     bars = [
         {

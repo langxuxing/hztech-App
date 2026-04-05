@@ -1,16 +1,8 @@
 /// 界面展示用：金额/数量等为整数；百分比单独 [formatUiPercentLabel] 一位小数。
 
 String _digitsWithGrouping(int n) {
-  final neg = n < 0;
-  final s = (neg ? -n : n).toString();
-  final buf = StringBuffer();
-  if (neg) buf.write('-');
-  final len = s.length;
-  for (var i = 0; i < len; i++) {
-    if (i > 0 && (len - i) % 3 == 0) buf.write(',');
-    buf.write(s[i]);
-  }
-  return buf.toString();
+  // 不带千分号，直接返回字符串
+  return n.toString();
 }
 
 String formatUiInteger(double v) {

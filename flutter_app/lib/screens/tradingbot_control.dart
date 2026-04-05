@@ -95,32 +95,36 @@ class _TradingBotControlState extends State<TradingBotControl> {
 
   String _fmt(double v) => formatUiInteger(v);
 
-  void _onTapButton(UnifiedTradingBot bot) {
+  /// 与 Web 端一致：停止前二次确认。
+  void _onTapStop(UnifiedTradingBot bot) {
     final running = bot.status == 'running' || bot.isRunning == true;
-    if (running) {
-      showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('确认停止'),
-          content: const Text('确定要停止该账户策略吗？此操作将终止当前运行，请确认以防误操作。'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              style: FilledButton.styleFrom(backgroundColor: Colors.red),
-              onPressed: () {
-                Navigator.pop(ctx);
-                _doStop(bot);
-              },
-              child: const Text('确定停止'),
-            ),
-          ],
-        ),
-      );
-      return;
-    }
+    if (!running) return;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('确认停止'),
+        content: const Text('确定要停止该账户策略吗？此操作将终止当前运行，请确认以防误操作。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () {
+              Navigator.pop(ctx);
+              _doStop(bot);
+            },
+            child: const Text('确定停止'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _onTapStart(UnifiedTradingBot bot) {
+    final running = bot.status == 'running' || bot.isRunning == true;
+    if (running) return;
     _doStart(bot);
   }
 
@@ -354,7 +358,7 @@ class _TradingBotControlState extends State<TradingBotControl> {
                                           ),
                                         ),
                                         if (bot.canControl)
-                                          _buildActionButton(bot),
+                                          _buildStrategyStartStopRow(bot),
                                       ],
                                     ),
                                     if (account != null) ...[
@@ -479,34 +483,78 @@ class _TradingBotControlState extends State<TradingBotControl> {
     );
   }
 
-  Widget _buildActionButton(UnifiedTradingBot bot) {
+  /// 与 [WebTradingBotControlScreen] 机器人区一致：独立「启动」「停止」两键；进行中两键均显示加载且不可点。
+  Widget _buildStrategyStartStopRow(UnifiedTradingBot bot) {
     final running = bot.status == 'running' || bot.isRunning == true;
-    final isLoading = _loadingBotId == bot.tradingbotId;
+    final busy = _loadingBotId == bot.tradingbotId;
+    const size = 48.0;
+    const iconSize = 26.0;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _strategyCircleAction(
+          size: size,
+          iconSize: iconSize,
+          accent: Colors.green,
+          icon: Icons.play_circle_outline,
+          busy: busy,
+          enabled: !busy && !running,
+          onTap: () => _onTapStart(bot),
+        ),
+        const SizedBox(width: 12),
+        _strategyCircleAction(
+          size: size,
+          iconSize: iconSize,
+          accent: Colors.red,
+          icon: Icons.stop_circle_outlined,
+          busy: busy,
+          enabled: !busy && running,
+          onTap: () => _onTapStop(bot),
+        ),
+      ],
+    );
+  }
+
+  Widget _strategyCircleAction({
+    required double size,
+    required double iconSize,
+    required Color accent,
+    required IconData icon,
+    required bool busy,
+    required bool enabled,
+    required VoidCallback onTap,
+  }) {
+    final canTap = enabled && !busy;
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: isLoading ? null : () => _onTapButton(bot),
-        borderRadius: BorderRadius.circular(33),
+        onTap: canTap ? onTap : null,
+        borderRadius: BorderRadius.circular(size),
         child: Container(
-          width: 56,
-          height: 56,
+          width: size,
+          height: size,
+          alignment: Alignment.center,
           decoration: BoxDecoration(
-            color: isLoading
-                ? Colors.grey.withValues(alpha: 0.2)
-                : (running
-                    ? Colors.red.withValues(alpha: 0.2)
-                    : Colors.green.withValues(alpha: 0.2)),
             shape: BoxShape.circle,
+            border: Border.all(
+              color: accent.withValues(alpha: canTap ? 0.55 : 0.2),
+              width: 1.5,
+            ),
+            color: accent.withValues(alpha: canTap ? 0.12 : 0.04),
           ),
-          child: isLoading
-              ? const Padding(
-                  padding: EdgeInsets.all(12),
-                  child: CircularProgressIndicator(strokeWidth: 2),
+          child: busy
+              ? SizedBox(
+                  width: iconSize,
+                  height: iconSize,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: accent.withValues(alpha: 0.85),
+                  ),
                 )
               : Icon(
-                  running ? Icons.stop_rounded : Icons.play_arrow_rounded,
-                  color: running ? Colors.red : Colors.green,
-                  size: 36,
+                  icon,
+                  size: iconSize,
+                  color: canTap ? accent : accent.withValues(alpha: 0.35),
                 ),
         ),
       ),

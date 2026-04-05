@@ -11,6 +11,71 @@ import '../../utils/number_display_format.dart';
 import '../../widgets/strategy_efficiency_lightweight_chart.dart';
 import '../../widgets/water_background.dart';
 
+enum _EffBarHatchPattern { diagonal, grid }
+
+class _EffBarPatternLegendPainter extends CustomPainter {
+  const _EffBarPatternLegendPainter({
+    required this.pattern,
+    required this.baseColor,
+  });
+
+  final _EffBarHatchPattern pattern;
+  final Color baseColor;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final r = RRect.fromRectAndRadius(
+      Offset.zero & size,
+      const Radius.circular(2),
+    );
+    canvas.drawRRect(r, Paint()..color = baseColor);
+    canvas.save();
+    canvas.clipRRect(r);
+    final w = size.width;
+    final h = size.height;
+    if (pattern == _EffBarHatchPattern.grid) {
+      final g1 = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = Colors.white.withValues(alpha: 0.4);
+      final g2 = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = Colors.black.withValues(alpha: 0.22);
+      for (var g = 0.0; g <= w; g += w / 3) {
+        canvas.drawLine(Offset(0, g), Offset(w, g), g1);
+        canvas.drawLine(Offset(g, 0), Offset(g, h), g1);
+      }
+      final border = RRect.fromRectAndRadius(
+        Rect.fromLTWH(0.5, 0.5, w - 1, h - 1),
+        const Radius.circular(1.5),
+      );
+      canvas.drawRRect(border, g2);
+    } else {
+      final d1 = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = Colors.black.withValues(alpha: 0.22);
+      final d2 = Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1
+        ..color = Colors.white.withValues(alpha: 0.14);
+      for (var o = -w; o <= w; o += 4.0) {
+        canvas.drawLine(Offset(o, 0), Offset(o + w, h), d1);
+      }
+      for (var o = -h; o <= w; o += 4.0) {
+        canvas.drawLine(Offset(o, h), Offset(o + w, 0), d2);
+      }
+    }
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant _EffBarPatternLegendPainter oldDelegate) {
+    return oldDelegate.pattern != pattern || oldDelegate.baseColor != baseColor;
+  }
+}
+
 /// Web：策略效能——每日波动率、现金收益率%（较 UTC 月初）、策略能效，全账户同页对比（日线波动全站共用缓存）。
 class WebStrategyPerformanceScreen extends StatefulWidget {
   const WebStrategyPerformanceScreen({super.key, this.sharedBots = const []});
@@ -86,6 +151,21 @@ class _WebStrategyPerformanceScreenState
   bool _loading = true;
   String? _loadError;
 
+  /// 与后端 `strategy-daily-efficiency` 默认一致：约最近一个月（31 天），按日一条。
+  static const int _efficiencyDays = 31;
+
+  /// 按 UTC 日期升序后仅保留末尾 [maxDays] 条，保证图表/表格与「最近一月」窗口一致。
+  static List<StrategyDailyEfficiencyRow> _limitRowsToRecentDays(
+    List<StrategyDailyEfficiencyRow> rows,
+    int maxDays,
+  ) {
+    if (rows.isEmpty) return [];
+    final copy = List<StrategyDailyEfficiencyRow>.from(rows)
+      ..sort((a, b) => a.day.compareTo(b.day));
+    if (copy.length <= maxDays) return copy;
+    return copy.sublist(copy.length - maxDays);
+  }
+
   static const Color _bandGray = Color(0xFF6B7280);
   static const Color _bandGreen = Color(0xFF4ADE80);
   static const Color _bandDarkGreen = Color(0xFF166534);
@@ -122,7 +202,10 @@ class _WebStrategyPerformanceScreenState
       final loaded = await Future.wait(
         _bots.map((b) async {
           try {
-            final r = await api.getStrategyDailyEfficiency(b.tradingbotId);
+            final r = await api.getStrategyDailyEfficiency(
+              b.tradingbotId,
+              days: _efficiencyDays,
+            );
             return _BotEfficiencyBundle.fromLoad(b, r, null);
           } catch (e) {
             return _BotEfficiencyBundle.fromLoad(b, null, e.toString());
@@ -262,6 +345,35 @@ class _WebStrategyPerformanceScreenState
     );
   }
 
+  /// 与 Lightweight Charts 内柱形图纹一致：波动率斜纹、现金收益率网格。
+  static Widget _chartBarPatternLegendRow(
+    BuildContext context, {
+    required _EffBarHatchPattern pattern,
+    required Color baseColor,
+    required String label,
+  }) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 22,
+          height: 14,
+          child: CustomPaint(
+            painter: _EffBarPatternLegendPainter(
+              pattern: pattern,
+              baseColor: baseColor,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          label,
+          style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 12),
+        ),
+      ],
+    );
+  }
+
   Widget _buildBandLegend(BuildContext context) {
     return Wrap(
       spacing: 20,
@@ -317,7 +429,7 @@ class _WebStrategyPerformanceScreenState
         .toList();
     if (forChart.isEmpty) {
       return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12),
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
         child: Text(
           '暂无可对比的能效数据（请检查各账户接口返回）',
           style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 13),
@@ -330,10 +442,13 @@ class _WebStrategyPerformanceScreenState
         daySet.add(r.day);
       }
     }
-    final allDays = daySet.toList()..sort();
+    var allDays = daySet.toList()..sort();
+    if (allDays.length > _efficiencyDays) {
+      allDays = allDays.sublist(allDays.length - _efficiencyDays);
+    }
     if (allDays.isEmpty) {
       return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12),
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
         child: Text(
           '暂无按日能效点',
           style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 13),
@@ -379,7 +494,7 @@ class _WebStrategyPerformanceScreenState
     }
     if (lineBars.isEmpty) {
       return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12),
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
         child: Text(
           '各账户有效能效点不足（至少需要 2 个交易日连成线）',
           style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 13),
@@ -397,7 +512,7 @@ class _WebStrategyPerformanceScreenState
     final chartMaxY = hi + pad;
     if (chartMinY == chartMaxY) {
       return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12),
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 12),
         child: Text(
           '能效 Y 轴范围无效',
           style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 13),
@@ -405,7 +520,9 @@ class _WebStrategyPerformanceScreenState
       );
     }
 
-    final labelStep = (allDays.length / 6).ceil().clamp(1, allDays.length);
+    final labelStep = allDays.length <= 31
+        ? 1
+        : (allDays.length / 6).ceil().clamp(1, allDays.length);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -444,108 +561,111 @@ class _WebStrategyPerformanceScreenState
           ),
         ),
         const SizedBox(height: 10),
-        SizedBox(
-          width: double.infinity,
-          height: 280,
-          child: LineChart(
-            LineChartData(
-              minX: 0,
-              maxX: (allDays.length - 1).toDouble(),
-              minY: chartMinY,
-              maxY: chartMaxY,
-              gridData: FlGridData(
-                show: true,
-                drawVerticalLine: false,
-                getDrawingHorizontalLine: (v) => FlLine(
-                  color: Colors.white.withValues(alpha: 0.06),
-                  strokeWidth: 1,
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: SizedBox(
+            width: double.infinity,
+            height: 280,
+            child: LineChart(
+              LineChartData(
+                minX: 0,
+                maxX: (allDays.length - 1).toDouble(),
+                minY: chartMinY,
+                maxY: chartMaxY,
+                gridData: FlGridData(
+                  show: true,
+                  drawVerticalLine: false,
+                  getDrawingHorizontalLine: (v) => FlLine(
+                    color: Colors.white.withValues(alpha: 0.06),
+                    strokeWidth: 1,
+                  ),
                 ),
-              ),
-              borderData: FlBorderData(show: false),
-              titlesData: FlTitlesData(
-                show: true,
-                topTitles: const AxisTitles(
-                  sideTitles: SideTitles(showTitles: false),
-                ),
-                rightTitles: const AxisTitles(
-                  sideTitles: SideTitles(showTitles: false),
-                ),
-                leftTitles: AxisTitles(
-                  sideTitles: SideTitles(
-                    showTitles: true,
-                    reservedSize: 52,
-                    getTitlesWidget: (v, m) => Text(
-                      _fmtAxisEfficiency(v),
-                      style: TextStyle(
-                        color: AppFinanceStyle.labelColor.withValues(
-                          alpha: 0.85,
+                borderData: FlBorderData(show: false),
+                titlesData: FlTitlesData(
+                  show: true,
+                  topTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  rightTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  leftTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 52,
+                      getTitlesWidget: (v, m) => Text(
+                        _fmtAxisEfficiency(v),
+                        style: TextStyle(
+                          color: AppFinanceStyle.labelColor.withValues(
+                            alpha: 0.85,
+                          ),
+                          fontSize: 9,
                         ),
-                        fontSize: 9,
                       ),
                     ),
                   ),
-                ),
-                bottomTitles: AxisTitles(
-                  sideTitles: SideTitles(
-                    showTitles: true,
-                    reservedSize: 28,
-                    interval: labelStep.toDouble(),
-                    getTitlesWidget: (v, m) {
-                      final i = v.round();
-                      if (i < 0 || i >= allDays.length) {
-                        return const SizedBox.shrink();
-                      }
-                      final d = allDays[i];
-                      final short = d.length >= 10 ? d.substring(5) : d;
-                      return Padding(
-                        padding: const EdgeInsets.only(top: 6),
-                        child: Text(
-                          short,
-                          style: TextStyle(
-                            color: AppFinanceStyle.labelColor.withValues(
-                              alpha: 0.85,
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 28,
+                      interval: labelStep.toDouble(),
+                      getTitlesWidget: (v, m) {
+                        final i = v.round();
+                        if (i < 0 || i >= allDays.length) {
+                          return const SizedBox.shrink();
+                        }
+                        final d = allDays[i];
+                        final short = d.length >= 10 ? d.substring(5) : d;
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 6),
+                          child: Text(
+                            short,
+                            style: TextStyle(
+                              color: AppFinanceStyle.labelColor.withValues(
+                                alpha: 0.85,
+                              ),
+                              fontSize: 9,
                             ),
-                            fontSize: 9,
                           ),
-                        ),
-                      );
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                lineTouchData: LineTouchData(
+                  enabled: true,
+                  touchTooltipData: LineTouchTooltipData(
+                    getTooltipColor: (_) =>
+                        AppFinanceStyle.cardBackground.withValues(alpha: 0.95),
+                    tooltipPadding: const EdgeInsets.all(10),
+                    getTooltipItems: (touchedSpots) {
+                      return touchedSpots
+                          .map((s) {
+                            final bar = s.barIndex;
+                            if (bar < 0 || bar >= plottedBundles.length) {
+                              return null;
+                            }
+                            final xi = s.x.round().clamp(0, allDays.length - 1);
+                            final day = allDays[xi];
+                            final name =
+                                plottedBundles[bar].bot.tradingbotName ??
+                                plottedBundles[bar].bot.tradingbotId;
+                            return LineTooltipItem(
+                              '$name · $day\n策略能效 ${_fmtAxisEfficiency(s.y)}',
+                              TextStyle(
+                                color: AppFinanceStyle.valueColor,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            );
+                          })
+                          .whereType<LineTooltipItem>()
+                          .toList();
                     },
                   ),
                 ),
+                lineBarsData: lineBars,
               ),
-              lineTouchData: LineTouchData(
-                enabled: true,
-                touchTooltipData: LineTouchTooltipData(
-                  getTooltipColor: (_) =>
-                      AppFinanceStyle.cardBackground.withValues(alpha: 0.95),
-                  tooltipPadding: const EdgeInsets.all(10),
-                  getTooltipItems: (touchedSpots) {
-                    return touchedSpots
-                        .map((s) {
-                          final bar = s.barIndex;
-                          if (bar < 0 || bar >= plottedBundles.length) {
-                            return null;
-                          }
-                          final xi = s.x.round().clamp(0, allDays.length - 1);
-                          final day = allDays[xi];
-                          final name =
-                              plottedBundles[bar].bot.tradingbotName ??
-                              plottedBundles[bar].bot.tradingbotId;
-                          return LineTooltipItem(
-                            '$name · $day\n策略能效 ${_fmtAxisEfficiency(s.y)}',
-                            TextStyle(
-                              color: AppFinanceStyle.valueColor,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          );
-                        })
-                        .whereType<LineTooltipItem>()
-                        .toList();
-                  },
-                ),
-              ),
-              lineBarsData: lineBars,
             ),
           ),
         ),
@@ -804,7 +924,7 @@ class _WebStrategyPerformanceScreenState
         ),
       );
     }
-    final rows = eff.rows.take(90).toList();
+    final rows = _limitRowsToRecentDays(eff.rows, _efficiencyDays);
     final cashNote = switch (eff.cashBasis) {
       'account_snapshots_cash' => '现金变动来自（availEq），按自然日汇总。',
       'bot_profit_equity' => '日权益变动来自（equity），与收益曲线同源；按自然日汇总。',
@@ -872,7 +992,7 @@ class _WebStrategyPerformanceScreenState
                   indicatorColor: AppFinanceStyle.profitGreenEnd,
                   indicatorSize: TabBarIndicatorSize.label,
                   tabs: const [
-                    Tab(text: '曲线'),
+                    Tab(text: '按日图表'),
                     Tab(text: '数据'),
                   ],
                 ),
@@ -890,20 +1010,24 @@ class _WebStrategyPerformanceScreenState
                             runSpacing: 6,
                             crossAxisAlignment: WrapCrossAlignment.center,
                             children: [
-                              _chartLegendRow(
+                              _chartBarPatternLegendRow(
                                 context,
-                                const Color.fromRGBO(245, 245, 245, 0.9),
-                                '每日波动率%（白/黄/红：<6% / 6–10% / >10%）',
+                                pattern: _EffBarHatchPattern.diagonal,
+                                baseColor: const Color.fromRGBO(245, 245, 245, 0.58),
+                                label:
+                                    '每日波动率%（上半轴柱，斜纹；着色：白/黄/红 <6% / 6–10% / >10%）',
                               ),
-                              _chartLegendRow(
+                              _chartBarPatternLegendRow(
                                 context,
-                                const Color.fromRGBO(126, 200, 80, 0.88),
-                                '现金收益率%（<0.5%灰 / 0.5–1%白 / ≥1%绿）',
+                                pattern: _EffBarHatchPattern.grid,
+                                baseColor: const Color.fromRGBO(34, 197, 94, 0.62),
+                                label:
+                                    '现金收益率%（下半轴柱，网格底纹；着色：灰/白/绿 <0.5% / 0.5–1% / ≥1%）',
                               ),
                               _chartLegendRow(
                                 context,
                                 const Color(0xFF6B7280),
-                                '策略能效（灰/绿/深绿：<0.25 / 0.25–0.5 / ≥0.5）',
+                                '策略能效折线（右轴；灰/绿/深绿：<0.25 / 0.25–0.5 / ≥0.5）',
                                 isLine: true,
                               ),
                             ],
@@ -1030,7 +1154,7 @@ class _WebStrategyPerformanceScreenState
                 )
               else ...[
                 SliverPadding(
-                  padding: const EdgeInsets.only(top: 16),
+                  padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
                   sliver: SliverToBoxAdapter(
                     child: FinanceCard(
                       padding: EdgeInsets.zero,
@@ -1051,7 +1175,8 @@ class _WebStrategyPerformanceScreenState
                           Padding(
                             padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
                             child: Text(
-                              '按时间对比各账户「策略能效」（当日现金增量 ÷ (价格波幅×1e9)）。'
+                              '默认展示最近约一个月（31 天、按 UTC 自然日）各账户「策略能效」'
+                              '（当日现金增量 ÷ (价格波幅×1e9)）。'
                               '折线持续走弱，需要交易员人工干预。',
                               style: AppFinanceStyle.labelTextStyle(
                                 context,

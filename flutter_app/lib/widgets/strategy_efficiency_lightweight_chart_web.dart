@@ -11,8 +11,7 @@ import 'package:web/web.dart';
 import '../api/models.dart';
 
 /// Web：使用 TradingView [Lightweight Charts](https://www.tradingview.com/lightweight-charts/) 展示策略能效。
-/// 每日波动率% 柱：低于 6% 白、6%–10% 黄、高于 10% 红。
-/// 现金收益率% 柱：&lt;0.5% 灰、0.5%–1% 白、≥1% 绿（无现金收益率折线）。
+/// 按日柱：每日波动率%（左上半轴，斜线底纹）分档着色；现金收益率%（左下半轴，网格底纹）分档着色。
 /// 策略能效折线（右轴）：&lt;0.25 灰、0.25–0.5 绿、≥0.5 深绿。
 class StrategyEfficiencyLightweightChart extends StatefulWidget {
   const StrategyEfficiencyLightweightChart({
@@ -107,11 +106,71 @@ html,body{margin:0;padding:0;height:100%;background:#141419;overflow:hidden;}
       vertLines: { color: 'rgba(42,42,53,0.55)' },
       horzLines: { color: 'rgba(42,42,53,0.55)' },
     },
-    rightPriceScale: { borderColor: '#2a2a35' },
+    rightPriceScale: { borderColor: '#2a2a35', scaleMargins: { top: 0.05, bottom: 0.05 } },
     leftPriceScale: { visible: true, borderColor: '#2a2a35' },
-    timeScale: { borderColor: '#2a2a35', timeVisible: true, secondsVisible: false },
+    timeScale: {
+      borderColor: '#2a2a35',
+      timeVisible: true,
+      secondsVisible: false,
+      fixLeftEdge: true,
+      fixRightEdge: true,
+      barSpacing: 10,
+      minBarSpacing: 4,
+    },
     crosshair: { vertLine: { color: '#555' }, horzLine: { color: '#555' } },
   });
+  var patternCache = {};
+  function barPattern(kind, baseRgba) {
+    var key = kind + '|' + baseRgba;
+    if (patternCache[key]) return patternCache[key];
+    var sz = kind === 'grid' ? 12 : 10;
+    var p = document.createElement('canvas');
+    p.width = sz;
+    p.height = sz;
+    var x = p.getContext('2d');
+    if (!x) return baseRgba;
+    x.fillStyle = baseRgba;
+    x.fillRect(0, 0, sz, sz);
+    if (kind === 'grid') {
+      // 现金收益率%：正交网格底纹（与每日波动率%斜纹区分）
+      x.strokeStyle = 'rgba(255,255,255,0.4)';
+      x.lineWidth = 1;
+      for (var g = 0; g <= sz; g += 4) {
+        x.beginPath();
+        x.moveTo(0, g);
+        x.lineTo(sz, g);
+        x.stroke();
+        x.beginPath();
+        x.moveTo(g, 0);
+        x.lineTo(g, sz);
+        x.stroke();
+      }
+      x.strokeStyle = 'rgba(0,0,0,0.22)';
+      x.lineWidth = 1;
+      x.strokeRect(0.5, 0.5, sz - 1, sz - 1);
+    } else {
+      // 每日波动率%：斜线底纹
+      x.strokeStyle = 'rgba(0,0,0,0.24)';
+      x.lineWidth = 1.2;
+      x.beginPath();
+      for (var o = -sz * 2; o <= sz * 2; o += 4) {
+        x.moveTo(o, 0);
+        x.lineTo(o + sz, sz);
+      }
+      x.stroke();
+      x.strokeStyle = 'rgba(255,255,255,0.16)';
+      x.beginPath();
+      for (var o2 = -sz; o2 <= sz * 2; o2 += 4) {
+        x.moveTo(o2, sz);
+        x.lineTo(o2 + sz, 0);
+      }
+      x.stroke();
+    }
+    var probe = document.createElement('canvas').getContext('2d');
+    var pat = probe && probe.createPattern(p, 'repeat');
+    patternCache[key] = pat || baseRgba;
+    return patternCache[key];
+  }
   function trBarColor(tp) {
     if (tp == null || tp !== tp) return 'rgba(160, 160, 176, 0.45)';
     if (tp < 6) return 'rgba(245, 245, 245, 0.58)';
@@ -131,12 +190,20 @@ html,body{margin:0;padding:0;height:100%;background:#141419;overflow:hidden;}
     return 'rgba(22, 101, 52, 0.98)';
   }
   var trH = chart.addHistogramSeries({
-    priceScaleId: 'left',
+    priceScaleId: 'left_tr',
     priceFormat: { type: 'price', precision: 0, minMove: 1 },
+    base: 0,
   });
   var cashH = chart.addHistogramSeries({
-    priceScaleId: 'left',
+    priceScaleId: 'left_cash',
     priceFormat: { type: 'price', precision: 1, minMove: 0.1 },
+    base: 0,
+  });
+  chart.priceScale('left_tr').applyOptions({
+    scaleMargins: { top: 0.04, bottom: 0.52 },
+  });
+  chart.priceScale('left_cash').applyOptions({
+    scaleMargins: { top: 0.52, bottom: 0.06 },
   });
   var cashArr = [];
   var trArr = [];
@@ -145,15 +212,17 @@ html,body{margin:0;padding:0;height:100%;background:#141419;overflow:hidden;}
     if (!d || !d.day) continue;
     var cp = n(d.cashPct);
     var tp = n(d.trPct);
+    var cashBase = cashYieldBarColor(cp);
+    var trBase = trBarColor(tp);
     cashArr.push({
       time: d.day,
       value: cp == null ? 0 : Math.round(cp * 10) / 10,
-      color: cashYieldBarColor(cp),
+      color: barPattern('grid', cashBase),
     });
     trArr.push({
       time: d.day,
       value: tp == null ? 0 : Math.round(tp),
-      color: trBarColor(tp),
+      color: barPattern('diag', trBase),
     });
   }
   trH.setData(trArr);

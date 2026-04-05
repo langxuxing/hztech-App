@@ -5,6 +5,7 @@ import '../../api/models.dart';
 import '../../auth/app_user_role.dart';
 import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
+import '../../utils/beijing_format.dart';
 import '../../widgets/water_background.dart';
 
 /// 已入库的历史平仓（GET /api/tradingbots/{id}/position-history）
@@ -84,21 +85,13 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
   TextStyle get _headerStyle => const TextStyle(
     color: _tableHeaderFg,
     fontWeight: FontWeight.w700,
-    fontSize: 13,
+    fontSize: 12,
   );
 
   TextStyle get _cellStyle =>
-      const TextStyle(color: _tableCellFg, fontSize: 13, height: 1.25);
+      const TextStyle(color: _tableCellFg, fontSize: 12, height: 1.2);
 
-  String _formatUtcMs(String? ms) {
-    if (ms == null || ms.isEmpty) return '—';
-    final v = int.tryParse(ms);
-    if (v == null) return ms;
-    final dt = DateTime.fromMillisecondsSinceEpoch(v, isUtc: true);
-    String two(int x) => x.toString().padLeft(2, '0');
-    return '${dt.year}-${two(dt.month)}-${two(dt.day)} '
-        '${two(dt.hour)}:${two(dt.minute)}:${two(dt.second)} UTC';
-  }
+  String _formatBjMs(String? ms) => formatEpochMsAsBeijing(ms);
 
   String _mgnLabel(String? m) {
     final s = (m ?? '').toLowerCase();
@@ -332,37 +325,49 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
                       color: AppFinanceStyle.profitGreenEnd,
                     ),
                   )
-                : Scrollbar(
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: SingleChildScrollView(
-                        child: Theme(
-                          data: Theme.of(context).copyWith(
-                            dividerColor: _tableBorder,
-                            dataTableTheme: DataTableThemeData(
-                              headingTextStyle: _headerStyle,
-                              dataTextStyle: _cellStyle,
-                              dividerThickness: 1,
-                              horizontalMargin: 12,
-                              columnSpacing: 16,
-                            ),
+                : Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    child: Scrollbar(
+                      child: Align(
+                        alignment: Alignment.topLeft,
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: (MediaQuery.sizeOf(context).width - 32)
+                                .clamp(200.0, 1180.0),
                           ),
-                          child: DataTable(
-                            headingRowColor: WidgetStateProperty.all(
-                              const Color(0xFF252532),
-                            ),
-                            dataRowColor: WidgetStateProperty.resolveWith(
-                              (states) => states.contains(WidgetState.hovered)
-                                  ? const Color(0xFF1A1A22)
-                                  : const Color(0xFF12121a),
-                            ),
-                            border: TableBorder.symmetric(
-                              inside: BorderSide(
-                                color: _tableBorder,
-                                width: 0.5,
-                              ),
-                            ),
-                            columns: [
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: SingleChildScrollView(
+                              child: Theme(
+                                data: Theme.of(context).copyWith(
+                                  dividerColor: _tableBorder,
+                                  dataTableTheme: DataTableThemeData(
+                                    headingTextStyle: _headerStyle,
+                                    dataTextStyle: _cellStyle,
+                                    dividerThickness: 1,
+                                    horizontalMargin: 8,
+                                    columnSpacing: 10,
+                                  ),
+                                ),
+                                child: DataTable(
+                                  headingRowColor: WidgetStateProperty.all(
+                                    const Color(0xFF252532),
+                                  ),
+                                  dataRowColor:
+                                      WidgetStateProperty.resolveWith(
+                                    (states) => states.contains(
+                                          WidgetState.hovered,
+                                        )
+                                        ? const Color(0xFF1A1A22)
+                                        : const Color(0xFF12121a),
+                                  ),
+                                  border: TableBorder.symmetric(
+                                    inside: BorderSide(
+                                      color: _tableBorder,
+                                      width: 0.5,
+                                    ),
+                                  ),
+                                  columns: [
                               DataColumn(label: _headerCell('标的')),
                               DataColumn(label: _headerCell('合约')),
                               DataColumn(label: _headerCell('方向')),
@@ -376,45 +381,52 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
                               DataColumn(label: _headerCell('盈亏%')),
                               DataColumn(label: _headerCell('手续费')),
                               DataColumn(label: _headerCell('资金费')),
-                              DataColumn(label: _headerCell('开仓时间(UTC)')),
-                              DataColumn(label: _headerCell('更新时间(UTC)')),
-                              DataColumn(label: _headerCell('平仓类型')),
-                            ],
-                            rows: _rows.map((r) {
-                              final pnlRaw = r.realizedPnl ?? r.pnl;
-                              final pnlC = _pnlColor(pnlRaw);
-                              final pnlShow = _fmtOneDecimal(pnlRaw);
-                              return DataRow(
-                                cells: [
-                                  DataCell(_cell(r.instId)),
-                                  DataCell(_cell(r.instType)),
-                                  DataCell(_sideCell(r.posSide)),
-                                  DataCell(_cell(_mgnLabel(r.mgnMode))),
-                                  DataCell(_cell(_fmtLeverInt(r.lever))),
-                                  DataCell(_cell(_fmtPxTimes1e9(r.openAvgPx))),
-                                  DataCell(_cell(_fmtPxTimes1e9(r.closeAvgPx))),
-                                  DataCell(_cell(r.openMaxPos)),
-                                  DataCell(_cell(r.closeTotalPos)),
-                                  DataCell(_cell(pnlShow, color: pnlC)),
-                                  DataCell(_cell(_fmtPnlPercent(r.pnlRatio))),
-                                  DataCell(
-                                    _cell(
-                                      _fmtOneDecimal(r.fee),
-                                      color: _pnlColor(r.fee),
-                                    ),
-                                  ),
-                                  DataCell(
-                                    _cell(
-                                      _fmtOneDecimal(r.fundingFee),
-                                      color: _pnlColor(r.fundingFee),
-                                    ),
-                                  ),
-                                  DataCell(_cell(_formatUtcMs(r.cTimeMs))),
-                                  DataCell(_cell(_formatUtcMs(r.uTimeMs))),
-                                  DataCell(_cell(r.closeType)),
-                                ],
-                              );
-                            }).toList(),
+                              DataColumn(label: _headerCell('开仓(北京)')),
+                              DataColumn(label: _headerCell('更新(北京)')),
+                                    DataColumn(
+                                        label: _headerCell('平仓类型')),
+                                  ],
+                                  rows: _rows.map((r) {
+                                    final pnlRaw = r.realizedPnl ?? r.pnl;
+                                    final pnlC = _pnlColor(pnlRaw);
+                                    final pnlShow = _fmtOneDecimal(pnlRaw);
+                                    return DataRow(
+                                      cells: [
+                                        DataCell(_cell(r.instId)),
+                                        DataCell(_cell(r.instType)),
+                                        DataCell(_sideCell(r.posSide)),
+                                        DataCell(_cell(_mgnLabel(r.mgnMode))),
+                                        DataCell(_cell(_fmtLeverInt(r.lever))),
+                                        DataCell(
+                                            _cell(_fmtPxTimes1e9(r.openAvgPx))),
+                                        DataCell(
+                                            _cell(_fmtPxTimes1e9(r.closeAvgPx))),
+                                        DataCell(_cell(r.openMaxPos)),
+                                        DataCell(_cell(r.closeTotalPos)),
+                                        DataCell(_cell(pnlShow, color: pnlC)),
+                                        DataCell(
+                                            _cell(_fmtPnlPercent(r.pnlRatio))),
+                                        DataCell(
+                                          _cell(
+                                            _fmtOneDecimal(r.fee),
+                                            color: _pnlColor(r.fee),
+                                          ),
+                                        ),
+                                        DataCell(
+                                          _cell(
+                                            _fmtOneDecimal(r.fundingFee),
+                                            color: _pnlColor(r.fundingFee),
+                                          ),
+                                        ),
+                                        DataCell(_cell(_formatBjMs(r.cTimeMs))),
+                                        DataCell(_cell(_formatBjMs(r.uTimeMs))),
+                                        DataCell(_cell(r.closeType)),
+                                      ],
+                                    );
+                                  }).toList(),
+                                ),
+                              ),
+                            ),
                           ),
                         ),
                       ),
