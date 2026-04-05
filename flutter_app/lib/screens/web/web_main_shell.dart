@@ -6,12 +6,12 @@ import '../../auth/app_user_role.dart';
 import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
 import '../settings_screen.dart';
-import '../tradingbot_control.dart';
 import '../user_management_screen.dart';
 import 'download_app_page.dart';
 import 'tradingbot_control_screen.dart';
 import 'web_dashboard_screen.dart';
 import 'web_home_screen.dart';
+import 'web_account_profile_screen.dart';
 import 'web_strategy_performance_screen.dart';
 
 class _NavItem {
@@ -29,8 +29,8 @@ class _NavItem {
 }
 
 /// 浏览器端主导航：侧栏 / 抽屉 + 多 Tab，与移动端 [MainScreen] 分流。
-/// 顺序：主页 → 仪表盘（全局概览）→ 策略启动（交易员/管理员）→ 账户收益与详情（含策略能效）
-/// → 用户管理（管理员）→ 策略启停（仅交易员）→ 下载 → 设置。
+/// 顺序：主页 → 仪表盘 → 账户收益 → 策略能效 → 策略启停（交易员/管理员）
+/// → 用户管理（管理员）→ 下载 → 设置。
 class WebMainShell extends StatefulWidget {
   const WebMainShell({super.key, this.onLogout});
 
@@ -51,7 +51,7 @@ class _WebMainShellState extends State<WebMainShell> {
     final bots = _sharedBots;
     return [
       const _NavItem(
-        title: 'AI+Web3金融动力学',
+        title: '金融动力学',
         icon: Icons.home_outlined,
         selectedIcon: Icons.home,
         page: WebHomeScreen(),
@@ -66,14 +66,21 @@ class _WebMainShellState extends State<WebMainShell> {
 
       if (_role.canViewStrategyPerformance)
         _NavItem(
-          title: '账户收益与详情',
+          title: '账户收益',
           icon: Icons.insights_outlined,
           selectedIcon: Icons.insights,
+          page: WebAccountProfileScreen(sharedBots: bots),
+        ),
+      if (_role.canViewStrategyPerformance)
+        _NavItem(
+          title: '策略能效',
+          icon: Icons.speed_outlined,
+          selectedIcon: Icons.speed,
           page: WebStrategyPerformanceScreen(sharedBots: bots),
         ),
       if (_role.canViewStrategyStart)
         _NavItem(
-          title: '策略启动',
+          title: '策略启停',
           icon: Icons.play_circle_outline,
           selectedIcon: Icons.play_circle,
           page: WebTradingBotControlScreen(sharedBots: bots),

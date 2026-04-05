@@ -19,7 +19,8 @@ class WebTradingBotControlScreen extends StatefulWidget {
       _WebTradingBotControlScreenState();
 }
 
-class _WebTradingBotControlScreenState extends State<WebTradingBotControlScreen> {
+class _WebTradingBotControlScreenState
+    extends State<WebTradingBotControlScreen> {
   final _prefs = SecurePrefs();
   List<AccountProfit> _accounts = [];
   Map<String, List<BotSeason>> _seasonsByBot = {};
@@ -74,14 +75,15 @@ class _WebTradingBotControlScreenState extends State<WebTradingBotControlScreen>
           : Duration.zero;
       return (
         startLine: '本次启动 ${_fmtDateTimeShort(start)}',
-        durationLine:
-            parsed != null ? '已运行 ${_fmtDuration(dur)}' : '已运行 —',
+        durationLine: parsed != null ? '已运行 ${_fmtDuration(dur)}' : '已运行 —',
       );
     }
     final last = seasons.first;
     final start = last.startedAt;
     final stop = last.stoppedAt;
-    final ps = start != null && start.isNotEmpty ? DateTime.tryParse(start) : null;
+    final ps = start != null && start.isNotEmpty
+        ? DateTime.tryParse(start)
+        : null;
     final pe = stop != null && stop.isNotEmpty ? DateTime.tryParse(stop) : null;
     String durationLine = '—';
     if (ps != null && pe != null) {
@@ -108,8 +110,10 @@ class _WebTradingBotControlScreenState extends State<WebTradingBotControlScreen>
       final accounts = profitResp.accounts ?? [];
       final Map<String, List<BotSeason>> seasonsMap = {};
       try {
-        final ids =
-            accounts.map((a) => a.botId).where((id) => id.isNotEmpty).toList();
+        final ids = accounts
+            .map((a) => a.botId)
+            .where((id) => id.isNotEmpty)
+            .toList();
         if (ids.isNotEmpty) {
           final results = await Future.wait(
             ids.map((id) => api.getTradingbotSeasons(id, limit: 30)),
@@ -296,7 +300,8 @@ class _WebTradingBotControlScreenState extends State<WebTradingBotControlScreen>
                       sliver: SliverToBoxAdapter(
                         child: Text(
                           '账户总数（${_accounts.length}）',
-                          style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          style: Theme.of(context).textTheme.titleLarge
+                              ?.copyWith(
                                 color: AppFinanceStyle.valueColor,
                                 fontWeight: FontWeight.w900,
                               ),
@@ -321,9 +326,9 @@ class _WebTradingBotControlScreenState extends State<WebTradingBotControlScreen>
                           final w = MediaQuery.sizeOf(context).width;
                           var cross = 1;
                           if (w >= 1200) {
-                            cross = 3;
+                            cross = 4;
                           } else if (w >= 800) {
-                            cross = 2;
+                            cross = 3;
                           }
                           return SliverGrid(
                             gridDelegate:
@@ -339,8 +344,10 @@ class _WebTradingBotControlScreenState extends State<WebTradingBotControlScreen>
                             ) {
                               final a = _accounts[index];
                               final bot = _botFor(a);
-                              final seasons = _seasonsByBot[a.botId] ?? const [];
-                              final running = bot != null &&
+                              final seasons =
+                                  _seasonsByBot[a.botId] ?? const [];
+                              final running =
+                                  bot != null &&
                                   (bot.status == 'running' ||
                                       bot.isRunning == true);
                               final lines = _seasonLines(seasons, running);
@@ -406,8 +413,8 @@ class _AccountGlassCard extends StatelessWidget {
         (account.exchangeAccount.isNotEmpty
             ? account.exchangeAccount
             : account.botId);
-    final running = bot != null &&
-        (bot!.status == 'running' || bot!.isRunning == true);
+    final running =
+        bot != null && (bot!.status == 'running' || bot!.isRunning == true);
     final bid = bot?.tradingbotId ?? account.botId;
     final busy = loadingBotId == bid;
 
@@ -484,8 +491,8 @@ class _AccountGlassCard extends StatelessWidget {
                       Text(
                         '未配置 Accounts 目录下的启停脚本（script_file）',
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: Theme.of(context).colorScheme.outline,
-                            ),
+                          color: Theme.of(context).colorScheme.outline,
+                        ),
                       ),
                     ],
                     if (bot?.symbol != null && bot!.symbol!.isNotEmpty) ...[
@@ -503,17 +510,17 @@ class _AccountGlassCard extends StatelessWidget {
           const SizedBox(height: 12),
           Text(
             startLine,
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: _cardLabelColor,
-                ),
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: _cardLabelColor),
           ),
           const SizedBox(height: 4),
           Text(
             durationLine,
             style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: AppFinanceStyle.valueColor,
-                  fontWeight: FontWeight.w600,
-                ),
+              color: AppFinanceStyle.valueColor,
+              fontWeight: FontWeight.w600,
+            ),
           ),
           const Spacer(),
           if (busy)

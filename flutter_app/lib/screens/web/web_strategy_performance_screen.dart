@@ -4,11 +4,9 @@ import '../../api/client.dart';
 import '../../api/models.dart';
 import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
-import '../../widgets/profit_percent_line_chart.dart';
 import '../../widgets/water_background.dart';
 
-/// Web：按账户查看收益率曲线、赛季网格与策略日线能效（OKX TR 与现金日变动比值）。
-/// 与 APK [AccountProfitScreen] 中单卡内「赛季盈利」列表式展示区分。
+/// Web：策略日线能效评估（OKX True Range 与账户现金日变动比值），按交易账户切换。
 class WebStrategyPerformanceScreen extends StatefulWidget {
   const WebStrategyPerformanceScreen({super.key, this.sharedBots = const []});
 
@@ -24,12 +22,9 @@ class _WebStrategyPerformanceScreenState
   final _prefs = SecurePrefs();
   List<UnifiedTradingBot> _bots = [];
   String? _selectedId;
-  List<BotProfitSnapshot> _snapshots = [];
-  List<BotSeason> _seasons = [];
   StrategyDailyEfficiencyResponse? _efficiency;
   bool _loading = true;
-  String? _metricsError;
-  String? _efficiencyLoadError;
+  String? _loadError;
 
   Future<void> _loadBots() async {
     if (widget.sharedBots.isNotEmpty) {
@@ -52,65 +47,28 @@ class _WebStrategyPerformanceScreenState
     });
   }
 
-  Future<void> _loadData() async {
+  Future<void> _loadEfficiency() async {
     final botId = _selectedId;
     if (botId == null || botId.isEmpty) return;
     setState(() {
       _loading = true;
-      _metricsError = null;
-      _efficiencyLoadError = null;
+      _loadError = null;
     });
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
       final api = ApiClient(baseUrl, token: token);
-
-      String? mErr;
-      String? eErr;
-      BotProfitHistoryResponse? hResp;
-      TradingbotSeasonsResponse? sResp;
-      StrategyDailyEfficiencyResponse? effResp;
-
-      await Future.wait([
-        (() async {
-          try {
-            final r = await Future.wait([
-              api.getBotProfitHistory(botId, limit: 500),
-              api.getTradingbotSeasons(botId, limit: 50),
-            ]);
-            hResp = r[0] as BotProfitHistoryResponse;
-            sResp = r[1] as TradingbotSeasonsResponse;
-          } catch (e) {
-            mErr = e.toString();
-          }
-        })(),
-        (() async {
-          try {
-            effResp = await api.getStrategyDailyEfficiency(botId);
-          } catch (e) {
-            eErr = e.toString();
-          }
-        })(),
-      ]);
-
+      final effResp = await api.getStrategyDailyEfficiency(botId);
       if (!mounted) return;
       setState(() {
-        if (hResp != null && sResp != null) {
-          _snapshots = hResp!.snapshots;
-          _seasons = sResp!.seasons;
-        } else {
-          _snapshots = [];
-          _seasons = [];
-        }
         _efficiency = effResp;
-        _metricsError = mErr;
-        _efficiencyLoadError = eErr;
         _loading = false;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _metricsError = e.toString();
+        _loadError = e.toString();
+        _efficiency = null;
         _loading = false;
       });
     }
@@ -129,38 +87,16 @@ class _WebStrategyPerformanceScreenState
       setState(() => _loading = false);
       return;
     }
-    await _loadData();
+    await _loadEfficiency();
   }
-
-  String _fmtPct(double v) => '${v.toStringAsFixed(2)}%';
-
-  String _fmt(double v) => v.toStringAsFixed(2);
 
   String _fmtOpt(double? v, {int digits = 2}) {
     if (v == null || !v.isFinite) return '—';
     return v.toStringAsFixed(digits);
   }
 
-  /// 与移动端赛季时间展示一致：月-日 时:分
-  String _formatSeasonTime(String? value) {
-    if (value == null || value.length < 16) return '-';
-    try {
-      final s = value
-          .substring(0, value.length >= 19 ? 19 : value.length)
-          .replaceAll('T', ' ');
-      if (s.length < 16) return '-';
-      final parts = s.split(' ');
-      final dateParts = parts[0].split('-');
-      final timePart = parts.length > 1 ? parts[1].substring(0, 5) : '00:00';
-      if (dateParts.length < 3) return '-';
-      return '${dateParts[1]}-${dateParts[2]} $timePart';
-    } catch (_) {
-      return '-';
-    }
-  }
-
   Widget _buildEfficiencySection(BuildContext context) {
-    if (_efficiencyLoadError != null) {
+    if (_loadError != null) {
       return FinanceCard(
         padding: const EdgeInsets.all(20),
         child: Column(
@@ -175,7 +111,7 @@ class _WebStrategyPerformanceScreenState
             ),
             const SizedBox(height: 8),
             Text(
-              _efficiencyLoadError!,
+              _loadError!,
               style: TextStyle(color: Theme.of(context).colorScheme.error),
             ),
           ],
@@ -227,7 +163,9 @@ class _WebStrategyPerformanceScreenState
           const SizedBox(height: 6),
           Text(
             '${eff.instId} 日线 True Range（OKX 公开 K 线）；比值 = 现金日变动% ÷ TR 占收盘价%。$cashNote',
-            style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 12),
+            style: AppFinanceStyle.labelTextStyle(
+              context,
+            ).copyWith(fontSize: 12),
           ),
           const SizedBox(height: 16),
           SingleChildScrollView(
@@ -281,7 +219,7 @@ class _WebStrategyPerformanceScreenState
         child: RefreshIndicator(
           onRefresh: () async {
             await _loadBots();
-            await _loadData();
+            await _loadEfficiency();
           },
           child: CustomScrollView(
             physics: const AlwaysScrollableScrollPhysics(),
@@ -308,7 +246,9 @@ class _WebStrategyPerformanceScreenState
                                   _selectedId ?? _bots.first.tradingbotId,
                               isExpanded: true,
                               dropdownColor: AppFinanceStyle.cardBackground,
-                              style: const TextStyle(color: AppFinanceStyle.valueColor),
+                              style: const TextStyle(
+                                color: AppFinanceStyle.valueColor,
+                              ),
                               decoration: InputDecoration(
                                 filled: true,
                                 fillColor: Colors.white.withValues(alpha: 0.06),
@@ -330,7 +270,7 @@ class _WebStrategyPerformanceScreenState
                               onChanged: (v) async {
                                 if (v == null) return;
                                 setState(() => _selectedId = v);
-                                await _loadData();
+                                await _loadEfficiency();
                               },
                             ),
                           ),
@@ -339,16 +279,6 @@ class _WebStrategyPerformanceScreenState
                   ),
                 ),
               ),
-              if (_metricsError != null)
-                SliverPadding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24),
-                  sliver: SliverToBoxAdapter(
-                    child: Text(
-                      '收益/赛季：${_metricsError!}',
-                      style: TextStyle(color: Theme.of(context).colorScheme.error),
-                    ),
-                  ),
-                ),
               if (_loading)
                 const SliverFillRemaining(
                   child: Center(child: CircularProgressIndicator()),
@@ -362,208 +292,13 @@ class _WebStrategyPerformanceScreenState
                     ),
                   ),
                 )
-              else ...[
+              else
                 SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
+                  padding: const EdgeInsets.fromLTRB(24, 8, 24, 48),
                   sliver: SliverToBoxAdapter(
-                    child: FinanceCard(
-                      padding: const EdgeInsets.all(20),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            '收益率曲线',
-                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                  color: AppFinanceStyle.labelColor,
-                                  fontWeight: FontWeight.w600,
-                                ),
-                          ),
-                          const SizedBox(height: 12),
-                          SizedBox(
-                            height: 220,
-                            child: ProfitPercentLineChart(snapshots: _snapshots),
-                          ),
-                        ],
-                      ),
-                    ),
+                    child: _buildEfficiencySection(context),
                   ),
                 ),
-                SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
-                  sliver: SliverToBoxAdapter(
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        final maxW = constraints.maxWidth;
-                        const gap = 16.0;
-                        final cols = maxW >= 960
-                            ? 3
-                            : maxW >= 560
-                                ? 2
-                                : 1;
-                        final cardW = cols > 1
-                            ? (maxW - gap * (cols - 1)) / cols
-                            : maxW;
-
-                        Widget seasonCard(BotSeason s, int index) {
-                          final profitColor = (s.profitAmount ?? 0) >= 0
-                              ? AppFinanceStyle.profitGreenEnd
-                              : Colors.red;
-                          return SizedBox(
-                            width: cardW,
-                            child: FinanceCard(
-                              padding: const EdgeInsets.all(18),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: Text(
-                                          '赛季 $index',
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .titleSmall
-                                              ?.copyWith(
-                                                color: AppFinanceStyle.valueColor,
-                                                fontWeight: FontWeight.w700,
-                                              ),
-                                        ),
-                                      ),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 10,
-                                          vertical: 4,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: profitColor.withValues(alpha: 0.12),
-                                          borderRadius: BorderRadius.circular(8),
-                                          border: Border.all(
-                                            color: profitColor.withValues(alpha: 0.35),
-                                          ),
-                                        ),
-                                        child: Text(
-                                          _fmtPct(s.profitPercent ?? 0),
-                                          style: TextStyle(
-                                            color: profitColor,
-                                            fontWeight: FontWeight.w700,
-                                            fontSize: 13,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 10),
-                                  Text(
-                                    '${_formatSeasonTime(s.startedAt)}  →  ${_formatSeasonTime(s.stoppedAt)}',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodySmall
-                                        ?.copyWith(
-                                          color: AppFinanceStyle.labelColor,
-                                        ),
-                                  ),
-                                  const SizedBox(height: 14),
-                                  Text(
-                                    '收益',
-                                    style: AppFinanceStyle.labelTextStyle(context)
-                                        .copyWith(fontSize: 12),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    _fmt(s.profitAmount ?? 0),
-                                    style: TextStyle(
-                                      color: profitColor,
-                                      fontWeight: FontWeight.w800,
-                                      fontSize: 22,
-                                      letterSpacing: -0.3,
-                                    ),
-                                  ),
-                                  if (s.initialBalance > 0 ||
-                                      (s.finalBalance != null && s.finalBalance! > 0)) ...[
-                                    const SizedBox(height: 12),
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            '期初 ${_fmt(s.initialBalance)}',
-                                            style: Theme.of(context)
-                                                .textTheme
-                                                .labelSmall
-                                                ?.copyWith(
-                                                  color: AppFinanceStyle.labelColor,
-                                                ),
-                                          ),
-                                        ),
-                                        if (s.finalBalance != null)
-                                          Text(
-                                            '期末 ${_fmt(s.finalBalance!)}',
-                                            style: Theme.of(context)
-                                                .textTheme
-                                                .labelSmall
-                                                ?.copyWith(
-                                                  color: AppFinanceStyle.labelColor,
-                                                ),
-                                          ),
-                                      ],
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ),
-                          );
-                        }
-
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '赛季',
-                              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                    color: AppFinanceStyle.labelColor,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                            ),
-                            const SizedBox(height: 16),
-                            if (_metricsError != null)
-                              FinanceCard(
-                                padding: const EdgeInsets.all(24),
-                                child: Center(
-                                  child: Text(
-                                    '赛季数据加载失败',
-                                    style: AppFinanceStyle.labelTextStyle(context),
-                                  ),
-                                ),
-                              )
-                            else if (_seasons.isEmpty)
-                              FinanceCard(
-                                padding: const EdgeInsets.all(24),
-                                child: Center(
-                                  child: Text(
-                                    '暂无赛季数据',
-                                    style: AppFinanceStyle.labelTextStyle(context),
-                                  ),
-                                ),
-                              )
-                            else
-                              Wrap(
-                                spacing: gap,
-                                runSpacing: gap,
-                                children: [
-                                  for (final e in _seasons.take(24).toList().asMap().entries)
-                                    seasonCard(e.value, e.key + 1),
-                                ],
-                              ),
-                          ],
-                        );
-                      },
-                    ),
-                  ),
-                ),
-                SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(24, 0, 24, 48),
-                  sliver: SliverToBoxAdapter(child: _buildEfficiencySection(context)),
-                ),
-              ],
             ],
           ),
         ),

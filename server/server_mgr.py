@@ -182,6 +182,9 @@ def _flutter_dart_define_args():
     环境变量（任选其一，优先 HZTECH_API_BASE_URL）：
     - HZTECH_API_BASE_URL：直接传入 --dart-define=API_BASE_URL=...
     - FLUTTER_DART_DEFINE_FILE：相对项目根或绝对路径，传入 --dart-define-from-file
+
+    若均未设置且存在 flutter_app/dart_defines/production.json，则默认使用该文件（Release APK/Web
+    与 AWS 线上 API 一致；与 prefs.dart 中非 Debug 默认基址对齐）。
     """
     args: list[str] = []
     url = os.environ.get("HZTECH_API_BASE_URL", "").strip()
@@ -190,6 +193,9 @@ def _flutter_dart_define_args():
         return args
     f = os.environ.get("FLUTTER_DART_DEFINE_FILE", "").strip()
     if not f:
+        default_file = FLUTTER_APP / "dart_defines" / "production.json"
+        if default_file.is_file():
+            args.extend(["--dart-define-from-file", str(default_file.resolve())])
         return args
     path = Path(f)
     if not path.is_absolute():

@@ -15,12 +15,18 @@ const _keyUnlockedUntil = 'unlocked_until_ms';
 /// 编译期注入后端基址（打包时区分环境）：
 /// `flutter build apk --dart-define=API_BASE_URL=http://192.168.1.10:8080/`
 /// 或 `flutter build apk --dart-define-from-file=dart_defines/local.json`（在 flutter_app 目录下执行时路径为 dart_defines/...）
+///
+/// **与构建模式的关系（未注入 [API_BASE_URL] 时）**
+/// - `flutter build apk --debug` / `flutter run`：`kDebugMode` 为 true，安装后首次默认本机 [ _kDefaultDebugApiBase ]。
+/// - `flutter build apk --release` / `flutter build web`：`kDebugMode` 为 false，默认 AWS [ _kDefaultProductionApiBase ]。
+/// - Profile 构建与 Release 相同，默认走线上。
+/// - `server_mgr.py build` / `build-web` 与 `deploy2AWS.sh` 会为 release 传入 `dart_defines/production.json`，与线上默认一致。
 const String _kCompileTimeApiBase = String.fromEnvironment(
   'API_BASE_URL',
   defaultValue: '',
 );
 
-/// 未使用 [API_BASE_URL] 时的线上默认（与 deploy-aws.json 中 API 主机一致）
+/// 未使用 [API_BASE_URL] 时的线上默认（与 dart_defines/production.json、deploy-aws.json 中 API 主机一致）
 const String _kDefaultProductionApiBase = 'http://54.66.108.150:9000/';
 
 /// 未使用 [API_BASE_URL] 时的本地调试默认（单进程 `run_local.sh` 默认端口 8080）
@@ -70,7 +76,7 @@ String migrateLocalBackendPort9000To8080(String raw) {
 
 /// 安装后首次打开时的默认后端基址（用户可在设置里修改并持久化）。
 ///
-/// 优先级：编译期 `API_BASE_URL` > Debug 用本机 > Release 用线上默认。
+/// 优先级：编译期 `API_BASE_URL` > Debug 构建默认本机 > 非 Debug（Release/Profile）默认 AWS。
 /// 真机连本机请用 `--dart-define=API_BASE_URL=http://<电脑局域网IP>:8080/`；
 /// Android 模拟器连本机可用 `http://10.0.2.2:8080/`。
 String get defaultBackendUrl {

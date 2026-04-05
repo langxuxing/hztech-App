@@ -7,6 +7,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 FLUTTER_APP="$PROJECT_ROOT/flutter_app"
 cd "$FLUTTER_APP"
+# Debug 构建固定注入本机 API（与 prefs 中 Debug 默认一致；真机请改用电脑局域网 IP，见 prefs 注释）
+DART_DEFINES_LOCAL=(--dart-define-from-file=dart_defines/local.json)
 
 # 可选：仅构建 debug APK 不运行（脚本后加 --build-only）
 BUILD_ONLY=""
@@ -21,7 +23,7 @@ echo ""
 
 if [ -n "$BUILD_ONLY" ]; then
   echo "=== 仅构建 debug APK ==="
-  flutter build apk --debug
+  flutter build apk --debug "${DART_DEFINES_LOCAL[@]}"
   APK_PATH="$FLUTTER_APP/build/app/outputs/apk/debug/app-debug.apk"
   if [ -f "$APK_PATH" ]; then
     echo "  输出: $APK_PATH"
@@ -49,4 +51,4 @@ echo "  若未自动弹出，在终端中查找类似："
 echo "    The Flutter DevTools debugger and profiler ... is available at: http://127.0.0.1:xxxxx"
 echo ""
 
-exec flutter run
+exec flutter run "${DART_DEFINES_LOCAL[@]}"

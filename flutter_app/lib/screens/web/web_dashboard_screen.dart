@@ -12,18 +12,21 @@ import 'web_account_profit_screen.dart';
 /// 脚本启停见 [WebTradingBotControlScreen]（导航「策略启动」）。
 class WebDashboardScreen extends StatefulWidget {
   const WebDashboardScreen({super.key, this.sharedBots = const []});
-
   final List<UnifiedTradingBot> sharedBots;
-
   @override
   State<WebDashboardScreen> createState() => _WebDashboardScreenState();
 }
 
 class _WebDashboardScreenState extends State<WebDashboardScreen> {
   final _prefs = SecurePrefs();
+
+  //账户列表
   List<AccountProfit> _accounts = [];
+  // 账户收益历史
   Map<String, List<BotProfitSnapshot>> _profitHistory = {};
+  // 是否加载中
   bool _loading = true;
+  // 错误信息
   String? _error;
 
   Future<void> _load() async {
@@ -140,6 +143,7 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
                               style: Theme.of(context).textTheme.titleLarge
                                   ?.copyWith(
                                     color: AppFinanceStyle.valueColor,
+                                    // fontWeight（字体粗细）用于设置文本的字重。FontWeight.w900 表示极粗（Black）。
                                     fontWeight: FontWeight.w900,
                                   ),
                             ),
@@ -183,7 +187,7 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
                                     crossAxisCount: cross,
                                     mainAxisSpacing: 16,
                                     crossAxisSpacing: 16,
-                                    childAspectRatio: cross >= 3 ? 0.6 : 0.7,
+                                    childAspectRatio: cross >= 3 ? 1.35 : 1.2,
                                   ),
                               delegate: SliverChildBuilderDelegate((
                                 context,
@@ -243,13 +247,13 @@ class _SummaryStrip extends StatelessWidget {
               narrow: narrow,
             ),
             _SummaryCell(
-              label: '合计权益',
+              label: '总权益',
               value: eq.toStringAsFixed(0),
               valueStyle: v(22),
               narrow: narrow,
             ),
             _SummaryCell(
-              label: '合计盈亏',
+              label: '总盈亏',
               value: profit.toStringAsFixed(0),
               valueStyle: v(22).copyWith(
                 color: profit >= 0
@@ -259,7 +263,7 @@ class _SummaryStrip extends StatelessWidget {
               narrow: narrow,
             ),
             _SummaryCell(
-              label: '加权收益率',
+              label: '收益率',
               value: '${pct.toStringAsFixed(0)}%',
               valueStyle: v(22),
               narrow: narrow,
@@ -348,10 +352,9 @@ class _OverviewGlassCard extends StatelessWidget {
             ? account.exchangeAccount
             : account.botId);
     final titleStyle =
-        (Theme.of(context).textTheme.titleLarge ?? const TextStyle()).copyWith(
+        (Theme.of(context).textTheme.titleMedium ?? const TextStyle()).copyWith(
           fontWeight: FontWeight.w800,
-          fontSize:
-              (Theme.of(context).textTheme.titleLarge?.fontSize ?? 22) + 2,
+          fontSize: (Theme.of(context).textTheme.titleMedium?.fontSize ?? 20),
           color: AppFinanceStyle.valueColor,
         );
     return FinanceCard(
@@ -370,6 +373,7 @@ class _OverviewGlassCard extends StatelessWidget {
                       child: Text(
                         title,
                         style: titleStyle,
+
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -424,7 +428,7 @@ class _OverviewGlassCard extends StatelessWidget {
                 ? ProfitPercentLineChart(snapshots: snapshots)
                 : Center(
                     child: Text(
-                      '暂无收益曲线数据',
+                      '暂无收益',
                       style: AppFinanceStyle.labelTextStyle(context),
                       textAlign: TextAlign.center,
                     ),
@@ -445,22 +449,21 @@ class _OverviewStatCol extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final numStyle =
-        (Theme.of(context).textTheme.titleMedium ?? const TextStyle()).copyWith(
+        (Theme.of(context).textTheme.titleSmall ?? const TextStyle()).copyWith(
           color: _OverviewGlassCard._numberColor,
           fontWeight: FontWeight.bold,
-          fontSize:
-              (Theme.of(context).textTheme.titleLarge?.fontSize ?? 22) + 2,
+          fontSize: (Theme.of(context).textTheme.titleLarge?.fontSize ?? 20),
         );
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
           label,
-          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
             color: _OverviewGlassCard._labelColor,
           ),
         ),
-        const SizedBox(height: 6),
+        const SizedBox(height: 3),
         Text(value, style: numStyle),
       ],
     );
