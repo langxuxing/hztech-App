@@ -82,7 +82,7 @@ class _WebHomeScreenState extends State<WebHomeScreen> {
                       children: [
                         const SizedBox(height: 12),
                         Text(
-                          '知空守拙，细水长流；顺势扬帆，乘风破浪',
+                          '知空守拙，细水长流 \n 顺势扬帆，乘风破浪',
                           textAlign: TextAlign.center,
                           style: Theme.of(context).textTheme.headlineMedium
                               ?.copyWith(

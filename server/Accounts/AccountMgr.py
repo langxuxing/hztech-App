@@ -236,11 +236,13 @@ def refresh_all_positions_history(
 
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     for row in iter_okx_accounts(enabled_only=True):
+
         aid = str(row.get("account_id") or "").strip()
         path = resolve_okx_config_path(aid)
         if not path:
             log.debug("positions_history_skip: %s 无密钥文件", aid)
             continue
+
         hist, err = okx_mod.okx_fetch_positions_history(config_path=path)
         if err:
             db_module.log_insert(

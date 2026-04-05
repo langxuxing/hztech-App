@@ -269,6 +269,50 @@ class TestUsersApi:
         r = client.get("/api/users", headers=trader_headers)
         assert r.status_code == 403
 
+    def test_users_post_and_delete(self, client, auth_headers):
+        r = client.post(
+            "/api/users",
+            headers=auth_headers,
+            json={
+                "username": "tmp_user_z9",
+                "password": "pw",
+                "role": "trader",
+            },
+            content_type="application/json",
+        )
+        assert r.status_code == 200
+        data = r.get_json()
+        assert data.get("success") is True
+        uid = (data.get("user") or {}).get("id")
+        assert uid
+        r2 = client.delete(f"/api/users/{uid}", headers=auth_headers)
+        assert r2.status_code == 200
+        assert r2.get_json().get("success") is True
+
+
+class TestStrategyAnalystAutoNet:
+    """POST /api/strategy-analyst/auto-net-test"""
+
+    def test_auto_net_ok_for_analyst(self, client, analyst_headers):
+        r = client.post(
+            "/api/strategy-analyst/auto-net-test",
+            headers=analyst_headers,
+            json={"bot_id": "simpleserver-lhg"},
+            content_type="application/json",
+        )
+        assert r.status_code == 200
+        data = r.get_json()
+        assert data.get("success") is True
+
+    def test_auto_net_forbidden_for_trader(self, client, trader_headers):
+        r = client.post(
+            "/api/strategy-analyst/auto-net-test",
+            headers=trader_headers,
+            json={},
+            content_type="application/json",
+        )
+        assert r.status_code == 403
+
 
 class TestCustomerScope:
     """客户仅能看到绑定账户（linked_account_ids）。"""

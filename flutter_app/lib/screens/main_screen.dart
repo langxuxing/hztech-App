@@ -33,6 +33,9 @@ class _MainScreenState extends State<MainScreen> {
   /// 管理员：无「策略启停」Tab。
   bool get _isAdmin => _role == AppUserRole.admin;
 
+  /// 策略分析师：与管理员类似无「策略启停」；自动收网测试在 Web 侧栏。
+  bool get _isStrategyAnalyst => _role == AppUserRole.strategyAnalyst;
+
   List<({String label, IconData icon})> get _tabs {
     if (_isCustomer) {
       return [
@@ -41,6 +44,13 @@ class _MainScreenState extends State<MainScreen> {
       ];
     }
     if (_isAdmin) {
+      return [
+        (label: '账户管理', icon: Icons.manage_accounts),
+        (label: '账户收益', icon: Icons.account_balance_wallet),
+        (label: '应用设置', icon: Icons.settings),
+      ];
+    }
+    if (_isStrategyAnalyst) {
       return [
         (label: '账户管理', icon: Icons.manage_accounts),
         (label: '账户收益', icon: Icons.account_balance_wallet),
@@ -57,7 +67,7 @@ class _MainScreenState extends State<MainScreen> {
 
   int get _profitTabIndex {
     if (_isCustomer) return 0;
-    if (_isAdmin) return 1;
+    if (_isAdmin || _isStrategyAnalyst) return 1;
     return 2;
   }
 
@@ -134,6 +144,23 @@ class _MainScreenState extends State<MainScreen> {
                 ),
               );
             },
+          ),
+        ],
+      );
+    }
+    if (_isStrategyAnalyst) {
+      return IndexedStack(
+        index: _index,
+        sizing: StackFit.expand,
+        children: [
+          const AccountsList(),
+          AccountProfitScreen(
+            sharedBots: _sharedBots,
+            periodicRefreshActive: _index == 1,
+          ),
+          SettingsScreen(
+            onLogout: widget.onLogout,
+            appUserRole: _role,
           ),
         ],
       );

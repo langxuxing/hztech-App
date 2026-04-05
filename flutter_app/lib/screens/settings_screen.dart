@@ -153,6 +153,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                               style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 13, height: 1.4),
                             ),
                           ],
+                          if (widget.appUserRole == AppUserRole.strategyAnalyst) ...[
+                            const SizedBox(height: 12),
+                            Text(
+                              'Web 侧栏「自动收网」为测试接口，仅记录请求；实盘收网逻辑可在后端对接。',
+                              style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 13, height: 1.4),
+                            ),
+                          ],
                         ],
                       ),
                     ),

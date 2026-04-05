@@ -7,8 +7,9 @@ import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
 import '../settings_screen.dart';
 import '../user_management_screen.dart';
-import 'download_app_page.dart';
-import 'tradingbot_control_screen.dart';
+import 'web_auto_netting_test_screen.dart';
+import 'web_download_app_page.dart';
+import 'web_tradingbot_control_screen.dart';
 import 'web_dashboard_screen.dart';
 import 'web_home_screen.dart';
 import 'web_account_profit_screen.dart';
@@ -29,8 +30,9 @@ class _NavItem {
 }
 
 /// 浏览器端主导航：侧栏 / 抽屉 + 多 Tab，与移动端 [MainScreen] 分流。
+/// 侧栏使用可滚动列表，避免条目过多时在矮视口下看不到「用户管理」等项。
 /// 顺序：主页 → 仪表盘 → 账户收益 → 策略能效 → 策略启停（交易员/管理员）
-/// → 用户管理（管理员）→ 下载 → 设置。
+/// → 自动收网测试（策略分析师）→ 用户管理（管理员）→ 下载 → 设置。
 class WebMainShell extends StatefulWidget {
   const WebMainShell({super.key, this.onLogout});
 
@@ -74,6 +76,13 @@ class _WebMainShellState extends State<WebMainShell> {
             embedInShell: true,
           ),
         ),
+      if (_role.canViewStrategyStart)
+        _NavItem(
+          title: '策略启停',
+          icon: Icons.play_circle_outline,
+          selectedIcon: Icons.play_circle,
+          page: WebTradingBotControlScreen(sharedBots: bots),
+        ),
       if (_role.canViewStrategyPerformance)
         _NavItem(
           title: '策略能效',
@@ -81,12 +90,15 @@ class _WebMainShellState extends State<WebMainShell> {
           selectedIcon: Icons.speed,
           page: WebStrategyPerformanceScreen(sharedBots: bots),
         ),
-      if (_role.canViewStrategyStart)
+      if (_role.canViewAutoNettingTest)
         _NavItem(
-          title: '策略启停',
-          icon: Icons.play_circle_outline,
-          selectedIcon: Icons.play_circle,
-          page: WebTradingBotControlScreen(sharedBots: bots),
+          title: '自动收网',
+          icon: Icons.science_outlined,
+          selectedIcon: Icons.science,
+          page: WebAutoNettingTestScreen(
+            sharedBots: bots,
+            embedInShell: true,
+          ),
         ),
       if (_role.canManageUsers)
         _NavItem(
@@ -99,7 +111,7 @@ class _WebMainShellState extends State<WebMainShell> {
         title: 'APK下载',
         icon: Icons.download_outlined,
         selectedIcon: Icons.download,
-        page: DownloadAppPage(),
+        page: WebDownloadAppPage(),
       ),
       _NavItem(
         title: '设置',
@@ -112,6 +124,59 @@ class _WebMainShellState extends State<WebMainShell> {
         ),
       ),
     ];
+  }
+
+  /// 左侧可滚动导航（宽屏），避免 NavigationRail 在垂直空间不足时裁切底部项。
+  Widget _buildScrollableSideNav(List<_NavItem> items) {
+    return Material(
+      color: const Color(0xFF0f0f14),
+      child: ListView.builder(
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 6),
+        itemCount: items.length,
+        itemBuilder: (context, i) {
+          final e = items[i];
+          final selected = _index == i;
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: () => setState(() => _index = i),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      selected ? e.selectedIcon : e.icon,
+                      color: selected
+                          ? AppFinanceStyle.profitGreenEnd
+                          : AppFinanceStyle.labelColor,
+                      size: 26,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      e.title,
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: selected
+                            ? AppFinanceStyle.valueColor
+                            : AppFinanceStyle.labelColor,
+                        fontSize: 11,
+                        fontWeight:
+                            selected ? FontWeight.w600 : FontWeight.w400,
+                        height: 1.15,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
   }
 
   Future<void> _loadBots() async {
@@ -159,9 +224,10 @@ class _WebMainShellState extends State<WebMainShell> {
   Widget build(BuildContext context) {
     final items = _itemsForRole();
     _clampIndex(items.length);
+    final idx = _index.clamp(0, items.length - 1);
     final useRail = MediaQuery.sizeOf(context).width >= 760;
     final body = IndexedStack(
-      index: _index.clamp(0, items.length - 1),
+      index: idx,
       sizing: StackFit.expand,
       children: items.map((e) => e.page).toList(),
     );
@@ -171,7 +237,7 @@ class _WebMainShellState extends State<WebMainShell> {
         backgroundColor: AppFinanceStyle.backgroundDark,
         appBar: AppBar(
           title: Text(
-            items[_index.clamp(0, items.length - 1)].title,
+            items[idx].title,
             style: AppFinanceStyle.labelTextStyle(context).copyWith(
               color: AppFinanceStyle.valueColor,
               fontSize: 18,
@@ -184,27 +250,9 @@ class _WebMainShellState extends State<WebMainShell> {
         ),
         body: Row(
           children: [
-            NavigationRail(
-              backgroundColor: const Color(0xFF0f0f14),
-              selectedIndex: _index.clamp(0, items.length - 1),
-              onDestinationSelected: (i) => setState(() => _index = i),
-              labelType: NavigationRailLabelType.all,
-              selectedLabelTextStyle: const TextStyle(
-                color: AppFinanceStyle.valueColor,
-                fontSize: 12,
-              ),
-              unselectedLabelTextStyle: const TextStyle(
-                color: AppFinanceStyle.labelColor,
-                fontSize: 12,
-              ),
-              destinations: [
-                for (final e in items)
-                  NavigationRailDestination(
-                    icon: Icon(e.icon),
-                    selectedIcon: Icon(e.selectedIcon),
-                    label: Text(e.title),
-                  ),
-              ],
+            SizedBox(
+              width: 104,
+              child: _buildScrollableSideNav(items),
             ),
             const VerticalDivider(width: 1, thickness: 1),
             Expanded(child: body),
@@ -218,7 +266,7 @@ class _WebMainShellState extends State<WebMainShell> {
       backgroundColor: AppFinanceStyle.backgroundDark,
       appBar: AppBar(
         title: Text(
-          items[_index.clamp(0, items.length - 1)].title,
+          items[idx].title,
           style: AppFinanceStyle.labelTextStyle(context).copyWith(
             color: AppFinanceStyle.valueColor,
             fontSize: 18,

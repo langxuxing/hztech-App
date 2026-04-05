@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-按 UTC 自然日汇总账户快照中的现金余额变化，并与 OKX 日线 TR 对齐。
+按 UTC 自然日汇总账户快照中的现金余额变化，并与 OKX 日线价格波动（|高−低|，非负）对齐。
 """
 from __future__ import annotations
 
@@ -28,7 +28,9 @@ def _parse_snapshot_ts(raw: str) -> datetime | None:
 def daily_cash_delta_by_utc_day(snapshots: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
     """
     对每个 UTC 日 D：sod_cash = D 开始前最后一条快照的 cash_balance；
-    eod_cash = D 日内（含）最后一条快照的 cash_balance；delta = eod - sod。
+    eod_cash = D 日内（含）最后一条快照的 cash_balance。
+    现金余额（availEq 口径）按非负处理；日变动 cash_delta_usdt = max(0, eod - sod)，
+    不出现负值（仅反映当日余额相对日初的**增加**部分）。
     仅返回当日至少有一条快照的日期。
     """
     points: list[tuple[datetime, float]] = []
@@ -40,6 +42,7 @@ def daily_cash_delta_by_utc_day(snapshots: list[dict[str, Any]]) -> dict[str, di
             cash = float(r.get("cash_balance") or 0.0)
         except (TypeError, ValueError):
             cash = 0.0
+        cash = max(0.0, cash)
         points.append((ts, cash))
     if not points:
         return {}
@@ -71,10 +74,14 @@ def daily_cash_delta_by_utc_day(snapshots: list[dict[str, Any]]) -> dict[str, di
         if sod is None:
             sod = first_on_day if first_on_day is not None else last_on_day
         eod = last_on_day
+        sod = max(0.0, float(sod))
+        eod = max(0.0, float(eod))
+        delta_raw = eod - sod
+        cash_delta = max(0.0, delta_raw)
         out[d] = {
-            "sod_cash": float(sod),
-            "eod_cash": float(eod),
-            "cash_delta_usdt": float(eod) - float(sod),
+            "sod_cash": sod,
+            "eod_cash": eod,
+            "cash_delta_usdt": cash_delta,
         }
     return out
 
@@ -83,14 +90,14 @@ def merge_daily_efficiency_rows(
     market_bars: list[dict[str, Any]],
     cash_by_day: dict[str, dict[str, float]],
 ) -> list[dict[str, Any]]:
-    """合并 OKX 日线 TR 与现金日增量，并计算 tr_pct、现金变动比例、效率比。"""
+    """合并 OKX 日线波动（|高−低|，非负）与现金日增量（非负），并计算 tr_pct、能效比。"""
     rows: list[dict[str, Any]] = []
     for bar in market_bars:
         day = str(bar.get("day") or "")
         if not day:
             continue
         close = float(bar.get("close") or 0.0)
-        tr = float(bar.get("tr") or 0.0)
+        tr = max(0.0, float(bar.get("tr") or 0.0))
         tr_pct = (tr / close * 100.0) if close > 0 else None
         cash_info = cash_by_day.get(day)
         cash_delta = cash_info["cash_delta_usdt"] if cash_info else None
@@ -98,13 +105,10 @@ def merge_daily_efficiency_rows(
         cash_delta_pct = None
         if cash_info and sod_cash is not None and float(sod_cash) > 0 and cash_delta is not None:
             cash_delta_pct = float(cash_delta) / float(sod_cash) * 100.0
+        # 能效比值 = 每日现金增量(USDT) / 当日价格波动幅度 |高−低| × 1e-7
         eff = None
-        if (
-            cash_delta_pct is not None
-            and tr_pct is not None
-            and abs(float(tr_pct)) > 1e-12
-        ):
-            eff = float(cash_delta_pct) / float(tr_pct)
+        if cash_delta is not None and tr > 1e-18:
+            eff = float(cash_delta) / float(tr) * 1e-7
         rows.append(
             {
                 "day": day,

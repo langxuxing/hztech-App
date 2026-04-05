@@ -326,6 +326,58 @@ def restart(bot_id: str) -> dict:
     return start(bot_id)
 
 
+def run_shell_season_action(account_id: str, script_abs: Path, action: str) -> dict:
+    """同步执行 `bash script season-start|season-stop`（无 PID；由脚本写库与日志）。"""
+    root = _project_root()
+    if not script_abs.is_file():
+        return {"ok": False, "error": f"脚本不存在: {script_abs}"}
+    env = os.environ.copy()
+    env["HZTECH_ACCOUNT_ID"] = account_id
+    try:
+        r = subprocess.run(
+            ["bash", str(script_abs), action],
+            cwd=str(root),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "赛季脚本执行超时"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    if r.returncode != 0:
+        err = (r.stderr or r.stdout or "").strip() or f"退出码 {r.returncode}"
+        return {"ok": False, "error": err[-800:]}
+    return {"ok": True, "message": "已执行"}
+
+
+def season_start(bot_id: str) -> dict:
+    """盈利赛季开启：需 Account_List 中 script 支持子命令 season-start。"""
+    shell_map = load_account_shell_map()
+    if bot_id in shell_map:
+        return run_shell_season_action(bot_id, shell_map[bot_id], "season-start")
+    if bot_id in BOT_SCRIPTS:
+        return {
+            "ok": False,
+            "error": "该 bot 未配置 Accounts script_file，暂不支持 API 赛季操作",
+        }
+    return {"ok": False, "error": f"未知 bot_id: {bot_id}"}
+
+
+def season_stop(bot_id: str) -> dict:
+    """盈利赛季结束：需 script 支持 season-stop。"""
+    shell_map = load_account_shell_map()
+    if bot_id in shell_map:
+        return run_shell_season_action(bot_id, shell_map[bot_id], "season-stop")
+    if bot_id in BOT_SCRIPTS:
+        return {
+            "ok": False,
+            "error": "该 bot 未配置 Accounts script_file，暂不支持 API 赛季操作",
+        }
+    return {"ok": False, "error": f"未知 bot_id: {bot_id}"}
+
+
 def status() -> dict:
     """查询各 bot 运行状态。返回 { "bots": { bot_id: { "running": bool, "pids": [...] } }, "ok": True }。"""
     bots_status: dict = {}

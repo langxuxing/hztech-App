@@ -9,13 +9,16 @@ App 所需 API（与 QtraderApi.kt 一致）：
   POST /api/login                 登录，Body: {username, password}，返回 {success, token}
   GET  /api/account-profit        账户盈亏（需 Bearer token）
   GET  /api/tradingbots           交易账户列表（需 Bearer token）
-  POST /api/tradingbots/{id}/start|stop|restart（需 Bearer token；simpleserver-* 或 Account_List 的 botctrl/*.sh 等 script_file）
+  POST /api/tradingbots/{id}/start|stop|restart|season-start|season-stop（需 Bearer token；赛季操作需 script 支持 season-start/stop）
   GET  /api/tradingbots/{id}/pending-orders | /ticker  当前委托、行情（不入库；id 可为 Account_List 的 account_id）
-  GET  /api/tradingbots/{id}/strategy-daily-efficiency  OKX 日线 TR + 现金日增量（?inst_id=&days=）
+  GET  /api/tradingbots/{id}/strategy-daily-efficiency  OKX 日线 |高−低| 波动 + 现金日增量（?inst_id=&days=）
   GET  /api/tradingbots/{id}/tradingbot-events  账户启停事件（需 Bearer token）
   GET  /api/logs                  日志查询（需 Bearer token，?limit=100&level=&source=）
   GET  /api/users                 用户列表（仅管理员，含 role、linked_account_ids）
+  POST /api/users                 新建用户（仅管理员）Body: {username, password, role?, linked_account_ids?}
+  DELETE /api/users/<id>          删除用户（仅管理员，不可删自己）
   PATCH /api/users/<id>           更新角色/客户绑定账户（仅管理员）
+  POST /api/strategy-analyst/auto-net-test  自动收网测试桩（仅 strategy_analyst）
   GET  /api/me                    当前用户 role、linked_account_ids
 管控：
   GET  /api/strategy/status
@@ -48,6 +51,8 @@ from tradingbot_ctrl import (
     start as strategy_start,
     stop as strategy_stop,
     restart as strategy_restart,
+    season_start as strategy_season_start,
+    season_stop as strategy_season_stop,
     status as strategy_status,
     controllable_bot_ids,
 )
@@ -285,6 +290,16 @@ def _require_admin():
     if _is_admin():
         return None
     return jsonify({"success": False, "message": "需要管理员权限"}), 403
+
+
+def _is_strategy_analyst() -> bool:
+    return _role() == "strategy_analyst"
+
+
+def _require_strategy_analyst():
+    if _is_strategy_analyst():
+        return None
+    return jsonify({"success": False, "message": "仅策略分析师可使用"}), 403
 
 
 def _require_trader_only():
@@ -527,26 +542,67 @@ def api_me():
     )
 
 
-@app.route("/api/users", methods=["GET"])
+@app.route("/api/users", methods=["GET", "POST"])
 @require_auth
 def api_users():
-    """用户列表（含 role、linked_account_ids）；仅管理员。"""
+    """GET：用户列表。POST：新建用户。均仅管理员。"""
     denied = _require_admin()
     if denied:
         return denied
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        username = str(data.get("username") or "").strip()
+        password = str(data.get("password") or "")
+        role_s = str(data.get("role") or "trader").strip().lower()
+        raw_links = data.get("linked_account_ids")
+        links_list: list[str] | None = None
+        if raw_links is not None:
+            if not isinstance(raw_links, list):
+                return jsonify(
+                    {"success": False, "message": "linked_account_ids 须为数组"}
+                ), 400
+            links_list = [str(x).strip() for x in raw_links if str(x).strip()]
+        if not username or not password:
+            return jsonify(
+                {"success": False, "message": "username 与 password 必填"}
+            ), 400
+        pwd_hash = hashlib.sha256(password.encode()).hexdigest()
+        links_for_db: list[str] = []
+        if role_s == "customer":
+            links_for_db = links_list if links_list is not None else []
+        ok = _db.user_create(
+            username,
+            pwd_hash,
+            role=role_s,
+            linked_account_ids=links_for_db,
+        )
+        if not ok:
+            return jsonify({"success": False, "message": "创建失败或用户名已存在"}), 409
+        rows = _db.user_list()
+        row = next((r for r in rows if str(r.get("username", "")).lower() == username.lower()), None)
+        if row is None:
+            return jsonify({"success": True, "message": "已创建"})
+        return jsonify({"success": True, "user": row})
     rows = _db.user_list()
     return jsonify({"success": True, "users": rows})
 
 
-@app.route("/api/users/<int:user_id>", methods=["PATCH"])
+@app.route("/api/users/<int:user_id>", methods=["PATCH", "DELETE"])
 @require_auth
 def api_users_patch(user_id: int):
-    """更新用户角色与/或客户绑定账户，仅管理员。Body: {role?, linked_account_ids?}"""
+    """PATCH：更新角色/绑定。DELETE：删除用户。均仅管理员；不可删除当前登录用户。"""
     denied = _require_admin()
     if denied:
         return denied
     if _db.user_get_by_id(user_id) is None:
         return jsonify({"success": False, "message": "用户不存在"}), 404
+    if request.method == "DELETE":
+        my_id = _db.user_id_by_username(g.current_username)
+        if my_id is not None and my_id == user_id:
+            return jsonify({"success": False, "message": "不可删除当前登录用户"}), 400
+        if not _db.user_delete(user_id):
+            return jsonify({"success": False, "message": "删除失败"}), 400
+        return jsonify({"success": True, "message": "已删除"})
     data = request.get_json(silent=True) or {}
     new_role = data.get("role")
     new_links = data.get("linked_account_ids")
@@ -565,6 +621,30 @@ def api_users_patch(user_id: int):
         return jsonify({"success": False, "message": "更新失败或数据未变"}), 400
     row = _db.user_get_by_id(user_id)
     return jsonify({"success": True, "user": row})
+
+
+@app.route("/api/strategy-analyst/auto-net-test", methods=["POST"])
+@require_auth
+def api_strategy_analyst_auto_net_test():
+    """自动收网测试桩：仅记录请求，便于后续对接实盘逻辑。"""
+    denied = _require_strategy_analyst()
+    if denied:
+        return denied
+    data = request.get_json(silent=True) or {}
+    bot_id = str(data.get("bot_id") or "").strip()
+    _db.log_insert(
+        "INFO",
+        "auto_net_test",
+        source="strategy_analyst",
+        extra={"username": g.current_username, "bot_id": bot_id or None},
+    )
+    return jsonify(
+        {
+            "success": True,
+            "message": "测试请求已记录，尚未执行实盘收网；可在此接口对接平仓/撤单逻辑。",
+            "bot_id": bot_id or None,
+        }
+    )
 
 
 def _collect_accounts_profit() -> list[dict]:
@@ -842,6 +922,50 @@ def api_bot_restart(bot_id):
     return jsonify(_bot_op_response(resp, bot_id))
 
 
+@app.route("/api/tradingbots/<bot_id>/season-start", methods=["POST"])
+@require_auth
+def api_bot_season_start(bot_id):
+    denied = _require_trader_only()
+    if denied:
+        return denied
+    if not _bot_is_controllable(bot_id):
+        return jsonify({"success": False, "message": "未知 bot_id"}), 404
+    resp = strategy_season_start(bot_id)
+    _db.log_insert(
+        "INFO",
+        "season_start_api",
+        source="api",
+        extra={
+            "bot_id": bot_id,
+            "username": getattr(g, "current_username", None),
+            "ok": resp.get("ok"),
+        },
+    )
+    return jsonify(_bot_op_response(resp, bot_id))
+
+
+@app.route("/api/tradingbots/<bot_id>/season-stop", methods=["POST"])
+@require_auth
+def api_bot_season_stop(bot_id):
+    denied = _require_trader_only()
+    if denied:
+        return denied
+    if not _bot_is_controllable(bot_id):
+        return jsonify({"success": False, "message": "未知 bot_id"}), 404
+    resp = strategy_season_stop(bot_id)
+    _db.log_insert(
+        "INFO",
+        "season_stop_api",
+        source="api",
+        extra={
+            "bot_id": bot_id,
+            "username": getattr(g, "current_username", None),
+            "ok": resp.get("ok"),
+        },
+    )
+    return jsonify(_bot_op_response(resp, bot_id))
+
+
 @app.route("/api/tradingbots/<bot_id>/profit-history", methods=["GET"])
 @require_auth
 def api_bot_profit_history(bot_id):
@@ -878,7 +1002,7 @@ def api_bot_profit_history(bot_id):
 @require_auth
 def api_strategy_daily_efficiency(bot_id):
     """
-    策略效能：OKX 日线 True Range（公开 K 线）与账户快照的每日现金余额增量（UTC 日）。
+    策略效能：OKX 日线价格波动 |high−low|（公开 K 线，非负）与账户快照的每日现金余额增量（UTC 日，非负）。
     Query: inst_id=PEPE-USDT-SWAP&days=90
     """
     denied = _customer_bot_forbidden(bot_id)

@@ -17,6 +17,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 import ccxt
+import requests
 
 logger = logging.getLogger(__name__)
 _DEBUG_POSITIONS = os.environ.get("DEBUG_POSITIONS", "0") == "1"
@@ -61,8 +62,22 @@ def _okx_code_is_1010(code: object, err_body: str) -> bool:
         return True
     if code == 1010:
         return True
-    # 解析失败时仅从 JSON 形态匹配，避免误匹配纯文本中的数字
-    return '"1010"' in err_body or "'1010'" in err_body
+    if '"1010"' in err_body or "'1010'" in err_body:
+        return True
+    el = (err_body or "").lower()
+    if "1010" in err_body and (
+        "error code" in el or "code: 1010" in el or "code 1010" in el
+    ):
+        return True
+    return False
+
+
+def _okx_sorted_query(params: dict) -> str:
+    """GET 查询串：键按字母序，与 QTrader-web account_tester._okx_api_call 一致。"""
+    items = sorted(
+        (str(k), str(v)) for k, v in params.items() if v is not None
+    )
+    return urlencode(items) if items else ""
 
 
 def _okx_business_error_detail(data: dict) -> str:
@@ -81,6 +96,38 @@ def _okx_business_error_detail(data: dict) -> str:
         if nm:
             msg = nm
     return f"OKX 业务错误 code={code!r} msg={msg or '未知'}"
+
+
+def okx_public_get(
+    request_path: str,
+    params: dict[str, str] | None = None,
+    *,
+    timeout: float = 20.0,
+) -> tuple[dict | None, str | None]:
+    """OKX 公开 GET（无需签名），如 /api/v5/market/candles。"""
+    path = request_path.split("?")[0]
+    if params:
+        path = path + "?" + urlencode(params)
+    url = "https://www.okx.com" + path
+    try:
+        req = Request(url, headers={"User-Agent": "hztech-okx-public/1"})
+        with urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode())
+            if isinstance(data, dict) and data.get("code") != "0":
+                return None, _okx_business_error_detail(data)
+            return data, None
+    except HTTPError as e:
+        err_body = ""
+        try:
+            raw = e.fp.read() if getattr(e, "fp", None) else b""
+            err_body = raw.decode("utf-8", errors="replace")[:500]
+        except Exception:
+            err_body = ""
+        _, show_msg = _parse_okx_http_error_body(err_body)
+        return None, show_msg or f"HTTP {e.code}"
+    except (URLError, json.JSONDecodeError, OSError) as e:
+        logger.warning("OKX public GET error: %s -> %s", path[:120], e)
+        return None, str(e) or "public request failed"
 
 
 def get_public_egress_ip(timeout: float = 2.5) -> str | None:
@@ -256,8 +303,13 @@ def okx_request(
     config_path: Path | None = None,
     params: dict | None = None,
 ) -> tuple[dict | None, str | None]:
-    """OKX 私有接口签名请求（与 Accounts/testapi.py 一致）。
-    返回 (data, error)。error 非空表示 HTTP 或配置错误（如 403）。"""
+    """OKX 私有接口签名请求（与 QTrader-web accounts/account_tester._okx_api_call 对齐）。
+
+    - GET：查询参数按键名排序后 urlencode，拼入 requestPath（含 ``?``），与官方文档示例一致；
+      使用 ``requests`` 与 ``User-Agent: python-requests/...``，避免 urllib 默认 UA 被边缘策略拦截。
+    - 时间戳：与 QTrader 一致使用 ``datetime.utcnow()`` 毫秒 ISO + Z。
+    返回 (data, error)。error 非空表示 HTTP 或配置错误（如 403）。
+    """
     path = _resolve_path(config_path)
     config_name = path.name if path else "default"
     if _DEBUG_POSITIONS:
@@ -275,75 +327,86 @@ def okx_request(
     passphrase = cfg.get("passphrase") or ""
     if not key or not secret:
         return (None, "OKX 配置缺少 key 或 secret")
-    base = cfg.get("base_url") or "https://www.okx.com"
-    if params and method.upper() == "GET":
-        request_path = request_path.split("?")[0] + "?" + urlencode(params)
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-    prehash = ts + method.upper() + request_path + body
+    base = (cfg.get("base_url") or "https://www.okx.com").rstrip("/")
+    path_only = (request_path or "").split("?")[0]
+    if not path_only.startswith("/"):
+        path_only = "/" + path_only
+    m = method.upper()
+    query = _okx_sorted_query(params) if params else ""
+    sign_path = path_only + (("?" + query) if query else "")
+    # QTrader 对 GET 将排序后的查询串接在 path 后参与签名；官方文档为 path?query，body 为空
+    ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    sign_payload = body if m != "GET" else ""
+    prehash = ts + m + sign_path + sign_payload
     sign = base64.b64encode(
         hmac.new(secret.encode(), prehash.encode(), "sha256").digest()
     ).decode()
-    url = base + request_path
+    url = base + sign_path
     headers = {
         "OK-ACCESS-KEY": key,
         "OK-ACCESS-SIGN": sign,
         "OK-ACCESS-TIMESTAMP": ts,
         "OK-ACCESS-PASSPHRASE": passphrase,
         "Content-Type": "application/json",
+        "User-Agent": "python-requests/2.32.5",
     }
     if cfg.get("sandbox"):
         headers["x-simulated-trading"] = "1"
     try:
-        req = Request(
-            url,
-            headers=headers,
-            method=method,
-            data=body.encode() if body else None,
-        )
-        with urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read().decode())
-            if _DEBUG_POSITIONS:
-                code = data.get("code") if isinstance(data, dict) else "N/A"
-                logger.info("[持仓-OKX] OKX 响应: %s %s code=%s", method, request_path, code)
-            return (data, None)
-    except HTTPError as e:
-        err_body = ""
-        try:
-            raw = e.fp.read() if getattr(e, "fp", None) else b""
-            err_body = raw.decode("utf-8", errors="replace")[:500]
-        except Exception:
-            err_body = ""
-        primary_code, show_msg = _parse_okx_http_error_body(err_body)
-        is_1010 = e.code == 403 and _okx_code_is_1010(primary_code, err_body)
-        egress: str | None = None
-        if is_1010:
-            egress = get_public_egress_ip()
-        raw_log = (err_body[:500] if err_body else "") or "(无响应体)"
-        logger.warning(
-            "OKX请求失败 %s %s config=%s | HTTP状态=%s OKX业务码=%r OKX原因=%r | 响应体=%s%s",
-            method,
-            request_path,
-            config_name,
-            e.code,
-            primary_code,
-            show_msg or "(空)",
-            raw_log,
-            (
-                f" | 本机出口IP={egress or '未知'}(与OKX白名单比对)"
-                if is_1010
-                else ""
-            ),
-        )
-        reason = show_msg or "(OKX 响应体未解析出 msg)"
-        detail = (
-            f"HTTP {e.code} OKX业务码={primary_code!r} 原因={reason} 原始响应={raw_log!r}"
-        )
-        if is_1010:
-            detail += f" 本机出口IP={egress or '未知'}"
-        return (None, detail)
-    except (URLError, json.JSONDecodeError, OSError, KeyError) as e:
-        logger.warning("OKX request error: %s %s -> %s", method, request_path, e)
-        return (None, None)
+        if m == "GET":
+            resp = requests.get(url, headers=headers, timeout=30)
+        elif m == "POST":
+            resp = requests.post(
+                url,
+                headers=headers,
+                data=body.encode() if body else None,
+                timeout=30,
+            )
+        else:
+            return (None, f"不支持的 HTTP 方法: {method}")
+        if resp.status_code >= 400:
+            err_body = (resp.text or "")[:500]
+            primary_code, show_msg = _parse_okx_http_error_body(err_body)
+            is_1010 = resp.status_code == 403 and _okx_code_is_1010(
+                primary_code, err_body
+            )
+            egress: str | None = None
+            if is_1010:
+                egress = get_public_egress_ip()
+            raw_log = err_body or "(无响应体)"
+            logger.warning(
+                "OKX请求失败 %s %s config=%s | HTTP状态=%s OKX业务码=%r OKX原因=%r | 响应体=%s%s",
+                m,
+                sign_path,
+                config_name,
+                resp.status_code,
+                primary_code,
+                show_msg or "(空)",
+                raw_log,
+                (
+                    f" | 本机出口IP={egress or '未知'}(与OKX白名单比对)"
+                    if is_1010
+                    else ""
+                ),
+            )
+            reason = show_msg or "(OKX 响应体未解析出 msg)"
+            detail = (
+                f"HTTP {resp.status_code} OKX业务码={primary_code!r} "
+                f"原因={reason} 原始响应={raw_log!r}"
+            )
+            if is_1010:
+                detail += f" 本机出口IP={egress or '未知'}"
+            return (None, detail)
+        data = resp.json()
+        if _DEBUG_POSITIONS:
+            code = data.get("code") if isinstance(data, dict) else "N/A"
+            logger.info(
+                "[持仓-OKX] OKX 响应: %s %s code=%s", m, sign_path, code
+            )
+        return (data, None)
+    except (requests.RequestException, json.JSONDecodeError, ValueError) as e:
+        logger.warning("OKX request error: %s %s -> %s", m, sign_path, e)
+        return (None, str(e) or "request failed")
 
 
 def _okx_fetch_balance_fallback(
@@ -463,6 +526,67 @@ def _inst_id_to_ccxt_symbol(inst_id: str) -> str:
     return inst_id.replace("-", "/")
 
 
+def okx_normalize_swap_inst_id(symbol_or_inst: str) -> str:
+    """将多种写法规范为永续 instId（与 qtraderweb K 线 symbol 解析思路一致）。
+
+    支持：PEPE-USDT-SWAP、PEPE-USDT、PEPE/USDT、PEPE/USDT:USDT。
+    """
+    s = (symbol_or_inst or "").strip()
+    if not s:
+        return s
+    up = s.upper()
+    if "-SWAP" in up:
+        return s
+    if "/" in s and ":" in s:
+        return _ccxt_symbol_to_inst_id(s)
+    if "/" in s:
+        return f"{s.replace('/', '-')}-SWAP"
+    parts = s.split("-")
+    if len(parts) == 2 and parts[0] and parts[1]:
+        return f"{parts[0]}-{parts[1]}-SWAP"
+    return s
+
+
+def okx_fetch_market_candles(
+    inst_id: str,
+    *,
+    bar: str = "1D",
+    limit: int = 100,
+    after_ms: int | None = None,
+    before_ms: int | None = None,
+) -> tuple[list[list[str]], str | None]:
+    """
+    公开 K 线：GET /api/v5/market/candles（不经过 ccxt）。
+    返回 data 中行列表，每行 OKX 格式 [ts,o,h,l,c,vol,...] 字符串数组。
+    """
+    inst = okx_normalize_swap_inst_id(inst_id)
+    if not inst:
+        return [], "empty inst_id"
+    lim = max(1, min(300, int(limit)))
+    params: dict[str, str] = {
+        "instId": inst,
+        "bar": bar,
+        "limit": str(lim),
+    }
+    if after_ms is not None:
+        params["after"] = str(int(after_ms))
+    if before_ms is not None:
+        params["before"] = str(int(before_ms))
+    data, err = okx_public_get("/api/v5/market/candles", params)
+    if err:
+        return [], err
+    if not isinstance(data, dict):
+        return [], "invalid response"
+    raw = data.get("data")
+    if not isinstance(raw, list):
+        return [], "empty or invalid candles"
+    out: list[list[str]] = []
+    for row in raw:
+        if isinstance(row, list) and len(row) >= 5:
+            out.append([str(x) for x in row])
+    return out, None
+
+
 def okx_fetch_ticker(inst_id: str) -> float | None:
     """OKX 公开接口：获取合约最新价（ccxt fetch_ticker）。成功返回 last 价格，失败返回 None。"""
     try:
@@ -477,37 +601,102 @@ def okx_fetch_ticker(inst_id: str) -> float | None:
 
 
 def okx_fetch_daily_ohlcv_with_tr(
-    inst_id: str, *, limit: int = 120
+    inst_id: str,
+    *,
+    limit: int = 120,
+    start_day: str | None = None,
+    end_day: str | None = None,
+    max_pages: int = 10,
 ) -> tuple[list[dict[str, float | str]], str | None]:
     """
-    OKX 公开 K 线：日线 OHLC，并计算当日 True Range（TR）。
-    TR = max(H-L, |H-昨收|, |L-昨收|)；首根 K 线无前收时 TR = H-L。
-    inst_id 示例：PEPE-USDT-SWAP（与持仓 instId 一致）。
-    返回 (bars, error)，bars 项含 day(UTC 日期 YYYY-MM-DD)、open/high/low/close/tr。
+    OKX 公开 K 线：日线 OHLC（REST /api/v5/market/candles，与 qtraderweb 历史读取思路一致：
+    原生接口 + 时间范围过滤），并计算当日价格波动（非负）。
+    波动 = |high − low|（当日最高与最低之差的绝对值，恒 ≥ 0）。
+    为兼容既有 API / App，结果中仍使用字段名 tr，由 merge 得到 tr_pct。
+    inst_id 支持 PEPE-USDT-SWAP、PEPE/USDT:USDT 等（见 okx_normalize_swap_inst_id）。
+    start_day / end_day：可选，UTC 日历日 YYYY-MM-DD，与 qtraderweb K 线 starttime/endtime 对应。
+    返回 (bars, error)，bars 按时间升序，项含 day、open/high/low/close/tr。
     """
-    lim = max(2, min(500, int(limit)))
-    try:
-        exchange = ccxt.okx({"enableRateLimit": True, "timeout": 20000})
-        symbol = _inst_id_to_ccxt_symbol(inst_id)
-        ohlcv = exchange.fetch_ohlcv(symbol, "1d", limit=lim)
-    except Exception as e:
-        return [], str(e) or "fetch_ohlcv failed"
-    if not ohlcv:
-        return [], "empty ohlcv"
-    out: list[dict[str, float | str]] = []
-    prev_close: float | None = None
-    for row in ohlcv:
+    lim = max(2, min(2000, int(limit)))
+    start_ts: int | None = None
+    end_ts: int | None = None
+    if start_day:
         try:
-            ts_ms, o, h, l, c = int(row[0]), float(row[1]), float(row[2]), float(row[3]), float(row[4])
-        except (TypeError, ValueError, IndexError):
-            continue
-        if prev_close is None:
-            tr = h - l
-        else:
-            pc = float(prev_close)
-            tr = max(h - l, abs(h - pc), abs(l - pc))
-        prev_close = c
-        day = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).strftime("%Y-%m-%d")
+            start_ts = int(
+                datetime.strptime(start_day.strip(), "%Y-%m-%d")
+                .replace(tzinfo=timezone.utc)
+                .timestamp()
+                * 1000
+            )
+        except ValueError:
+            return [], f"invalid start_day: {start_day!r}"
+    if end_day:
+        try:
+            end_dt = datetime.strptime(end_day.strip(), "%Y-%m-%d").replace(
+                tzinfo=timezone.utc
+            )
+            end_ts = int((end_dt.timestamp() + 86400) * 1000)
+        except ValueError:
+            return [], f"invalid end_day: {end_day!r}"
+
+    merged: list[tuple[int, float, float, float, float]] = []
+    after_cursor: int | None = None
+    pages = max(1, min(50, int(max_pages)))
+    per_page = 300
+
+    for _ in range(pages):
+        if len(merged) >= lim:
+            break
+        page_limit = min(per_page, max(lim - len(merged) + 5, 1))
+        batch, err = okx_fetch_market_candles(
+            inst_id,
+            bar="1D",
+            limit=page_limit,
+            after_ms=after_cursor,
+        )
+        if err:
+            return [], err
+        if not batch:
+            break
+        batch_ts_ms: list[int] = []
+        for row in batch:
+            try:
+                ts_ms = int(float(row[0]))
+                o, h, l, c = float(row[1]), float(row[2]), float(row[3]), float(row[4])
+            except (TypeError, ValueError, IndexError):
+                continue
+            batch_ts_ms.append(ts_ms)
+            if start_ts is not None and ts_ms < start_ts:
+                continue
+            if end_ts is not None and ts_ms >= end_ts:
+                continue
+            merged.append((ts_ms, o, h, l, c))
+        if not batch_ts_ms:
+            break
+        next_after = min(batch_ts_ms)
+        if after_cursor is not None and next_after >= after_cursor:
+            break
+        after_cursor = next_after
+        if len(batch) < page_limit:
+            break
+
+    if not merged:
+        return [], "empty ohlcv"
+
+    merged.sort(key=lambda x: x[0])
+    by_ts: dict[int, tuple[float, float, float, float]] = {}
+    for ts_ms, o, h, l, c in merged:
+        by_ts[ts_ms] = (o, h, l, c)
+    dedup_sorted = sorted(by_ts.items(), key=lambda x: x[0])
+    if len(dedup_sorted) > lim:
+        dedup_sorted = dedup_sorted[-lim:]
+
+    out: list[dict[str, float | str]] = []
+    for ts_ms, (o, h, l, c) in dedup_sorted:
+        day_range = abs(float(h) - float(l))
+        day = datetime.fromtimestamp(ts_ms / 1000.0, tz=timezone.utc).strftime(
+            "%Y-%m-%d"
+        )
         out.append(
             {
                 "day": day,
@@ -515,18 +704,26 @@ def okx_fetch_daily_ohlcv_with_tr(
                 "high": h,
                 "low": l,
                 "close": c,
-                "tr": float(tr),
+                "tr": float(day_range),
             }
         )
     return out, None
 
 
 def _ccxt_symbol_to_inst_id(symbol: str) -> str:
-    """ccxt 统一符号 (BTC/USDT:USDT) -> OKX instId (BTC-USDT-SWAP)。"""
+    """ccxt 统一符号 (BTC/USDT:USDT) -> OKX instId (BTC-USDT-SWAP)。
+
+    右侧结算币种与左侧计价币相同时不再重复拼接（避免 PEPE-USDT-USDT-SWAP）。
+    """
     if ":" in symbol:
-        base_quote = symbol.split(":")[0]
-        quote = symbol.split(":")[1] if ":" in symbol else "USDT"
-        return f"{base_quote.replace('/', '-')}-{quote}-SWAP"
+        left, settle_raw = symbol.split(":", 1)
+        settle = settle_raw.strip()
+        base_quote_hyphen = left.replace("/", "-")
+        left_parts = left.split("/")
+        quote_ccy = left_parts[1].strip().upper() if len(left_parts) >= 2 else ""
+        if quote_ccy and settle.upper() == quote_ccy:
+            return f"{base_quote_hyphen}-SWAP"
+        return f"{base_quote_hyphen}-{settle}-SWAP"
     return symbol.replace("/", "-")
 
 
@@ -611,6 +808,7 @@ def okx_fetch_positions_history(
     pages = max(1, int(max_pages))
     merged: list[dict] = []
     after_ms: str | None = None
+
     for _ in range(pages):
         params: dict[str, str] = {"limit": str(lim)}
         if inst_type:

@@ -38,10 +38,12 @@ from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 import db as _db
 from exchange import okx as _okx
 
-from tradingbot_ctrlbot_ctrl import (
+from tradingbot_ctrl import (
     start as strategy_start,
     stop as strategy_stop,
     restart as strategy_restart,
+    season_start as strategy_season_start,
+    season_stop as strategy_season_stop,
     status as strategy_status,
     BOT_SCRIPTS as _BOT_SCRIPTS,
 )
@@ -644,6 +646,44 @@ def api_bot_restart(bot_id):
     )
     _db.strategy_event_insert(
         bot_id, "restart", "manual", getattr(g, "current_username", None)
+    )
+    return jsonify(_bot_op_response(resp, bot_id))
+
+
+@app.route("/api/tradingbots/<bot_id>/season-start", methods=["POST"])
+@require_auth
+def api_bot_season_start(bot_id):
+    if bot_id not in CONTROLLABLE_BOT_IDS:
+        return jsonify({"success": False, "message": "未知 bot_id"}), 404
+    resp = strategy_season_start(bot_id)
+    _db.log_insert(
+        "INFO",
+        "season_start_api",
+        source="api",
+        extra={
+            "bot_id": bot_id,
+            "username": getattr(g, "current_username", None),
+            "ok": resp.get("ok"),
+        },
+    )
+    return jsonify(_bot_op_response(resp, bot_id))
+
+
+@app.route("/api/tradingbots/<bot_id>/season-stop", methods=["POST"])
+@require_auth
+def api_bot_season_stop(bot_id):
+    if bot_id not in CONTROLLABLE_BOT_IDS:
+        return jsonify({"success": False, "message": "未知 bot_id"}), 404
+    resp = strategy_season_stop(bot_id)
+    _db.log_insert(
+        "INFO",
+        "season_stop_api",
+        source="api",
+        extra={
+            "bot_id": bot_id,
+            "username": getattr(g, "current_username", None),
+            "ok": resp.get("ok"),
+        },
     )
     return jsonify(_bot_op_response(resp, bot_id))
 

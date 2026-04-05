@@ -23,6 +23,18 @@ def test_daily_cash_delta_two_days():
     assert by["2026-04-02"]["cash_delta_usdt"] == 2.0
 
 
+def test_daily_cash_delta_negative_clamped_to_zero():
+    """余额下降日：日变动按 0 计（现金余额口径仅体现非负增量）。"""
+    snaps = [
+        {"snapshot_at": "2026-04-01T10:00:00.000Z", "cash_balance": 100.0},
+        {"snapshot_at": "2026-04-01T18:00:00.000Z", "cash_balance": 97.0},
+    ]
+    by = se.daily_cash_delta_by_utc_day(snaps)
+    assert by["2026-04-01"]["sod_cash"] == 100.0
+    assert by["2026-04-01"]["eod_cash"] == 97.0
+    assert by["2026-04-01"]["cash_delta_usdt"] == 0.0
+
+
 def test_merge_efficiency_ratio():
     bars = [
         {
@@ -46,4 +58,5 @@ def test_merge_efficiency_ratio():
     r = rows[0]
     assert r["tr_pct"] == 20.0
     assert r["cash_delta_pct"] == 1.0
-    assert abs(r["efficiency_ratio"] - 0.05) < 1e-9
+    # 10 / 0.2 * 1e-7 = 5e-6
+    assert abs(r["efficiency_ratio"] - 5e-6) < 1e-12

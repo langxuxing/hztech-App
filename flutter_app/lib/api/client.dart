@@ -148,6 +148,57 @@ class ApiClient {
     return _parsePatchUser(resp);
   }
 
+  /// POST /api/users（仅管理员）
+  Future<ManagedUserRow?> createUser({
+    required String username,
+    required String password,
+    String role = 'trader',
+    List<String>? linkedAccountIds,
+  }) async {
+    final uri = Uri.parse('${_normalizedBase}api/users');
+    final body = <String, dynamic>{
+      'username': username,
+      'password': password,
+      'role': role,
+    };
+    if (linkedAccountIds != null) {
+      body['linked_account_ids'] = linkedAccountIds;
+    }
+    final resp =
+        await _postWithRetry(uri, _headers, body: jsonEncode(body));
+    final map = jsonDecode(resp.body) as Map<String, dynamic>;
+    if (map['success'] != true) {
+      throw StateError(map['message']?.toString() ?? 'create user failed');
+    }
+    final u = map['user'] as Map<String, dynamic>?;
+    if (u == null) return null;
+    return ManagedUserRow.fromJson(u);
+  }
+
+  /// DELETE /api/users/:id（仅管理员）
+  Future<bool> deleteUser(int userId) async {
+    final uri = Uri.parse('${_normalizedBase}api/users/$userId');
+    final resp = await http.delete(uri, headers: _headers).timeout(_timeout);
+    final map = jsonDecode(resp.body) as Map<String, dynamic>;
+    return map['success'] == true;
+  }
+
+  /// POST /api/strategy-analyst/auto-net-test（仅 strategy_analyst）
+  Future<String> postStrategyAnalystAutoNetTest({String? botId}) async {
+    final uri = Uri.parse('${_normalizedBase}api/strategy-analyst/auto-net-test');
+    final body = <String, dynamic>{};
+    if (botId != null && botId.trim().isNotEmpty) {
+      body['bot_id'] = botId.trim();
+    }
+    final resp =
+        await _postWithRetry(uri, _headers, body: jsonEncode(body));
+    final map = jsonDecode(resp.body) as Map<String, dynamic>;
+    if (map['success'] != true) {
+      throw StateError(map['message']?.toString() ?? 'auto net test failed');
+    }
+    return map['message']?.toString() ?? 'ok';
+  }
+
   ManagedUserRow? _parsePatchUser(http.Response resp) {
     final map = jsonDecode(resp.body) as Map<String, dynamic>;
     if (map['success'] != true) return null;
@@ -195,6 +246,24 @@ class ApiClient {
 
   Future<BotOperationResponse> restartBot(String botId) async {
     final uri = Uri.parse('${_normalizedBase}api/tradingbots/$botId/restart');
+    final resp = await _postWithRetry(uri, _headers);
+    final map = jsonDecode(resp.body) as Map<String, dynamic>;
+    return BotOperationResponse.fromJson(map);
+  }
+
+  Future<BotOperationResponse> seasonStartBot(String botId) async {
+    final uri = Uri.parse(
+      '${_normalizedBase}api/tradingbots/$botId/season-start',
+    );
+    final resp = await _postWithRetry(uri, _headers);
+    final map = jsonDecode(resp.body) as Map<String, dynamic>;
+    return BotOperationResponse.fromJson(map);
+  }
+
+  Future<BotOperationResponse> seasonStopBot(String botId) async {
+    final uri = Uri.parse(
+      '${_normalizedBase}api/tradingbots/$botId/season-stop',
+    );
     final resp = await _postWithRetry(uri, _headers);
     final map = jsonDecode(resp.body) as Map<String, dynamic>;
     return BotOperationResponse.fromJson(map);
@@ -248,7 +317,19 @@ class ApiClient {
     return TradingbotSeasonsResponse.fromJson(map);
   }
 
-  /// OKX 日线 TR + 账户现金日增量（UTC）。失败时 success=false，message 为原因。
+  Future<TradingbotEventsResponse> getTradingbotEvents(
+    String botId, {
+    int limit = 100,
+  }) async {
+    final uri = Uri.parse(
+      '${_normalizedBase}api/tradingbots/$botId/tradingbot-events?limit=$limit',
+    );
+    final resp = await _getWithRetry(uri, _headers);
+    final map = jsonDecode(resp.body) as Map<String, dynamic>;
+    return TradingbotEventsResponse.fromJson(map);
+  }
+
+  /// OKX 日线波动 |高−低| + 账户现金日增量（UTC）。失败时 success=false，message 为原因。
   Future<StrategyDailyEfficiencyResponse> getStrategyDailyEfficiency(
     String botId, {
     String instId = 'PEPE-USDT-SWAP',

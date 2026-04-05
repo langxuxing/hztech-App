@@ -1,125 +1,421 @@
+import 'dart:async';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 import '../../api/client.dart';
 import '../../api/models.dart';
 import '../../secure/prefs.dart';
+import '../../services/okx_public_ticker_ws.dart';
 import '../../theme/finance_style.dart';
-import '../../widgets/profit_percent_line_chart.dart';
+import '../../widgets/equity_cash_percent_line_chart.dart';
+import '../../widgets/month_end_profit_panel.dart';
 import '../../widgets/water_background.dart';
 
-/// Web：账户画像页（[WebAccountProfileScreen]）— 收益率曲线与赛季网格。
-/// 策略日线能效见 [WebStrategyPerformanceScreen]。与 [WebAccountProfitScreen]（[AccountProfitPage]）区分。
+/// Web「账户画像」：顶栏账户选择 → 机器人详情 → 持仓|赛季（宽屏 50/50 等高）→ 权益/现金各一行三列（折线|柱|日历）。
+///
+/// 视口 ≥[_kLayoutWideBp] 为上述栅格；更窄同序纵向堆叠。超宽内容限制在 [_maxContentWidth] 内居中。
+/// [embedInShell] 缺省 true（侧栏 Tab 无本页 AppBar）；独立路由请用 [WebAccountProfitScreen] 或传入 false。
 class WebAccountProfileScreen extends StatefulWidget {
-  const WebAccountProfileScreen({super.key, this.sharedBots = const []});
+  const WebAccountProfileScreen({
+    super.key,
+    this.sharedBots = const [],
+    this.initialBotId,
+    this.embedInShell = true,
+    this.periodicRefreshActive = true,
+  });
 
+  /// 与仪表盘、策略页同源的交易账户列表；可为空则本页自拉。
   final List<UnifiedTradingBot> sharedBots;
 
+  /// 进入时默认选中的交易账户 ID。
+  final String? initialBotId;
+
+  /// 嵌入 [WebMainShell] 侧栏时为 true（缺省）；独立 push 路由时为 false 以显示本页 AppBar。
+  final bool embedInShell;
+
+  /// 为 false 时不启动定时刷新（如 [IndexedStack] 非当前 Tab）。
+  final bool periodicRefreshActive;
+
   @override
-  State<WebAccountProfileScreen> createState() => _WebAccountProfileScreenState();
+  State<WebAccountProfileScreen> createState() =>
+      _WebAccountProfileScreenState();
 }
 
 class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
+  static const double _maxContentWidth = 1680;
   final _prefs = SecurePrefs();
+  List<AccountProfit> _accounts = [];
   List<UnifiedTradingBot> _bots = [];
-  String? _selectedId;
+  String? _selectedBotId;
   List<BotProfitSnapshot> _snapshots = [];
+  List<OkxPosition> _positions = [];
   List<BotSeason> _seasons = [];
   bool _loading = true;
-  String? _metricsError;
+  String? _error;
+  String? _positionsLoadError;
+  Map<String, dynamic>? _positionsOkxDebug;
+  Timer? _autoRefreshTimer;
+  OkxPublicTickerWs? _tickerWs;
+  StreamSubscription<double>? _tickerSub;
+  double? _liveLastPx;
+  String? _tickerSubscribedInstId;
+  static const String _defaultBotId = 'simpleserver';
+  static const double _kLayoutWideBp = 960;
+  /// 权益/现金三列（折线|柱|日历）统一行高。
+  static const double _kTripleRowHeight = 500;
+  static const double _kTripleGutter = 12;
+  static const double _kTripleBarChartH = 118;
 
-  Future<void> _loadBots() async {
-    if (widget.sharedBots.isNotEmpty) {
-      setState(() {
-        _bots = List.from(widget.sharedBots);
-        _selectedId ??= _bots.first.tradingbotId;
-      });
-      return;
-    }
-    final baseUrl = await _prefs.backendBaseUrl;
-    final token = await _prefs.authToken;
-    final api = ApiClient(baseUrl, token: token);
-    final resp = await api.getTradingBots();
-    if (!mounted) return;
-    setState(() {
-      _bots = resp.botList;
-      if (_selectedId == null && _bots.isNotEmpty) {
-        _selectedId = _bots.first.tradingbotId;
-      }
-    });
-  }
-
-  Future<void> _loadData() async {
-    final botId = _selectedId;
-    if (botId == null || botId.isEmpty) return;
-    setState(() {
-      _loading = true;
-      _metricsError = null;
-    });
+  /// 保持当前选中账户，拉取最新收益、曲线、持仓与赛季（用于定时刷新与下拉切换后的全量刷新）
+  Future<void> _refreshLatestData() async {
+    if (!mounted || _loading) return;
+    final list = _bots.isNotEmpty ? _bots : widget.sharedBots;
+    final botId = _selectedBotId ??
+        (list.isNotEmpty ? list.first.tradingbotId : null) ??
+        _defaultBotId;
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
       final api = ApiClient(baseUrl, token: token);
+      final phase2 = await Future.wait([
+        api.getAccountProfit(),
+        api.getBotProfitHistory(botId, limit: 500),
+      ]);
+      if (!mounted) return;
+      final profitResp = phase2[0] as AccountProfitResponse;
+      final historyResp = phase2[1] as BotProfitHistoryResponse;
+      setState(() {
+        _accounts = profitResp.accounts ?? [];
+        _snapshots = historyResp.snapshots;
+      });
+      final phase3 = await Future.wait([
+        api.getTradingbotPositions(botId),
+        api.getTradingbotSeasons(botId, limit: 50),
+      ]);
+      if (!mounted) return;
+      final positionsResp = phase3[0] as OkxPositionsResponse;
+      final seasonsResp = phase3[1] as TradingbotSeasonsResponse;
+      setState(() {
+        _positions = positionsResp.positions;
+        _positionsLoadError = positionsResp.positionsError;
+        _positionsOkxDebug = positionsResp.okxDebug;
+        _seasons = seasonsResp.seasons;
+      });
+      _syncOkxTickerSubscription();
+    } catch (_) {
+      // 后台轮询失败不打扰主流程
+    }
+  }
 
-      String? mErr;
-      BotProfitHistoryResponse? hResp;
-      TradingbotSeasonsResponse? sResp;
+  Future<void> _load() async {
+    if (!mounted) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      // 并行读配置，减少首包延迟
+      final baseUrl = await _prefs.backendBaseUrl;
+      final token = await _prefs.authToken;
+      final api = ApiClient(baseUrl, token: token);
 
-      try {
-        final r = await Future.wait([
-          api.getBotProfitHistory(botId, limit: 500),
-          api.getTradingbotSeasons(botId, limit: 50),
-        ]);
-        hResp = r[0] as BotProfitHistoryResponse;
-        sResp = r[1] as TradingbotSeasonsResponse;
-      } catch (e) {
-        mErr = e.toString();
+      // 优先 MainScreen 下发的列表；否则本页拉取（与账户管理同源）
+      List<UnifiedTradingBot> bots = List.from(widget.sharedBots);
+      if (bots.isEmpty) {
+        final botsResp = await api.getTradingBots();
+        bots = botsResp.botList;
       }
+      final initial = widget.initialBotId?.trim();
+      if (initial != null && initial.isNotEmpty) {
+        final has = bots.any((b) => b.tradingbotId == initial);
+        if (!has) {
+          bots = [
+            UnifiedTradingBot(
+              tradingbotId: initial,
+              status: '',
+              canControl: false,
+              isTest: false,
+            ),
+            ...bots,
+          ];
+        }
+      }
+      final botId = (initial != null && initial.isNotEmpty)
+          ? initial
+          : (bots.isNotEmpty ? bots.first.tradingbotId : _defaultBotId);
 
       if (!mounted) return;
+      // 阶段一：一有账户列表就结束全屏 loading，下拉框可立即显示
       setState(() {
-        if (hResp != null && sResp != null) {
-          _snapshots = hResp.snapshots;
-          _seasons = sResp.seasons;
-        } else {
-          _snapshots = [];
-          _seasons = [];
-        }
-        _metricsError = mErr;
+        _bots = bots;
+        _selectedBotId = botId;
         _loading = false;
       });
+
+      // 阶段二：账户收益 + 历史（不经过 OKX 直连，通常较快）
+      try {
+        final phase2 = await Future.wait([
+          api.getAccountProfit(),
+          api.getBotProfitHistory(botId, limit: 500),
+        ]);
+        if (!mounted) return;
+        final profitResp = phase2[0] as AccountProfitResponse;
+        final historyResp = phase2[1] as BotProfitHistoryResponse;
+        setState(() {
+          _accounts = profitResp.accounts ?? [];
+          _snapshots = historyResp.snapshots;
+        });
+      } catch (e) {
+        if (mounted) {
+          setState(() => _error = '收益/历史加载失败: $e');
+        }
+      }
+
+      // 阶段三：持仓 + 赛季（后端可能调 OKX，1010/慢响应不再阻塞上面两阶段）
+      try {
+        final phase3 = await Future.wait([
+          api.getTradingbotPositions(botId),
+          api.getTradingbotSeasons(botId, limit: 50),
+        ]);
+        if (!mounted) return;
+        final positionsResp = phase3[0] as OkxPositionsResponse;
+        final seasonsResp = phase3[1] as TradingbotSeasonsResponse;
+        setState(() {
+          _positions = positionsResp.positions;
+          _positionsLoadError = positionsResp.positionsError;
+          _positionsOkxDebug = positionsResp.okxDebug;
+          _seasons = seasonsResp.seasons;
+        });
+        _syncOkxTickerSubscription();
+      } catch (e) {
+        if (mounted) {
+          setState(() {
+            _positionsLoadError = '持仓/赛季加载异常: $e';
+            _positionsOkxDebug = null;
+          });
+          _syncOkxTickerSubscription();
+        }
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _metricsError = e.toString();
+        _error = e.toString();
         _loading = false;
       });
+    }
+  }
+
+  Future<void> _loadForBot(String botId) async {
+    setState(() => _selectedBotId = botId);
+    try {
+      final baseUrl = await _prefs.backendBaseUrl;
+      final token = await _prefs.authToken;
+      final api = ApiClient(baseUrl, token: token);
+      final results = await Future.wait([
+        api.getAccountProfit(),
+        api.getBotProfitHistory(botId, limit: 500),
+        api.getTradingbotSeasons(botId, limit: 50),
+        api.getTradingbotPositions(botId),
+      ]);
+      if (!mounted) return;
+      final profitResp = results[0] as AccountProfitResponse;
+      final historyResp = results[1] as BotProfitHistoryResponse;
+      final seasonsResp = results[2] as TradingbotSeasonsResponse;
+      final positionsResp = results[3] as OkxPositionsResponse;
+      setState(() {
+        _accounts = profitResp.accounts ?? [];
+        _snapshots = historyResp.snapshots;
+        _seasons = seasonsResp.seasons;
+        _positions = positionsResp.positions;
+        _positionsLoadError = positionsResp.positionsError;
+        _positionsOkxDebug = positionsResp.okxDebug;
+        _error = null;
+      });
+      _syncOkxTickerSubscription();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _error = '切换账户后加载失败: $e');
+      }
     }
   }
 
   @override
   void initState() {
     super.initState();
-    _init();
+    // 若父级已下发列表则先展示，再异步拉取收益等
+    if (widget.sharedBots.isNotEmpty) {
+      _bots = List.from(widget.sharedBots);
+      _selectedBotId = _bots.first.tradingbotId;
+    }
+    _load();
+    _syncAutoRefreshTimer();
   }
 
-  Future<void> _init() async {
-    await _loadBots();
+  void _syncAutoRefreshTimer() {
+    _autoRefreshTimer?.cancel();
+    _autoRefreshTimer = null;
+    if (!widget.periodicRefreshActive) return;
+    _autoRefreshTimer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) => _refreshLatestData(),
+    );
+  }
+
+  @override
+  void didUpdateWidget(covariant WebAccountProfileScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.periodicRefreshActive != widget.periodicRefreshActive) {
+      _syncAutoRefreshTimer();
+      if (!widget.periodicRefreshActive) {
+        _tickerSub?.cancel();
+        _tickerSub = null;
+        _tickerWs?.dispose();
+        _tickerWs = null;
+        _tickerSubscribedInstId = null;
+        if (_liveLastPx != null && mounted) {
+          setState(() => _liveLastPx = null);
+        }
+      } else if (mounted) {
+        _syncOkxTickerSubscription();
+      }
+    }
+    // MainScreen 异步加载完 bots 后下发，同步到本页以显示下拉框
+    if (widget.sharedBots.isNotEmpty &&
+        widget.sharedBots.length != _bots.length) {
+      _bots = List.from(widget.sharedBots);
+      if (_selectedBotId == null ||
+          !_bots.any((b) => b.tradingbotId == _selectedBotId)) {
+        _selectedBotId = _bots.first.tradingbotId;
+      }
+      setState(() {});
+    }
+  }
+
+  @override
+  void dispose() {
+    _tickerSub?.cancel();
+    _tickerWs?.dispose();
+    _autoRefreshTimer?.cancel();
+    super.dispose();
+  }
+
+  /// 仅单合约持仓时连接 OKX 公共 WS 推送现价；切换标的或清空持仓时断开。
+  void _syncOkxTickerSubscription() {
     if (!mounted) return;
-    if (_bots.isEmpty) {
-      setState(() => _loading = false);
+    final ids = _positions.map((e) => e.instId).where((e) => e.isNotEmpty).toSet();
+    final singleInst = ids.length == 1 ? ids.first : null;
+
+    if (singleInst == null) {
+      _tickerSub?.cancel();
+      _tickerSub = null;
+      _tickerWs?.dispose();
+      _tickerWs = null;
+      _tickerSubscribedInstId = null;
+      if (_liveLastPx != null) {
+        setState(() => _liveLastPx = null);
+      }
       return;
     }
-    await _loadData();
+
+    if (_tickerSubscribedInstId == singleInst &&
+        _tickerWs != null &&
+        _tickerSub != null) {
+      return;
+    }
+
+    final prevInst = _tickerSubscribedInstId;
+    _tickerSub?.cancel();
+    _tickerSub = null;
+    _tickerWs?.dispose();
+    _tickerWs = OkxPublicTickerWs();
+    _tickerSubscribedInstId = singleInst;
+    if (prevInst != singleInst) {
+      _liveLastPx = null;
+    }
+    _tickerWs!.subscribe(singleInst);
+    final stream = _tickerWs!.priceStream;
+    if (stream != null) {
+      _tickerSub = stream.listen((px) {
+        if (mounted) setState(() => _liveLastPx = px);
+      });
+    }
   }
 
-  String _fmtPct(double v) => '${v.toStringAsFixed(2)}%';
+  double? _weightedAvgPx(List<OkxPosition> side) {
+    double num = 0, den = 0;
+    for (final p in side) {
+      if (p.avgPx <= 0) continue;
+      final w = p.pos.abs();
+      if (w <= 0) continue;
+      num += p.avgPx * w;
+      den += w;
+    }
+    return den > 0 ? num / den : null;
+  }
+
+  /// 用最新价近似未实现盈亏（OKX 返回的 upl 基于标记价，此处按 (last−avg)/(mark−avg) 比例缩放）。
+  double _dynUplFor(OkxPosition p, double last) {
+    final mark = p.markPx;
+    final avg = p.avgPx;
+    final denom = mark - avg;
+    if (denom.abs() < 1e-12) return p.upl;
+    return p.upl * (last - avg) / denom;
+  }
+
+  double _totalDynUpl(Iterable<OkxPosition> ps, double last) =>
+      ps.fold<double>(0, (s, p) => s + _dynUplFor(p, last));
+
+  /// 同一 instId 下多腿时，取任一条有效的 displayPrice / markPx（避免仅用 first 为 0）。
+  double _singleInstQuotePx() {
+    for (final p in _positions) {
+      final d = p.displayPrice;
+      if (d > 0) return d;
+    }
+    for (final p in _positions) {
+      if (p.markPx > 0) return p.markPx;
+    }
+    return 0;
+  }
 
   String _fmt(double v) => v.toStringAsFixed(2);
+  String _fmtPct(double v) => '${v.toStringAsFixed(2)}%';
 
-  /// 与移动端赛季时间展示一致：月-日 时:分
+  String _formatOkxDebug(Map<String, dynamic> m) {
+    final b = StringBuffer();
+    final ip = m['server_egress_ip'];
+    if (ip != null) b.writeln('服务器出口 IP: $ip');
+    final cf = m['config_file'];
+    if (cf != null) b.writeln('OKX 配置: $cf');
+    final masked = m['apikey_masked'];
+    if (masked != null) b.writeln('API Key: $masked');
+    if (m['sandbox'] == true) b.writeln('沙盒: 是');
+    final note = m['note'];
+    if (note != null) b.writeln(note);
+    return b.toString().trim();
+  }
+
+  Widget _buildOkxDebugHint() {
+    final d = _positionsOkxDebug;
+    if (d == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: SelectableText(
+        _formatOkxDebug(d),
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          fontSize: 11,
+          height: 1.35,
+          color: AppFinanceStyle.labelColor.withValues(alpha: 0.88),
+        ),
+      ),
+    );
+  }
+
+  /// 将赛季时间格式化为 月-日 时:分
   String _formatSeasonTime(String? value) {
     if (value == null || value.length < 16) return '-';
     try {
+      // 支持 "2025-03-01T12:00:00" 或 "2025-03-01 12:00:00"
       final s = value
           .substring(0, value.length >= 19 ? 19 : value.length)
           .replaceAll('T', ' ');
@@ -134,326 +430,1300 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     }
   }
 
+  /// 优先用本页 _bots，为空则用 MainScreen 下发的 sharedBots，保证有数据即显示下拉框
+  List<UnifiedTradingBot> get _effectiveBots =>
+      _bots.isNotEmpty ? _bots : widget.sharedBots;
+
+  int get _selectedBotIndex {
+    final list = _effectiveBots;
+    if (_selectedBotId == null || list.isEmpty) return 0;
+    final i = list.indexWhere((b) => b.tradingbotId == _selectedBotId);
+    return i >= 0 ? i : 0;
+  }
+
+  AccountProfit? get _selectedAccount {
+    if (_accounts.isEmpty) return null;
+    if (_selectedBotId != null && _selectedBotId!.isNotEmpty) {
+      try {
+        return _accounts.firstWhere((a) => a.botId == _selectedBotId);
+      } on StateError {
+        // fallback to index
+      }
+    }
+    final i = _selectedBotIndex;
+    return i < _accounts.length ? _accounts[i] : _accounts.first;
+  }
+
+  UnifiedTradingBot? get _currentUnifiedBot {
+    final id = _selectedBotId;
+    if (id == null || id.isEmpty) return null;
+    for (final b in _effectiveBots) {
+      if (b.tradingbotId == id) return b;
+    }
+    return null;
+  }
+
+  Widget _buildBotSelector() {
+    final list = _effectiveBots;
+    if (list.isEmpty) return const SizedBox.shrink();
+    // 无论 1 个或多个交易账户都使用 DropdownButton，交互一致
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: (MediaQuery.of(context).size.width * 0.45).clamp(160.0, 280.0),
+          minHeight: kMinInteractiveDimension,
+        ),
+        child: _glassCard(
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            child: DropdownButton<String>(
+              value: _selectedBotId ?? list.first.tradingbotId,
+              isExpanded: true,
+              dropdownColor: AppFinanceStyle.cardBackground.withValues(
+                alpha: 0.98,
+              ),
+              style: const TextStyle(color: AppFinanceStyle.valueColor),
+              items: list
+                  .map(
+                    (b) => DropdownMenuItem<String>(
+                      value: b.tradingbotId,
+                      child: Text(
+                        b.tradingbotName ?? b.tradingbotId,
+                        style: const TextStyle(
+                          color: AppFinanceStyle.valueColor,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (v) {
+                if (v != null) _loadForBot(v);
+              },
+            ),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        ),
+      ),
+    );
+  }
+
+  Widget _glassCard(Widget child, {EdgeInsetsGeometry? padding}) {
+    return FinanceCard(
+      padding: padding ?? const EdgeInsets.all(20),
+      child: child,
+    );
+  }
+
+  Widget _buildAccountPageContent(bool wide) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (_error != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: Text(
+              _error!,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.error,
+                fontSize: 13,
+              ),
+            ),
+          ),
+        if (_effectiveBots.isNotEmpty) ...[
+          _buildBotSelector(),
+          const SizedBox(height: 24),
+        ],
+        if (_accounts.isEmpty && _error == null)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 24),
+            child: Center(
+              child: Text(
+                '暂无账户数据，请确认后端 Accounts 已配置交易账户',
+                style: TextStyle(color: Colors.white70),
+              ),
+            ),
+          ),
+        _buildRobotDetails(),
+        const SizedBox(height: 32),
+        _buildPositionsSeasonsRow(wide),
+        const SizedBox(height: 32),
+        _buildEquityMetricsSection(wide),
+        const SizedBox(height: 32),
+        _buildCashMetricsSection(wide),
+      ],
+    );
+  }
+
+  Widget _buildBodyScrollable() {
+    final wide = MediaQuery.sizeOf(context).width >= _kLayoutWideBp;
+    return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(32, 32, 32, 32),
+      child: _buildAccountPageContent(wide),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final canPop = Navigator.of(context).canPop();
+    final scaffold = Scaffold(
+      backgroundColor: AppFinanceStyle.backgroundDark,
+      appBar: widget.embedInShell
+          ? null
+          : AppBar(
+              leading: canPop
+                  ? IconButton(
+                      icon: const Icon(Icons.arrow_back),
+                      onPressed: () => Navigator.of(context).pop(),
+                    )
+                  : null,
+              automaticallyImplyLeading: !canPop,
+              title: Text(
+                '账户详情',
+                style: AppFinanceStyle.labelTextStyle(context).copyWith(
+                  color: AppFinanceStyle.valueColor,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              backgroundColor: AppFinanceStyle.backgroundDark,
+              foregroundColor: AppFinanceStyle.valueColor,
+              surfaceTintColor: Colors.transparent,
+            ),
+      body: WaterBackground(
+        child: RefreshIndicator(
+          onRefresh: _load,
+          child: _loading && _accounts.isEmpty && _effectiveBots.isEmpty
+              ? const Center(child: CircularProgressIndicator())
+              : _error != null && _accounts.isEmpty && _effectiveBots.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            _error!,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(color: Colors.white70),
+                          ),
+                          const SizedBox(height: 16),
+                          FilledButton(
+                            onPressed: _load,
+                            child: const Text('重试'),
+                          ),
+                        ],
+                      ),
+                    )
+                  : _buildBodyScrollable(),
+        ),
+      ),
+    );
     return ColoredBox(
       color: AppFinanceStyle.backgroundDark,
-      child: WaterBackground(
-        child: RefreshIndicator(
-          onRefresh: () async {
-            await _loadBots();
-            await _loadData();
-          },
-          child: CustomScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            slivers: [
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
-                sliver: SliverToBoxAdapter(
-                  child: FinanceCard(
-                    padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            '选择账户',
-                            style: AppFinanceStyle.labelTextStyle(context),
-                          ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth >= _maxContentWidth) {
+            return Align(
+              alignment: Alignment.topCenter,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: _maxContentWidth),
+                child: scaffold,
+              ),
+            );
+          }
+          return scaffold;
+        },
+      ),
+    );
+  }
+
+  Widget _sectionTitle(String text) {
+    return Text(
+      text,
+      style: (Theme.of(context).textTheme.titleLarge ?? const TextStyle())
+          .copyWith(
+            color: AppFinanceStyle.labelColor,
+            fontSize:
+                (Theme.of(context).textTheme.titleLarge?.fontSize ?? 22) + 2,
+            fontWeight: FontWeight.w600,
+          ),
+    );
+  }
+
+  Widget _buildRobotDetails() {
+    final a = _selectedAccount;
+    if (a == null) return const SizedBox.shrink();
+    final bot = _currentUnifiedBot;
+    final equity = a.equityUsdt;
+    final balance = a.balanceUsdt;
+    final floating = a.floatingProfit;
+    final rate = a.profitPercent;
+    final rateColor = rate >= 0 ? AppFinanceStyle.profitGreenEnd : Colors.red;
+    final titleSize =
+        (Theme.of(context).textTheme.titleLarge?.fontSize ?? 22) + 2;
+    final labelSmall = AppFinanceStyle.labelTextStyle(context);
+
+    return _glassCard(
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '机器人详情',
+            style: (Theme.of(context).textTheme.titleLarge ?? const TextStyle())
+                .copyWith(
+                  color: AppFinanceStyle.labelColor,
+                  fontSize:
+                      (Theme.of(context).textTheme.titleLarge?.fontSize ?? 22) +
+                      4,
+                ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            '名称：${bot?.tradingbotName ?? bot?.tradingbotId ?? a.botId}',
+            style: labelSmall,
+          ),
+          const SizedBox(height: 4),
+          Text('机器人 ID：${a.botId}', style: labelSmall),
+          const SizedBox(height: 4),
+          Text('交易所账户：${a.exchangeAccount}', style: labelSmall),
+          if (bot != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              '策略：${bot.strategyName ?? '-'}  ·  状态：${bot.status}',
+              style: labelSmall,
+            ),
+          ],
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: _overviewChip(
+                  context,
+                  '现金余额',
+                  _fmt(balance),
+                  titleSize: titleSize,
+                  valueColor: AppFinanceStyle.profitGreenEnd,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: _overviewChip(
+                  context,
+                  '权益',
+                  _fmt(equity),
+                  valueColor: AppFinanceStyle.profitGreenEnd,
+                  titleSize: titleSize,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: _overviewChip(
+                  context,
+                  '浮动盈亏',
+                  _fmt(floating),
+                  valueColor: floating >= 0
+                      ? AppFinanceStyle.profitGreenEnd
+                      : Colors.red,
+                  titleSize: titleSize,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _overviewChip(
+                  context,
+                  '期初',
+                  _fmt(a.initialBalance),
+                  titleSize: titleSize,
+                  valueColor: AppFinanceStyle.profitGreenEnd,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: _overviewChip(
+                  context,
+                  '收益率',
+                  _fmtPct(rate),
+                  titleSize: titleSize,
+                  valueColor: rateColor,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPositionsSeasonsRow(bool wide) {
+    if (wide) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(child: _buildPositions(expandScroll: true)),
+          SizedBox(width: _kTripleGutter),
+          Expanded(child: _buildSeasons(expandScroll: true)),
+        ],
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildPositions(expandScroll: false),
+        const SizedBox(height: 24),
+        _buildSeasons(expandScroll: false),
+      ],
+    );
+  }
+
+  Widget _tripleMetricCard({
+    required Widget child,
+    EdgeInsetsGeometry padding = const EdgeInsets.all(12),
+  }) {
+    return FinanceCard(
+      padding: padding,
+      child: child,
+    );
+  }
+
+  Widget _buildEquityMetricsSection(bool wide) {
+    if (_selectedAccount == null) return const SizedBox.shrink();
+    final snap = _snapshots;
+    if (!wide) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _sectionTitle('权益信息'),
+          const SizedBox(height: 12),
+          _glassCard(
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  '收益率（权益）',
+                  style: AppFinanceStyle.labelTextStyle(context)
+                      .copyWith(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  height: 200,
+                  child: SnapshotPercentLineChart(
+                    snapshots: snap,
+                    series: SnapshotReturnSeries.equity,
+                    compact: true,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          _glassCard(
+            MonthEndValueBarPanel(
+              snapshots: snap,
+              title: '月度权益（柱状图）',
+              description:
+                  '按自然月汇总：当月最后一条快照权益相对上月末（或期初）的变化（USDT）。',
+              valueAt: (s) => s.equityUsdt,
+              emptyMessage: '暂无历史快照，无法统计月度权益',
+            ),
+          ),
+          const SizedBox(height: 16),
+          _glassCard(
+            MonthEndValueCalendarPanel(
+              snapshots: snap,
+              title: '月度权益（日历）',
+              description:
+                  '按日展示：当日最后一条快照权益相对前一有效时点的变化（USDT）。',
+              valueAt: (s) => s.equityUsdt,
+              emptyMessage: '暂无历史快照，无法统计月度权益',
+            ),
+          ),
+        ],
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _sectionTitle('权益信息'),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: _kTripleRowHeight,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: _tripleMetricCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        '收益率（权益）%',
+                        style: AppFinanceStyle.labelTextStyle(context)
+                            .copyWith(fontWeight: FontWeight.w600, fontSize: 13),
+                      ),
+                      const SizedBox(height: 6),
+                      Expanded(
+                        child: SnapshotPercentLineChart(
+                          snapshots: snap,
+                          series: SnapshotReturnSeries.equity,
+                          compact: true,
                         ),
-                        if (_bots.isNotEmpty)
-                          ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 360),
-                            child: DropdownButtonFormField<String>(
-                              key: ValueKey(_selectedId),
-                              initialValue:
-                                  _selectedId ?? _bots.first.tradingbotId,
-                              isExpanded: true,
-                              dropdownColor: AppFinanceStyle.cardBackground,
-                              style: const TextStyle(
-                                color: AppFinanceStyle.valueColor,
-                              ),
-                              decoration: InputDecoration(
-                                filled: true,
-                                fillColor: Colors.white.withValues(alpha: 0.06),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                              ),
-                              items: _bots
-                                  .map(
-                                    (b) => DropdownMenuItem<String>(
-                                      value: b.tradingbotId,
-                                      child: Text(
-                                        b.tradingbotName ?? b.tradingbotId,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                                  )
-                                  .toList(),
-                              onChanged: (v) async {
-                                if (v == null) return;
-                                setState(() => _selectedId = v);
-                                await _loadData();
-                              },
-                            ),
-                          ),
-                      ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              SizedBox(width: _kTripleGutter),
+              Expanded(
+                child: _tripleMetricCard(
+                  child: SingleChildScrollView(
+                    child: MonthEndValueBarPanel(
+                      snapshots: snap,
+                      title: '月度权益（柱）',
+                      description: '',
+                      valueAt: (s) => s.equityUsdt,
+                      emptyMessage: '暂无历史快照',
+                      compact: true,
+                      barChartHeight: _kTripleBarChartH,
+                      maxBars: 8,
                     ),
                   ),
                 ),
               ),
-              if (_metricsError != null)
-                SliverPadding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24),
-                  sliver: SliverToBoxAdapter(
-                    child: Text(
-                      '收益/赛季：${_metricsError!}',
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.error,
-                      ),
+              SizedBox(width: _kTripleGutter),
+              Expanded(
+                child: _tripleMetricCard(
+                  child: SingleChildScrollView(
+                    child: MonthEndValueCalendarPanel(
+                      snapshots: snap,
+                      title: '月度权益（日历）',
+                      description: '',
+                      valueAt: (s) => s.equityUsdt,
+                      emptyMessage: '暂无历史快照',
+                      compact: true,
                     ),
                   ),
                 ),
-              if (_loading)
-                const SliverFillRemaining(
-                  child: Center(child: CircularProgressIndicator()),
-                )
-              else if (_bots.isEmpty)
-                SliverFillRemaining(
-                  child: Center(
-                    child: Text(
-                      '暂无交易账户',
-                      style: AppFinanceStyle.labelTextStyle(context),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCashMetricsSection(bool wide) {
+    if (_selectedAccount == null) return const SizedBox.shrink();
+    final snap = _snapshots;
+    if (!wide) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _sectionTitle('现金信息'),
+          const SizedBox(height: 12),
+          _glassCard(
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  '收益率（现金）',
+                  style: AppFinanceStyle.labelTextStyle(context)
+                      .copyWith(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  height: 200,
+                  child: SnapshotPercentLineChart(
+                    snapshots: snap,
+                    series: SnapshotReturnSeries.cash,
+                    compact: true,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          _glassCard(
+            MonthEndValueBarPanel(
+              snapshots: snap,
+              title: '月度现金（柱状图）',
+              description:
+                  '按自然月汇总：当月最后一条快照现金余额相对上月末（或期初）的变化（USDT）。',
+              valueAt: (s) => s.currentBalance,
+              emptyMessage: '暂无历史快照，无法统计月度现金余额',
+            ),
+          ),
+          const SizedBox(height: 16),
+          _glassCard(
+            MonthEndValueCalendarPanel(
+              snapshots: snap,
+              title: '月度现金（日历）',
+              description:
+                  '按日展示：当日最后一条快照现金余额相对前一有效时点的变化（USDT）。',
+              valueAt: (s) => s.currentBalance,
+              emptyMessage: '暂无历史快照，无法统计月度现金余额',
+            ),
+          ),
+        ],
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _sectionTitle('现金信息'),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: _kTripleRowHeight,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: _tripleMetricCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        '收益率（现金）%',
+                        style: AppFinanceStyle.labelTextStyle(context)
+                            .copyWith(fontWeight: FontWeight.w600, fontSize: 13),
+                      ),
+                      const SizedBox(height: 6),
+                      Expanded(
+                        child: SnapshotPercentLineChart(
+                          snapshots: snap,
+                          series: SnapshotReturnSeries.cash,
+                          compact: true,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              SizedBox(width: _kTripleGutter),
+              Expanded(
+                child: _tripleMetricCard(
+                  child: SingleChildScrollView(
+                    child: MonthEndValueBarPanel(
+                      snapshots: snap,
+                      title: '月度现金（柱）',
+                      description: '',
+                      valueAt: (s) => s.currentBalance,
+                      emptyMessage: '暂无历史快照',
+                      compact: true,
+                      barChartHeight: _kTripleBarChartH,
+                      maxBars: 8,
                     ),
                   ),
-                )
-              else ...[
-                SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
-                  sliver: SliverToBoxAdapter(
-                    child: FinanceCard(
-                      padding: const EdgeInsets.all(20),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            '收益率曲线',
-                            style: Theme.of(context).textTheme.titleMedium
+                ),
+              ),
+              SizedBox(width: _kTripleGutter),
+              Expanded(
+                child: _tripleMetricCard(
+                  child: SingleChildScrollView(
+                    child: MonthEndValueCalendarPanel(
+                      snapshots: snap,
+                      title: '月度现金（日历）',
+                      description: '',
+                      valueAt: (s) => s.currentBalance,
+                      emptyMessage: '暂无历史快照',
+                      compact: true,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _overviewChip(
+    BuildContext context,
+    String label,
+    String value, {
+    Color? valueColor,
+    required double titleSize,
+  }) {
+    final color = valueColor ?? AppFinanceStyle.profitGreenEnd;
+    final numberStyle =
+        (Theme.of(context).textTheme.titleLarge ?? const TextStyle()).copyWith(
+          fontWeight: FontWeight.bold,
+          fontSize: titleSize,
+          color: color,
+        );
+    return Column(
+      children: [
+        Text(label, style: AppFinanceStyle.labelTextStyle(context)),
+        const SizedBox(height: 4),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          children: [Text(value, style: numberStyle)],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPositions({bool expandScroll = false}) {
+    final longs = _positions.where((p) => p.posSide == 'long').toList();
+    final shorts = _positions.where((p) => p.posSide == 'short').toList();
+    final shortCost = _weightedAvgPx(shorts);
+    final longCost = _weightedAvgPx(longs);
+    final singleInst =
+        _positions.isNotEmpty &&
+        _positions.map((p) => p.instId).toSet().length == 1;
+    final curPx = singleInst && _positions.isNotEmpty
+        ? (_liveLastPx ?? _singleInstQuotePx())
+        : 0.0;
+
+    final positionsInner = _positions.isEmpty
+        ? <Widget>[
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _positionsLoadError ?? '暂无持仓',
+                    style: TextStyle(
+                      color: _positionsLoadError != null
+                          ? Theme.of(context).colorScheme.error
+                          : AppFinanceStyle.labelColor,
+                    ),
+                  ),
+                  if (_positionsLoadError != null &&
+                      (_positionsLoadError!.contains('403') ||
+                          _positionsLoadError!.contains('白名单')))
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(
+                        '若本机运行 testapi 正常，请确认服务与本机同机，并在 OKX 后台将当前出口 IP 加入 API 白名单。',
+                        style:
+                            Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: AppFinanceStyle.labelColor.withValues(
+                                alpha: 0.8,
+                              ),
+                            ) ??
+                            TextStyle(
+                              fontSize: 12,
+                              color: AppFinanceStyle.labelColor.withValues(
+                                alpha: 0.8,
+                              ),
+                            ),
+                      ),
+                    ),
+                  _buildOkxDebugHint(),
+                ],
+              ),
+            ),
+          ]
+        : <Widget>[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '空仓',
+                        style: AppFinanceStyle.labelTextStyle(context),
+                      ),
+                      Text(
+                        '${shorts.fold<int>(0, (s, p) => s + p.pos.abs().round())}',
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(
+                              color: AppFinanceStyle.profitGreenEnd,
+                              fontWeight: FontWeight.bold,
+                            ),
+                      ),
+                      if (shortCost != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            '空仓成本 ${_fmt(shortCost)}',
+                            style: Theme.of(context).textTheme.bodySmall
                                 ?.copyWith(
                                   color: AppFinanceStyle.labelColor,
                                   fontWeight: FontWeight.w600,
                                 ),
                           ),
-                          const SizedBox(height: 12),
-                          SizedBox(
-                            height: 220,
-                            child: ProfitPercentLineChart(
-                              snapshots: _snapshots,
+                        ),
+                      if (shorts.isNotEmpty && singleInst && curPx > 0)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text(
+                            '空仓盈亏 ${_fmt(_totalDynUpl(shorts, curPx))}',
+                            style: TextStyle(
+                              color: _totalDynUpl(shorts, curPx) >= 0
+                                  ? AppFinanceStyle.profitGreenEnd
+                                  : Colors.red,
+                              fontSize: 12,
                             ),
+                          ),
+                        )
+                      else if (shorts.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text(
+                            '空仓浮盈 ${_fmt(shorts.fold<double>(0, (s, p) => s + p.upl))}',
+                            style: TextStyle(
+                              color:
+                                  (shorts.fold<double>(
+                                        0,
+                                        (s, p) => s + p.upl,
+                                      )) >=
+                                      0
+                                  ? AppFinanceStyle.profitGreenEnd
+                                  : Colors.red,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        '多仓',
+                        style: AppFinanceStyle.labelTextStyle(context),
+                      ),
+                      Text(
+                        '${longs.fold<int>(0, (s, p) => s + p.pos.round())}',
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(
+                              color: AppFinanceStyle.profitGreenEnd,
+                              fontWeight: FontWeight.bold,
+                            ),
+                      ),
+                      if (longCost != null)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            '多仓成本 ${_fmt(longCost)}',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(
+                                  color: AppFinanceStyle.labelColor,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                          ),
+                        ),
+                      if (longs.isNotEmpty && singleInst && curPx > 0)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text(
+                            '多仓盈亏 ${_fmt(_totalDynUpl(longs, curPx))}',
+                            style: TextStyle(
+                              color: _totalDynUpl(longs, curPx) >= 0
+                                  ? AppFinanceStyle.profitGreenEnd
+                                  : Colors.red,
+                              fontSize: 12,
+                            ),
+                          ),
+                        )
+                      else if (longs.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text(
+                            '多仓浮盈 ${_fmt(longs.fold<double>(0, (s, p) => s + p.upl))}',
+                            style: TextStyle(
+                              color:
+                                  (longs.fold<double>(
+                                        0,
+                                        (s, p) => s + p.upl,
+                                      )) >=
+                                      0
+                                  ? AppFinanceStyle.profitGreenEnd
+                                  : Colors.red,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            if (singleInst && curPx > 0)
+              _PriceAxisBar(
+                shortCost: shortCost,
+                longCost: longCost,
+                liveLastPx: curPx,
+                totalDynUpl: _totalDynUpl(_positions, curPx),
+                labelColor: AppFinanceStyle.labelColor,
+              )
+            else
+              ..._positions.map((p) {
+                final side = p.posSide == 'long' ? '多' : '空';
+                final color = p.upl >= 0
+                    ? AppFinanceStyle.profitGreenEnd
+                    : Colors.red;
+                final small = Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: AppFinanceStyle.labelColor,
+                );
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${p.instId} $side ${p.pos.toStringAsFixed(4)}',
+                        style: small,
+                      ),
+                      const SizedBox(height: 4),
+                      Wrap(
+                        spacing: 12,
+                        runSpacing: 4,
+                        children: [
+                          Text('均价 ${_fmt(p.avgPx)}', style: small),
+                          Text('现价 ${_fmt(p.displayPrice)}', style: small),
+                          Text('标记 ${_fmt(p.markPx)}', style: small),
+                          Text(
+                            '浮盈 ${_fmt(p.upl)}',
+                            style: TextStyle(color: color, fontSize: 12),
                           ),
                         ],
                       ),
-                    ),
+                    ],
+                  ),
+                );
+              }),
+            if (_positionsLoadError != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  _positionsLoadError!,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.error,
+                    fontSize: 12,
                   ),
                 ),
-                SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(24, 0, 24, 16),
-                  sliver: SliverToBoxAdapter(
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        final maxW = constraints.maxWidth;
-                        const gap = 16.0;
-                        final cols = maxW >= 960
-                            ? 3
-                            : maxW >= 560
-                            ? 2
-                            : 1;
-                        final cardW = cols > 1
-                            ? (maxW - gap * (cols - 1)) / cols
-                            : maxW;
+              ),
+            _buildOkxDebugHint(),
+          ];
 
-                        Widget seasonCard(BotSeason s, int index) {
-                          final profitColor = (s.profitAmount ?? 0) >= 0
-                              ? AppFinanceStyle.profitGreenEnd
-                              : Colors.red;
-                          return SizedBox(
-                            width: cardW,
-                            child: FinanceCard(
-                              padding: const EdgeInsets.all(18),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Expanded(
-                                        child: Text(
-                                          '赛季 $index',
-                                          style: Theme.of(context)
-                                              .textTheme
-                                              .titleSmall
-                                              ?.copyWith(
-                                                color:
-                                                    AppFinanceStyle.valueColor,
-                                                fontWeight: FontWeight.w700,
-                                              ),
-                                        ),
-                                      ),
-                                      Container(
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 10,
-                                          vertical: 4,
-                                        ),
-                                        decoration: BoxDecoration(
-                                          color: profitColor.withValues(
-                                            alpha: 0.12,
-                                          ),
-                                          borderRadius: BorderRadius.circular(
-                                            8,
-                                          ),
-                                          border: Border.all(
-                                            color: profitColor.withValues(
-                                              alpha: 0.35,
-                                            ),
-                                          ),
-                                        ),
-                                        child: Text(
-                                          _fmtPct(s.profitPercent ?? 0),
-                                          style: TextStyle(
-                                            color: profitColor,
-                                            fontWeight: FontWeight.w700,
-                                            fontSize: 13,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 10),
-                                  Text(
-                                    '${_formatSeasonTime(s.startedAt)}  →  ${_formatSeasonTime(s.stoppedAt)}',
-                                    style: Theme.of(context).textTheme.bodySmall
-                                        ?.copyWith(
-                                          color: AppFinanceStyle.labelColor,
-                                        ),
-                                  ),
-                                  const SizedBox(height: 14),
-                                  Text(
-                                    '收益',
-                                    style: AppFinanceStyle.labelTextStyle(
-                                      context,
-                                    ).copyWith(fontSize: 12),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    _fmt(s.profitAmount ?? 0),
-                                    style: TextStyle(
-                                      color: profitColor,
-                                      fontWeight: FontWeight.w800,
-                                      fontSize: 22,
-                                      letterSpacing: -0.3,
-                                    ),
-                                  ),
-                                  if (s.initialBalance > 0 ||
-                                      (s.finalBalance != null &&
-                                          s.finalBalance! > 0)) ...[
-                                    const SizedBox(height: 12),
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            '期初 ${_fmt(s.initialBalance)}',
-                                            style: Theme.of(context)
-                                                .textTheme
-                                                .labelSmall
-                                                ?.copyWith(
-                                                  color: AppFinanceStyle
-                                                      .labelColor,
-                                                ),
-                                          ),
-                                        ),
-                                        if (s.finalBalance != null)
-                                          Text(
-                                            '期末 ${_fmt(s.finalBalance!)}',
-                                            style: Theme.of(context)
-                                                .textTheme
-                                                .labelSmall
-                                                ?.copyWith(
-                                                  color: AppFinanceStyle
-                                                      .labelColor,
-                                                ),
-                                          ),
-                                      ],
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ),
-                          );
-                        }
+    return _glassCard(
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            '当前持仓',
+            style: (Theme.of(context).textTheme.titleLarge ?? const TextStyle())
+                .copyWith(
+                  color: AppFinanceStyle.labelColor,
+                  fontSize:
+                      (Theme.of(context).textTheme.titleLarge?.fontSize ?? 22) +
+                      4,
+                ),
+          ),
+          const SizedBox(height: 8),
+          if (expandScroll)
+            Expanded(
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: positionsInner,
+                ),
+              ),
+            )
+          else
+            ...positionsInner,
+        ],
+      ),
+    );
+  }
 
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '赛季',
-                              style: Theme.of(context).textTheme.titleMedium
-                                  ?.copyWith(
-                                    color: AppFinanceStyle.labelColor,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                            ),
-                            const SizedBox(height: 16),
-                            if (_metricsError != null)
-                              FinanceCard(
-                                padding: const EdgeInsets.all(24),
-                                child: Center(
-                                  child: Text(
-                                    '赛季数据加载失败',
-                                    style: AppFinanceStyle.labelTextStyle(
-                                      context,
-                                    ),
-                                  ),
-                                ),
-                              )
-                            else if (_seasons.isEmpty)
-                              FinanceCard(
-                                padding: const EdgeInsets.all(24),
-                                child: Center(
-                                  child: Text(
-                                    '暂无赛季数据',
-                                    style: AppFinanceStyle.labelTextStyle(
-                                      context,
-                                    ),
-                                  ),
-                                ),
-                              )
-                            else
-                              Wrap(
-                                spacing: gap,
-                                runSpacing: gap,
-                                children: [
-                                  for (final e
-                                      in _seasons
-                                          .take(24)
-                                          .toList()
-                                          .asMap()
-                                          .entries)
-                                    seasonCard(e.value, e.key + 1),
-                                ],
-                              ),
-                          ],
-                        );
-                      },
-                    ),
-                  ),
-                ),
-                const SliverPadding(
-                  padding: EdgeInsets.only(bottom: 48),
-                ),
-              ],
-            ],
+  Widget _buildSeasons({bool expandScroll = false}) {
+    final header = Text(
+      '赛季盈利',
+      style: (Theme.of(context).textTheme.titleLarge ?? const TextStyle())
+          .copyWith(
+            color: AppFinanceStyle.labelColor,
+            fontSize:
+                (Theme.of(context).textTheme.titleLarge?.fontSize ?? 22) + 4,
+          ),
+    );
+    final tableHead = Row(
+      children: [
+        Expanded(
+          flex: 2,
+          child: Text(
+            '收益',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: AppFinanceStyle.valueColor,
+              fontSize:
+                  (Theme.of(context).textTheme.bodyMedium?.fontSize ?? 16) + 2,
+            ),
+            textAlign: TextAlign.left,
           ),
         ),
+        Expanded(
+          flex: 1,
+          child: Text(
+            '盈利率',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+              color: AppFinanceStyle.valueColor,
+              fontSize:
+                  (Theme.of(context).textTheme.bodyMedium?.fontSize ?? 16) + 2,
+            ),
+            textAlign: TextAlign.right,
+          ),
+        ),
+      ],
+    );
+    final seasonsBody = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        tableHead,
+        const SizedBox(height: 8),
+        const SizedBox(height: 8),
+        if (_seasons.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Text(
+              '暂无赛季记录',
+              style: TextStyle(color: AppFinanceStyle.labelColor),
+            ),
+          )
+        else
+          ..._seasons.asMap().entries.map((entry) {
+            final index = entry.key + 1;
+            final s = entry.value;
+            final profitColor = (s.profitAmount ?? 0) >= 0
+                ? AppFinanceStyle.profitGreenEnd
+                : Colors.red;
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '赛季 $index',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: AppFinanceStyle.labelColor,
+                            fontSize:
+                                (Theme.of(context).textTheme.bodyMedium?.fontSize ??
+                                        16) +
+                                    4,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Row(
+                          children: [
+                            Text(
+                              _formatSeasonTime(s.startedAt),
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: AppFinanceStyle.labelColor,
+                                  ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              '-',
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: AppFinanceStyle.labelColor,
+                                  ),
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              _formatSeasonTime(s.stoppedAt),
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    color: AppFinanceStyle.labelColor,
+                                  ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        const SizedBox(height: 24),
+                        Text(
+                          _fmt(s.profitAmount ?? 0),
+                          style: TextStyle(
+                            color: profitColor,
+                            fontWeight: FontWeight.bold,
+                            fontSize:
+                                (Theme.of(context).textTheme.bodyMedium?.fontSize ??
+                                        16) +
+                                    4,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        const SizedBox(height: 24),
+                        Text(
+                          _fmtPct(s.profitPercent ?? 0),
+                          style: TextStyle(
+                            color: profitColor,
+                            fontWeight: FontWeight.bold,
+                            fontSize:
+                                (Theme.of(context).textTheme.bodyMedium?.fontSize ??
+                                        16) +
+                                    4,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
+      ],
+    );
+
+    return _glassCard(
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          header,
+          const SizedBox(height: 8),
+          if (expandScroll)
+            Expanded(
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                child: seasonsBody,
+              ),
+            )
+          else
+            seasonsBody,
+        ],
       ),
+    );
+  }
+}
+
+class _PriceAxisBar extends StatelessWidget {
+  const _PriceAxisBar({
+    required this.shortCost,
+    required this.longCost,
+    required this.liveLastPx,
+    required this.totalDynUpl,
+    this.labelColor,
+  });
+
+  final double? shortCost;
+  final double? longCost;
+  final double liveLastPx;
+  final double totalDynUpl;
+  final Color? labelColor;
+
+  static String _fmtPrice(double v) {
+    if (v >= 1000) return v.toStringAsFixed(0);
+    if (v >= 1) return v.toStringAsFixed(1);
+    return v.toStringAsFixed(2);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final lc = labelColor ?? const Color.fromRGBO(216, 216, 216, 1);
+    final anchors = <double>[
+      if (shortCost != null && shortCost! > 0) shortCost!,
+      if (longCost != null && longCost! > 0) longCost!,
+      if (liveLastPx > 0) liveLastPx,
+    ];
+    if (anchors.isEmpty) return const SizedBox.shrink();
+
+    var axisLo = anchors.reduce(math.min);
+    var axisHi = anchors.reduce(math.max);
+    final span0 = axisHi - axisLo;
+    final pad = span0 > 0 ? span0 * 0.06 : math.max(liveLastPx.abs() * 1e-4, 1e-6);
+    axisLo -= pad;
+    axisHi += pad;
+    final span = axisHi - axisLo;
+    final safeSpan = span <= 0 ? 1e-12 : span;
+
+    double norm(double p) => ((p - axisLo) / safeSpan).clamp(0.0, 1.0);
+
+    final uplColor = totalDynUpl >= 0
+        ? AppFinanceStyle.profitGreenEnd
+        : Colors.red;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SizedBox(
+          height: 72,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final w = constraints.maxWidth;
+              final xCur = norm(liveLastPx) * w;
+              final xShort = shortCost != null && shortCost! > 0
+                  ? norm(shortCost!) * w
+                  : null;
+              final xLong = longCost != null && longCost! > 0
+                  ? norm(longCost!) * w
+                  : null;
+
+              return Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    top: 44,
+                    height: 6,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: lc.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(3),
+                      ),
+                    ),
+                  ),
+                  if (xShort != null)
+                    Positioned(
+                      left: xShort - 1,
+                      top: 40,
+                      width: 2,
+                      height: 14,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Colors.redAccent.withValues(alpha: 0.85),
+                          borderRadius: BorderRadius.circular(1),
+                        ),
+                      ),
+                    ),
+                  if (xLong != null)
+                    Positioned(
+                      left: xLong - 1,
+                      top: 40,
+                      width: 2,
+                      height: 14,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Colors.green.withValues(alpha: 0.85),
+                          borderRadius: BorderRadius.circular(1),
+                        ),
+                      ),
+                    ),
+                  Positioned(
+                    left: xCur - 1.5,
+                    top: 38,
+                    width: 3,
+                    height: 18,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Colors.blue.withValues(alpha: 0.95),
+                        borderRadius: BorderRadius.circular(1.5),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    left: xCur,
+                    top: 0,
+                    child: Transform.translate(
+                      offset: const Offset(-52, 0),
+                      child: SizedBox(
+                        width: 104,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          children: [
+                            Text(
+                              '现价 ${_fmtPrice(liveLastPx)}',
+                              textAlign: TextAlign.center,
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(
+                                    color: Colors.lightBlueAccent,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 13,
+                                  ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              '浮动盈亏 ${totalDynUpl.toStringAsFixed(2)}',
+                              textAlign: TextAlign.center,
+                              style: Theme.of(context).textTheme.bodySmall
+                                  ?.copyWith(color: uplColor, fontSize: 11),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+        Row(
+          children: [
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: shortCost != null && shortCost! > 0
+                    ? Text(
+                        '空 ${_fmtPrice(shortCost!)}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Colors.redAccent.withValues(alpha: 0.9),
+                        ),
+                      )
+                    : const SizedBox.shrink(),
+              ),
+            ),
+            Expanded(
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: longCost != null && longCost! > 0
+                    ? Text(
+                        '多 ${_fmtPrice(longCost!)}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Colors.green.withValues(alpha: 0.9),
+                        ),
+                      )
+                    : const SizedBox.shrink(),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Text(
+              _fmtPrice(axisLo),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: lc.withValues(alpha: 0.75)),
+            ),
+            const Spacer(),
+            Text(
+              _fmtPrice(axisHi),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: lc.withValues(alpha: 0.75)),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

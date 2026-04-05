@@ -10,15 +10,8 @@ DateTime? _parseSnapshotAt(String raw) {
   return DateTime.tryParse(s.replaceFirst(' ', 'T'));
 }
 
-/// 月底权益差分统计 + 柱状图 + 可切换月份的日历（按日权益变化着色）。
-class MonthEndProfitPanel extends StatefulWidget {
-  const MonthEndProfitPanel({super.key, required this.snapshots});
-
-  final List<BotProfitSnapshot> snapshots;
-
-  @override
-  State<MonthEndProfitPanel> createState() => _MonthEndProfitPanelState();
-}
+/// 从快照中取用于「时点余额」的数值（权益或现金）。
+typedef MonthEndSnapshotValue = double Function(BotProfitSnapshot snapshot);
 
 class _MonthStat {
   _MonthStat({required this.year, required this.month, required this.monthlyPnL});
@@ -30,269 +23,542 @@ class _MonthStat {
   String get label => '$year-${month.toString().padLeft(2, '0')}';
 }
 
-class _MonthEndProfitPanelState extends State<MonthEndProfitPanel> {
+// --- 共享计算逻辑 ---
+
+List<BotProfitSnapshot> _sortedSnapshotsWithDates(List<BotProfitSnapshot> raw) {
+  final withDates = <({DateTime d, BotProfitSnapshot s})>[];
+  for (final s in raw) {
+    final d = _parseSnapshotAt(s.snapshotAt);
+    if (d != null) withDates.add((d: d, s: s));
+  }
+  withDates.sort((a, b) => a.d.compareTo(b.d));
+  return withDates.map((e) => e.s).toList();
+}
+
+DateTime _defaultFocusedMonth(List<BotProfitSnapshot> sorted) {
+  if (sorted.isEmpty) return DateTime(DateTime.now().year, DateTime.now().month);
+  final last = _parseSnapshotAt(sorted.last.snapshotAt);
+  if (last == null) return DateTime(DateTime.now().year, DateTime.now().month);
+  return DateTime(last.year, last.month);
+}
+
+double _valueAtOrBefore(
+  List<BotProfitSnapshot> sorted,
+  DateTime instant,
+  MonthEndSnapshotValue valueAt,
+) {
+  double? v;
+  for (final s in sorted) {
+    final d = _parseSnapshotAt(s.snapshotAt);
+    if (d == null) continue;
+    if (!d.isAfter(instant)) {
+      v = valueAt(s);
+    } else {
+      break;
+    }
+  }
+  return v ?? double.nan;
+}
+
+double _valueStrictlyBefore(
+  List<BotProfitSnapshot> sorted,
+  DateTime instant,
+  MonthEndSnapshotValue valueAt,
+) {
+  double? v;
+  for (final s in sorted) {
+    final d = _parseSnapshotAt(s.snapshotAt);
+    if (d == null) continue;
+    if (d.isBefore(instant)) {
+      v = valueAt(s);
+    } else {
+      break;
+    }
+  }
+  return v ?? double.nan;
+}
+
+List<_MonthStat> _computeMonthlyStats(
+  List<BotProfitSnapshot> sorted,
+  MonthEndSnapshotValue valueAt,
+  double fallbackBeforeFirst,
+) {
+  if (sorted.isEmpty) return [];
+  final months = <String, void>{};
+  for (final s in sorted) {
+    final d = _parseSnapshotAt(s.snapshotAt);
+    if (d == null) continue;
+    months['${d.year}-${d.month}'] = null;
+  }
+  final keys = months.keys.toList()
+    ..sort((a, b) {
+      final pa = a.split('-');
+      final pb = b.split('-');
+      final ya = int.parse(pa[0]);
+      final ma = int.parse(pa[1]);
+      final yb = int.parse(pb[0]);
+      final mb = int.parse(pb[1]);
+      if (ya != yb) return ya.compareTo(yb);
+      return ma.compareTo(mb);
+    });
+  final out = <_MonthStat>[];
+  for (final key in keys) {
+    final parts = key.split('-');
+    final y = int.parse(parts[0]);
+    final m = int.parse(parts[1]);
+    final firstDay = DateTime(y, m, 1);
+    var startVal = fallbackBeforeFirst;
+    for (final s in sorted) {
+      final d = _parseSnapshotAt(s.snapshotAt);
+      if (d == null) continue;
+      if (d.isBefore(firstDay)) {
+        startVal = valueAt(s);
+      } else {
+        break;
+      }
+    }
+    var endVal = double.nan;
+    for (final s in sorted) {
+      final d = _parseSnapshotAt(s.snapshotAt);
+      if (d != null && d.year == y && d.month == m) {
+        endVal = valueAt(s);
+      }
+    }
+    if (endVal.isFinite) {
+      out.add(_MonthStat(year: y, month: m, monthlyPnL: endVal - startVal));
+    }
+  }
+  return out;
+}
+
+Map<int, double> _dailyDeltaForMonth(
+  List<BotProfitSnapshot> sorted,
+  DateTime focusedMonth,
+  MonthEndSnapshotValue valueAt,
+  double fallbackBeforeFirst,
+) {
+  final y = focusedMonth.year;
+  final m = focusedMonth.month;
+  final lastDay = DateTime(y, m + 1, 0).day;
+  final map = <int, double>{};
+  for (var day = 1; day <= lastDay; day++) {
+    final dayStart = DateTime(y, m, day);
+    final dayEnd = DateTime(y, m, day, 23, 59, 59, 999);
+    var eod = _valueAtOrBefore(sorted, dayEnd, valueAt);
+    var sod = _valueStrictlyBefore(sorted, dayStart, valueAt);
+    if (!eod.isFinite) continue;
+    if (!sod.isFinite) sod = fallbackBeforeFirst;
+    final pnl = eod - sod;
+    if (pnl != 0 || _hasSnapshotOnDay(sorted, dayStart, dayEnd)) {
+      map[day] = pnl;
+    }
+  }
+  return map;
+}
+
+bool _hasSnapshotOnDay(
+  List<BotProfitSnapshot> sorted,
+  DateTime dayStart,
+  DateTime dayEnd,
+) {
+  for (final s in sorted) {
+    final d = _parseSnapshotAt(s.snapshotAt);
+    if (d == null) continue;
+    if (!d.isBefore(dayStart) && !d.isAfter(dayEnd)) return true;
+  }
+  return false;
+}
+
+double _barMaxY(List<_MonthStat> monthly) {
+  if (monthly.isEmpty) return 1;
+  var maxV = monthly.first.monthlyPnL;
+  var minV = monthly.first.monthlyPnL;
+  for (final e in monthly) {
+    if (e.monthlyPnL > maxV) maxV = e.monthlyPnL;
+    if (e.monthlyPnL < minV) minV = e.monthlyPnL;
+  }
+  if (maxV <= 0) return 1.0;
+  final pad = (maxV - minV).abs() * 0.12 + 1;
+  return maxV + pad;
+}
+
+double _barMinY(List<_MonthStat> monthly) {
+  if (monthly.isEmpty) return -1;
+  var maxV = monthly.first.monthlyPnL;
+  var minV = monthly.first.monthlyPnL;
+  for (final e in monthly) {
+    if (e.monthlyPnL > maxV) maxV = e.monthlyPnL;
+    if (e.monthlyPnL < minV) minV = e.monthlyPnL;
+  }
+  if (minV >= 0) return 0.0;
+  final pad = (maxV - minV).abs() * 0.12 + 1;
+  return minV - pad;
+}
+
+/// 截止 [endMonth]（含）之前最多 [maxBars] 个自然月的柱数据。
+List<_MonthStat> _visibleMonthlyBars(
+  List<_MonthStat> all,
+  DateTime endMonth,
+  int maxBars,
+) {
+  final filtered = all.where((s) {
+    if (s.year > endMonth.year) return false;
+    if (s.year == endMonth.year && s.month > endMonth.month) return false;
+    return true;
+  }).toList();
+  if (filtered.length <= maxBars) return filtered;
+  return filtered.sublist(filtered.length - maxBars);
+}
+
+DateTime _monthStatAsDateTime(_MonthStat s) => DateTime(s.year, s.month);
+
+DateTime _clampEndMonthToData(List<_MonthStat> monthly, DateTime candidate) {
+  if (monthly.isEmpty) return candidate;
+  final first = _monthStatAsDateTime(monthly.first);
+  final last = _monthStatAsDateTime(monthly.last);
+  if (candidate.isBefore(first)) return first;
+  if (candidate.isAfter(last)) return last;
+  return DateTime(candidate.year, candidate.month);
+}
+
+// --- 柱状图卡片 ---
+
+/// 月度时点余额差分：柱状图（自然月汇总），可选截止月份，最多展示 12 个月。
+class MonthEndValueBarPanel extends StatefulWidget {
+  const MonthEndValueBarPanel({
+    super.key,
+    required this.snapshots,
+    required this.title,
+    required this.description,
+    required this.valueAt,
+    required this.emptyMessage,
+    this.maxBars = 12,
+    this.compact = false,
+    this.barChartHeight,
+  });
+
+  final List<BotProfitSnapshot> snapshots;
+  final String title;
+  final String description;
+  final MonthEndSnapshotValue valueAt;
+  final String emptyMessage;
+  final int maxBars;
+  /// 三列栅格等：缩小标题与说明，柱图高度由 [barChartHeight] 或缺省值决定。
+  final bool compact;
+  final double? barChartHeight;
+
+  @override
+  State<MonthEndValueBarPanel> createState() => _MonthEndValueBarPanelState();
+}
+
+class _MonthEndValueBarPanelState extends State<MonthEndValueBarPanel> {
+  /// 用户选择的截止月；null 表示跟随数据最后一月。
+  DateTime? _endMonthManual;
+
+  @override
+  void didUpdateWidget(covariant MonthEndValueBarPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.snapshots, widget.snapshots)) {
+      _endMonthManual = null;
+    }
+  }
+
+  DateTime _effectiveEndMonth(List<_MonthStat> monthly) {
+    if (monthly.isEmpty) {
+      return DateTime(DateTime.now().year, DateTime.now().month);
+    }
+    final last = _monthStatAsDateTime(monthly.last);
+    if (_endMonthManual == null) return last;
+    return _clampEndMonthToData(monthly, _endMonthManual!);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sorted = _sortedSnapshotsWithDates(widget.snapshots);
+    final fallback = sorted.isEmpty ? 0.0 : sorted.first.initialBalance;
+    final monthly = _computeMonthlyStats(sorted, widget.valueAt, fallback);
+    final end = _effectiveEndMonth(monthly);
+    final visible = _visibleMonthlyBars(monthly, end, widget.maxBars);
+    final barH = widget.barChartHeight ?? (widget.compact ? 140.0 : 200.0);
+    final titleStyle = widget.compact
+        ? (Theme.of(context).textTheme.titleMedium ?? const TextStyle()).copyWith(
+            color: AppFinanceStyle.labelColor,
+            fontWeight: FontWeight.w700,
+            fontSize: 15,
+          )
+        : (Theme.of(context).textTheme.titleLarge ?? const TextStyle()).copyWith(
+            color: AppFinanceStyle.labelColor,
+            fontSize: (Theme.of(context).textTheme.titleLarge?.fontSize ?? 22) + 4,
+          );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(widget.title, style: titleStyle),
+        if (!widget.compact) ...[
+          const SizedBox(height: 8),
+          Text(
+            widget.description,
+            style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 12),
+          ),
+        ],
+        if (monthly.isNotEmpty && !widget.compact) ...[
+          const SizedBox(height: 8),
+          Text(
+            '使用左右箭头选择截止月份；柱状图展示此前最多 ${widget.maxBars} 个自然月（有快照的月份）。',
+            style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 11),
+          ),
+        ],
+        SizedBox(height: widget.compact ? 6 : 12),
+        if (monthly.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: Text(
+              widget.emptyMessage,
+              style: TextStyle(color: AppFinanceStyle.labelColor, fontSize: 13),
+            ),
+          )
+        else ...[
+          Row(
+            children: [
+              if (!widget.compact)
+                Text(
+                  '截止月份',
+                  style: AppFinanceStyle.labelTextStyle(context).copyWith(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+              if (!widget.compact) const Spacer(),
+              IconButton(
+                tooltip: '上一月',
+                visualDensity: widget.compact ? VisualDensity.compact : null,
+                padding: widget.compact ? EdgeInsets.zero : null,
+                constraints: widget.compact
+                    ? const BoxConstraints(minWidth: 32, minHeight: 32)
+                    : null,
+                icon: const Icon(Icons.chevron_left, color: AppFinanceStyle.valueColor),
+                onPressed: () {
+                  setState(() {
+                    final cur = _effectiveEndMonth(monthly);
+                    _endMonthManual = _clampEndMonthToData(
+                      monthly,
+                      DateTime(cur.year, cur.month - 1),
+                    );
+                  });
+                },
+              ),
+              Text(
+                '${end.year}-${end.month.toString().padLeft(2, '0')}',
+                style: TextStyle(
+                  color: AppFinanceStyle.valueColor,
+                  fontWeight: FontWeight.w600,
+                  fontSize: widget.compact ? 12 : 14,
+                ),
+              ),
+              IconButton(
+                tooltip: '下一月',
+                visualDensity: widget.compact ? VisualDensity.compact : null,
+                padding: widget.compact ? EdgeInsets.zero : null,
+                constraints: widget.compact
+                    ? const BoxConstraints(minWidth: 32, minHeight: 32)
+                    : null,
+                icon: const Icon(Icons.chevron_right, color: AppFinanceStyle.valueColor),
+                onPressed: () {
+                  setState(() {
+                    final cur = _effectiveEndMonth(monthly);
+                    _endMonthManual = _clampEndMonthToData(
+                      monthly,
+                      DateTime(cur.year, cur.month + 1),
+                    );
+                  });
+                },
+              ),
+              if (widget.compact) const Spacer(),
+            ],
+          ),
+          SizedBox(height: widget.compact ? 4 : 8),
+          if (visible.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: Text(
+                '当前截止月份之前无可用月份数据',
+                style: TextStyle(color: AppFinanceStyle.labelColor, fontSize: 13),
+              ),
+            )
+          else
+            SizedBox(
+              height: barH,
+              child: BarChart(
+                BarChartData(
+                  alignment: BarChartAlignment.spaceAround,
+                  maxY: _barMaxY(visible),
+                  minY: _barMinY(visible),
+                  gridData: FlGridData(
+                    show: true,
+                    drawVerticalLine: false,
+                    getDrawingHorizontalLine: (v) => FlLine(
+                      color: Colors.white.withValues(alpha: 0.06),
+                      strokeWidth: 1,
+                    ),
+                  ),
+                  borderData: FlBorderData(show: false),
+                  titlesData: FlTitlesData(
+                    show: true,
+                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                    leftTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                        reservedSize: widget.compact ? 32 : 40,
+                        getTitlesWidget: (v, m) => Text(
+                          v.toStringAsFixed(0),
+                          style: TextStyle(
+                            color: AppFinanceStyle.labelColor.withValues(alpha: 0.85),
+                            fontSize: widget.compact ? 8 : 10,
+                          ),
+                        ),
+                      ),
+                    ),
+                    bottomTitles: AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: true,
+                      reservedSize: widget.compact ? 22 : 28,
+                      getTitlesWidget: (v, m) {
+                        final i = v.round();
+                        if (i < 0 || i >= visible.length) return const SizedBox.shrink();
+                        final label = visible[i].label;
+                        final short = label.length >= 7 ? label.substring(2) : label;
+                        return Padding(
+                          padding: EdgeInsets.only(top: widget.compact ? 2 : 6),
+                          child: Text(
+                            short,
+                            style: TextStyle(
+                              color: AppFinanceStyle.labelColor.withValues(alpha: 0.9),
+                              fontSize: widget.compact ? 7 : 9,
+                            ),
+                          ),
+                        );
+                      },
+                      ),
+                    ),
+                  ),
+                  barGroups: [
+                    for (var i = 0; i < visible.length; i++)
+                      BarChartGroupData(
+                        x: i,
+                        barRods: [
+                          BarChartRodData(
+                            toY: visible[i].monthlyPnL,
+                            width: 14,
+                            borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+                            color: visible[i].monthlyPnL >= 0
+                                ? AppFinanceStyle.profitGreenEnd
+                                : Colors.red.withValues(alpha: 0.85),
+                          ),
+                        ],
+                      ),
+                  ],
+                ),
+              ),
+            ),
+        ],
+      ],
+    );
+  }
+}
+
+// --- 日历卡片 ---
+
+/// 按日展示当月内相邻快照间的余额变化（着色与数值与权益版一致）。
+class MonthEndValueCalendarPanel extends StatefulWidget {
+  const MonthEndValueCalendarPanel({
+    super.key,
+    required this.snapshots,
+    required this.title,
+    required this.description,
+    required this.valueAt,
+    required this.emptyMessage,
+    this.compact = false,
+  });
+
+  final List<BotProfitSnapshot> snapshots;
+  final String title;
+  final String description;
+  final MonthEndSnapshotValue valueAt;
+  final String emptyMessage;
+  final bool compact;
+
+  @override
+  State<MonthEndValueCalendarPanel> createState() => _MonthEndValueCalendarPanelState();
+}
+
+class _MonthEndValueCalendarPanelState extends State<MonthEndValueCalendarPanel> {
   late DateTime _focusedMonth;
 
   @override
   void initState() {
     super.initState();
-    _focusedMonth = _defaultFocusedMonth(widget.snapshots);
+    _focusedMonth = _defaultFocusedMonth(_sortedSnapshotsWithDates(widget.snapshots));
   }
 
   @override
-  void didUpdateWidget(covariant MonthEndProfitPanel oldWidget) {
+  void didUpdateWidget(covariant MonthEndValueCalendarPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.snapshots.isEmpty && widget.snapshots.isNotEmpty) {
-      _focusedMonth = _defaultFocusedMonth(widget.snapshots);
+      _focusedMonth = _defaultFocusedMonth(_sortedSnapshotsWithDates(widget.snapshots));
     }
-  }
-
-  static DateTime _defaultFocusedMonth(List<BotProfitSnapshot> snapshots) {
-    final sorted = _sortedWithDates(snapshots);
-    if (sorted.isEmpty) return DateTime(DateTime.now().year, DateTime.now().month);
-    final last = _parseSnapshotAt(sorted.last.snapshotAt);
-    if (last == null) return DateTime(DateTime.now().year, DateTime.now().month);
-    return DateTime(last.year, last.month);
-  }
-
-  static List<BotProfitSnapshot> _sortedWithDates(List<BotProfitSnapshot> raw) {
-    final withDates = <({DateTime d, BotProfitSnapshot s})>[];
-    for (final s in raw) {
-      final d = _parseSnapshotAt(s.snapshotAt);
-      if (d != null) withDates.add((d: d, s: s));
-    }
-    withDates.sort((a, b) => a.d.compareTo(b.d));
-    return withDates.map((e) => e.s).toList();
-  }
-
-  static double _equityAtOrBefore(List<BotProfitSnapshot> sorted, DateTime instant) {
-    double? eq;
-    for (final s in sorted) {
-      final d = _parseSnapshotAt(s.snapshotAt);
-      if (d == null) continue;
-      if (!d.isAfter(instant)) {
-        eq = s.equityUsdt;
-      } else {
-        break;
-      }
-    }
-    return eq ?? double.nan;
-  }
-
-  static double _equityStrictlyBefore(List<BotProfitSnapshot> sorted, DateTime instant) {
-    double? eq;
-    for (final s in sorted) {
-      final d = _parseSnapshotAt(s.snapshotAt);
-      if (d == null) continue;
-      if (d.isBefore(instant)) {
-        eq = s.equityUsdt;
-      } else {
-        break;
-      }
-    }
-    return eq ?? double.nan;
-  }
-
-  static List<_MonthStat> _computeMonthly(List<BotProfitSnapshot> sorted) {
-    if (sorted.isEmpty) return [];
-    final months = <String, void>{};
-    for (final s in sorted) {
-      final d = _parseSnapshotAt(s.snapshotAt);
-      if (d == null) continue;
-      months['${d.year}-${d.month}'] = null;
-    }
-    final keys = months.keys.toList()
-      ..sort((a, b) {
-        final pa = a.split('-');
-        final pb = b.split('-');
-        final ya = int.parse(pa[0]);
-        final ma = int.parse(pa[1]);
-        final yb = int.parse(pb[0]);
-        final mb = int.parse(pb[1]);
-        if (ya != yb) return ya.compareTo(yb);
-        return ma.compareTo(mb);
-      });
-    final out = <_MonthStat>[];
-    for (final key in keys) {
-      final parts = key.split('-');
-      final y = int.parse(parts[0]);
-      final m = int.parse(parts[1]);
-      final firstDay = DateTime(y, m, 1);
-      double startEq = sorted.first.initialBalance;
-      for (final s in sorted) {
-        final d = _parseSnapshotAt(s.snapshotAt);
-        if (d == null) continue;
-        if (d.isBefore(firstDay)) {
-          startEq = s.equityUsdt;
-        } else {
-          break;
-        }
-      }
-      double endEq = double.nan;
-      for (final s in sorted) {
-        final d = _parseSnapshotAt(s.snapshotAt);
-        if (d != null && d.year == y && d.month == m) {
-          endEq = s.equityUsdt;
-        }
-      }
-      if (endEq.isFinite) {
-        out.add(_MonthStat(year: y, month: m, monthlyPnL: endEq - startEq));
-      }
-    }
-    return out;
-  }
-
-  Map<int, double> _dailyPnLForFocusedMonth(List<BotProfitSnapshot> sorted) {
-    final y = _focusedMonth.year;
-    final m = _focusedMonth.month;
-    final lastDay = DateTime(y, m + 1, 0).day;
-    final map = <int, double>{};
-    for (var day = 1; day <= lastDay; day++) {
-      final dayStart = DateTime(y, m, day);
-      final dayEnd = DateTime(y, m, day, 23, 59, 59, 999);
-      var eod = _equityAtOrBefore(sorted, dayEnd);
-      var sod = _equityStrictlyBefore(sorted, dayStart);
-      if (!eod.isFinite) continue;
-      if (!sod.isFinite) sod = sorted.first.initialBalance;
-      final pnl = eod - sod;
-      if (pnl != 0 || _hasSnapshotOnDay(sorted, dayStart, dayEnd)) {
-        map[day] = pnl;
-      }
-    }
-    return map;
-  }
-
-  static bool _hasSnapshotOnDay(
-    List<BotProfitSnapshot> sorted,
-    DateTime dayStart,
-    DateTime dayEnd,
-  ) {
-    for (final s in sorted) {
-      final d = _parseSnapshotAt(s.snapshotAt);
-      if (d == null) continue;
-      if (!d.isBefore(dayStart) && !d.isAfter(dayEnd)) return true;
-    }
-    return false;
   }
 
   @override
   Widget build(BuildContext context) {
-    final sorted = _sortedWithDates(widget.snapshots);
-    final monthly = _computeMonthly(sorted);
-    final daily = _dailyPnLForFocusedMonth(sorted);
+    final sorted = _sortedSnapshotsWithDates(widget.snapshots);
+    final fallback = sorted.isEmpty ? 0.0 : sorted.first.initialBalance;
+    final monthly = _computeMonthlyStats(sorted, widget.valueAt, fallback);
+    final daily = _dailyDeltaForMonth(sorted, _focusedMonth, widget.valueAt, fallback);
+    final titleStyle = widget.compact
+        ? (Theme.of(context).textTheme.titleMedium ?? const TextStyle()).copyWith(
+            color: AppFinanceStyle.labelColor,
+            fontWeight: FontWeight.w700,
+            fontSize: 15,
+          )
+        : (Theme.of(context).textTheme.titleLarge ?? const TextStyle()).copyWith(
+            color: AppFinanceStyle.labelColor,
+            fontSize: (Theme.of(context).textTheme.titleLarge?.fontSize ?? 22) + 4,
+          );
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Text(
-          '月底收益统计',
-          style: (Theme.of(context).textTheme.titleLarge ?? const TextStyle()).copyWith(
-            color: AppFinanceStyle.labelColor,
-            fontSize: (Theme.of(context).textTheme.titleLarge?.fontSize ?? 22) + 4,
+        Text(widget.title, style: titleStyle),
+        if (!widget.compact) ...[
+          const SizedBox(height: 8),
+          Text(
+            widget.description,
+            style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 12),
           ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          '按自然月汇总：当月最后一条快照权益相对上月末（或期初）的变化（USDT）。',
-          style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 12),
-        ),
-        const SizedBox(height: 16),
+        ],
+        SizedBox(height: widget.compact ? 6 : 16),
         if (monthly.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
             child: Text(
-              '暂无历史快照，无法统计月度收益',
+              widget.emptyMessage,
               style: TextStyle(color: AppFinanceStyle.labelColor, fontSize: 13),
             ),
           )
         else ...[
-          SizedBox(
-            height: 200,
-            child: BarChart(
-              BarChartData(
-                alignment: BarChartAlignment.spaceAround,
-                maxY: _barMaxY(monthly),
-                minY: _barMinY(monthly),
-                gridData: FlGridData(
-                  show: true,
-                  drawVerticalLine: false,
-                  getDrawingHorizontalLine: (v) => FlLine(
-                    color: Colors.white.withValues(alpha: 0.06),
-                    strokeWidth: 1,
-                  ),
-                ),
-                borderData: FlBorderData(show: false),
-                titlesData: FlTitlesData(
-                  show: true,
-                  topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  leftTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      reservedSize: 40,
-                      getTitlesWidget: (v, m) => Text(
-                        v.toStringAsFixed(0),
-                        style: TextStyle(
-                          color: AppFinanceStyle.labelColor.withValues(alpha: 0.85),
-                          fontSize: 10,
-                        ),
-                      ),
-                    ),
-                  ),
-                  bottomTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      reservedSize: 28,
-                      getTitlesWidget: (v, m) {
-                        final i = v.round();
-                        if (i < 0 || i >= monthly.length) return const SizedBox.shrink();
-                        final label = monthly[i].label;
-                        final short = label.length >= 7 ? label.substring(2) : label;
-                        return Padding(
-                          padding: const EdgeInsets.only(top: 6),
-                          child: Text(
-                            short,
-                            style: TextStyle(
-                              color: AppFinanceStyle.labelColor.withValues(alpha: 0.9),
-                              fontSize: 9,
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ),
-                barGroups: [
-                  for (var i = 0; i < monthly.length; i++)
-                    BarChartGroupData(
-                      x: i,
-                      barRods: [
-                        BarChartRodData(
-                          toY: monthly[i].monthlyPnL,
-                          width: 14,
-                          borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
-                          color: monthly[i].monthlyPnL >= 0
-                              ? AppFinanceStyle.profitGreenEnd
-                              : Colors.red.withValues(alpha: 0.85),
-                        ),
-                      ],
-                    ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 24),
           Row(
             children: [
-              Text(
-                '日历（日权益变化）',
-                style: (Theme.of(context).textTheme.titleMedium ?? const TextStyle()).copyWith(
-                  color: AppFinanceStyle.labelColor,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
               const Spacer(),
               IconButton(
+                visualDensity: widget.compact ? VisualDensity.compact : null,
+                padding: widget.compact ? EdgeInsets.zero : null,
+                constraints: widget.compact
+                    ? const BoxConstraints(minWidth: 32, minHeight: 32)
+                    : null,
                 icon: const Icon(Icons.chevron_left, color: AppFinanceStyle.valueColor),
                 onPressed: () {
                   setState(() {
@@ -301,13 +567,21 @@ class _MonthEndProfitPanelState extends State<MonthEndProfitPanel> {
                 },
               ),
               Text(
-                '${_focusedMonth.year}年${_focusedMonth.month}月',
-                style: const TextStyle(
+                widget.compact
+                    ? '${_focusedMonth.year}-${_focusedMonth.month.toString().padLeft(2, '0')}'
+                    : '${_focusedMonth.year}年${_focusedMonth.month}月',
+                style: TextStyle(
                   color: AppFinanceStyle.valueColor,
                   fontWeight: FontWeight.w600,
+                  fontSize: widget.compact ? 12 : 14,
                 ),
               ),
               IconButton(
+                visualDensity: widget.compact ? VisualDensity.compact : null,
+                padding: widget.compact ? EdgeInsets.zero : null,
+                constraints: widget.compact
+                    ? const BoxConstraints(minWidth: 32, minHeight: 32)
+                    : null,
                 icon: const Icon(Icons.chevron_right, color: AppFinanceStyle.valueColor),
                 onPressed: () {
                   setState(() {
@@ -317,41 +591,20 @@ class _MonthEndProfitPanelState extends State<MonthEndProfitPanel> {
               ),
             ],
           ),
-          const SizedBox(height: 8),
+          SizedBox(height: widget.compact ? 4 : 8),
           _CalendarGrid(
             year: _focusedMonth.year,
             month: _focusedMonth.month,
             dailyPnL: daily,
+            cellHeight: widget.compact ? 30 : 44,
+            headerFontSize: widget.compact ? 10 : 12,
+            dayFontSize: widget.compact ? 11 : 13,
+            deltaFontSize: widget.compact ? 7 : 9,
+            rowSpacing: widget.compact ? 4 : 6,
           ),
         ],
       ],
     );
-  }
-
-  static double _barMaxY(List<_MonthStat> monthly) {
-    if (monthly.isEmpty) return 1;
-    var maxV = monthly.first.monthlyPnL;
-    var minV = monthly.first.monthlyPnL;
-    for (final e in monthly) {
-      if (e.monthlyPnL > maxV) maxV = e.monthlyPnL;
-      if (e.monthlyPnL < minV) minV = e.monthlyPnL;
-    }
-    if (maxV <= 0) return 1.0;
-    final pad = (maxV - minV).abs() * 0.12 + 1;
-    return maxV + pad;
-  }
-
-  static double _barMinY(List<_MonthStat> monthly) {
-    if (monthly.isEmpty) return -1;
-    var maxV = monthly.first.monthlyPnL;
-    var minV = monthly.first.monthlyPnL;
-    for (final e in monthly) {
-      if (e.monthlyPnL > maxV) maxV = e.monthlyPnL;
-      if (e.monthlyPnL < minV) minV = e.monthlyPnL;
-    }
-    if (minV >= 0) return 0.0;
-    final pad = (maxV - minV).abs() * 0.12 + 1;
-    return minV - pad;
   }
 }
 
@@ -360,11 +613,21 @@ class _CalendarGrid extends StatelessWidget {
     required this.year,
     required this.month,
     required this.dailyPnL,
+    this.cellHeight = 44,
+    this.headerFontSize = 12,
+    this.dayFontSize = 13,
+    this.deltaFontSize = 9,
+    this.rowSpacing = 6,
   });
 
   final int year;
   final int month;
   final Map<int, double> dailyPnL;
+  final double cellHeight;
+  final double headerFontSize;
+  final double dayFontSize;
+  final double deltaFontSize;
+  final double rowSpacing;
 
   @override
   Widget build(BuildContext context) {
@@ -395,7 +658,7 @@ class _CalendarGrid extends StatelessWidget {
                     h,
                     style: TextStyle(
                       color: AppFinanceStyle.labelColor.withValues(alpha: 0.75),
-                      fontSize: 12,
+                      fontSize: headerFontSize,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -403,14 +666,16 @@ class _CalendarGrid extends StatelessWidget {
               ),
           ],
         ),
-        const SizedBox(height: 6),
+        SizedBox(height: rowSpacing),
         for (var r = 0; r < cells.length / 7; r++)
           Padding(
-            padding: const EdgeInsets.only(bottom: 6),
+            padding: EdgeInsets.only(bottom: rowSpacing),
             child: Row(
               children: [
                 for (var c = 0; c < 7; c++)
-                  Expanded(child: cells[r * 7 + c] ?? const SizedBox(height: 44)),
+                  Expanded(
+                    child: cells[r * 7 + c] ?? SizedBox(height: cellHeight),
+                  ),
               ],
             ),
           ),
@@ -431,7 +696,7 @@ class _CalendarGrid extends StatelessWidget {
         : (pnl >= 0 ? AppFinanceStyle.profitGreenEnd : Colors.redAccent);
 
     return Container(
-      height: 44,
+      height: cellHeight,
       margin: const EdgeInsets.symmetric(horizontal: 2),
       decoration: BoxDecoration(
         color: bg,
@@ -445,7 +710,7 @@ class _CalendarGrid extends StatelessWidget {
             '$day',
             style: TextStyle(
               color: AppFinanceStyle.valueColor.withValues(alpha: 0.95),
-              fontSize: 13,
+              fontSize: dayFontSize,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -454,7 +719,11 @@ class _CalendarGrid extends StatelessWidget {
               pnl.abs() >= 1000
                   ? '${pnl >= 0 ? '+' : ''}${(pnl / 1000).toStringAsFixed(1)}k'
                   : '${pnl >= 0 ? '+' : ''}${pnl.toStringAsFixed(0)}',
-              style: TextStyle(color: fg, fontSize: 9, fontWeight: FontWeight.w500),
+              style: TextStyle(
+                color: fg,
+                fontSize: deltaFontSize,
+                fontWeight: FontWeight.w500,
+              ),
               overflow: TextOverflow.ellipsis,
             ),
         ],

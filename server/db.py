@@ -200,14 +200,31 @@ def user_check_password(username: str, password_hash: str) -> bool:
         conn.close()
 
 
-def user_create(username: str, password_hash: str) -> bool:
-    """创建用户，成功返回 True，用户名已存在返回 False。"""
+def user_create(
+    username: str,
+    password_hash: str,
+    *,
+    role: str = "trader",
+    linked_account_ids: list[str] | None = None,
+) -> bool:
+    """创建用户，成功返回 True，用户名已存在返回 False。role 须为合法枚举。"""
+    rr = str(role).strip().lower()
+    if rr not in _VALID_USER_ROLES:
+        return False
+    links = linked_account_ids if linked_account_ids is not None else []
+    links_json = json.dumps(links, ensure_ascii=False)
     conn = get_conn()
     try:
-        conn.execute(
-            "INSERT INTO users (username, password_hash) VALUES (?, ?)",
-            (username.strip(), password_hash),
-        )
+        try:
+            conn.execute(
+                "INSERT INTO users (username, password_hash, role, linked_account_ids) VALUES (?, ?, ?, ?)",
+                (username.strip(), password_hash, rr, links_json),
+            )
+        except sqlite3.OperationalError:
+            conn.execute(
+                "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+                (username.strip(), password_hash),
+            )
         conn.commit()
         return True
     except sqlite3.IntegrityError:
@@ -216,11 +233,37 @@ def user_create(username: str, password_hash: str) -> bool:
         conn.close()
 
 
-_VALID_USER_ROLES = frozenset({"customer", "trader", "admin"})
+def user_delete(user_id: int) -> bool:
+    """按 id 删除用户，成功返回 True。"""
+    conn = get_conn()
+    try:
+        cur = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+def user_id_by_username(username: str) -> int | None:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "SELECT id FROM users WHERE LOWER(TRIM(username)) = LOWER(?)",
+            (username.strip(),),
+        )
+        row = cur.fetchone()
+        return int(row[0]) if row else None
+    finally:
+        conn.close()
+
+
+_VALID_USER_ROLES = frozenset(
+    {"customer", "trader", "admin", "strategy_analyst"}
+)
 
 
 def user_get_role(username: str) -> str:
-    """返回 customer / trader / admin；未知或缺列时默认 trader。"""
+    """返回 customer / trader / admin / strategy_analyst；未知或缺列时默认 trader。"""
     conn = get_conn()
     try:
         cur = conn.execute(

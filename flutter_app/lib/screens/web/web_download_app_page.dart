@@ -6,14 +6,14 @@ import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
 import '../../widgets/water_background.dart';
 
-class DownloadAppPage extends StatefulWidget {
-  const DownloadAppPage({super.key});
+class WebDownloadAppPage extends StatefulWidget {
+  const WebDownloadAppPage({super.key});
 
   @override
-  State<DownloadAppPage> createState() => _DownloadAppPageState();
+  State<WebDownloadAppPage> createState() => _WebDownloadAppPageState();
 }
 
-class _DownloadAppPageState extends State<DownloadAppPage> {
+class _WebDownloadAppPageState extends State<WebDownloadAppPage> {
   final _prefs = SecurePrefs();
   String? _baseUrl;
 

@@ -309,19 +309,21 @@ class BotProfitHistoryResponse {
   }
 }
 
-/// 策略效能：OKX 日线 TR（True Range）与账户现金日增量（UTC 日）
+/// 策略效能：OKX 日线波动 |high−low|（非负）与账户现金余额日增量（UTC 日，非负：max(0, eod-sod)）
 class StrategyDailyEfficiencyRow {
   final String day;
   final double open;
   final double high;
   final double low;
   final double close;
+  /// 服务端字段名仍为 tr，数值为当日 |high−low|（非负）。
   final double tr;
   final double? trPct;
   final double? sodCash;
   final double? eodCash;
   final double? cashDeltaUsdt;
   final double? cashDeltaPct;
+  /// 服务端：现金日增量 USDT ÷ 当日 |高−低| × 1e-7（tr=0 或无现金增量时为 null）。
   final double? efficiencyRatio;
 
   StrategyDailyEfficiencyRow({
@@ -528,6 +530,60 @@ class TradingbotSeasonsResponse {
       seasons:
           (json['seasons'] as List<dynamic>?)
               ?.map((e) => BotSeason.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          [],
+    );
+  }
+}
+
+/// 策略启停事件（与 GET /api/tradingbots/{id}/tradingbot-events 一致）
+class StrategyEvent {
+  final int id;
+  final String botId;
+  final String eventType;
+  final String? triggerType;
+  final String? username;
+  final String createdAt;
+
+  StrategyEvent({
+    required this.id,
+    required this.botId,
+    required this.eventType,
+    this.triggerType,
+    this.username,
+    required this.createdAt,
+  });
+
+  factory StrategyEvent.fromJson(Map<String, dynamic> json) {
+    return StrategyEvent(
+      id: json['id'] as int? ?? 0,
+      botId: json['bot_id'] as String? ?? '',
+      eventType: json['event_type'] as String? ?? '',
+      triggerType: json['trigger_type'] as String?,
+      username: json['username'] as String?,
+      createdAt: json['created_at'] as String? ?? '',
+    );
+  }
+}
+
+class TradingbotEventsResponse {
+  final bool success;
+  final String botId;
+  final List<StrategyEvent> events;
+
+  TradingbotEventsResponse({
+    required this.success,
+    required this.botId,
+    required this.events,
+  });
+
+  factory TradingbotEventsResponse.fromJson(Map<String, dynamic> json) {
+    return TradingbotEventsResponse(
+      success: json['success'] as bool? ?? false,
+      botId: json['bot_id'] as String? ?? '',
+      events:
+          (json['events'] as List<dynamic>?)
+              ?.map((e) => StrategyEvent.fromJson(e as Map<String, dynamic>))
               .toList() ??
           [],
     );

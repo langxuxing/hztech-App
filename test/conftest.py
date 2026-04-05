@@ -20,6 +20,11 @@ db.DB_PATH = os.path.join(_tmp, "test.db")
 db.init_db()
 db.user_create("admin", hashlib.sha256(b"123").hexdigest())
 db.user_create("trader", hashlib.sha256(b"trader").hexdigest())
+db.user_create(
+    "analyst",
+    hashlib.sha256(b"a").hexdigest(),
+    role="strategy_analyst",
+)
 _conn = db.get_conn()
 _conn.execute("UPDATE users SET role = 'admin' WHERE username = 'admin'")
 _conn.execute("UPDATE users SET role = 'trader' WHERE username = 'trader'")
@@ -71,3 +76,22 @@ def trader_token(client):
 @pytest.fixture
 def trader_headers(trader_token):
     return {"Authorization": f"Bearer {trader_token}"}
+
+
+@pytest.fixture
+def analyst_token(client):
+    r = client.post(
+        "/api/login",
+        json={"username": "analyst", "password": "a"},
+        content_type="application/json",
+    )
+    assert r.status_code == 200, r.get_data(as_text=True)
+    data = r.get_json()
+    assert data.get("success") and data.get("token")
+    assert data.get("role") == "strategy_analyst"
+    return data["token"]
+
+
+@pytest.fixture
+def analyst_headers(analyst_token):
+    return {"Authorization": f"Bearer {analyst_token}"}
