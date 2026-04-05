@@ -11,7 +11,7 @@ class TestLogin:
     def test_login_success(self, client):
         r = client.post(
             "/api/login",
-            json={"username": "admin", "password": "123"},
+            json={"username": "admin", "password": "i23321"},
             content_type="application/json",
         )
         assert r.status_code == 200
@@ -65,6 +65,7 @@ class TestAuthRequired:
             ("POST", "/api/tradingbots/simpleserver-lhg/start"),
             ("POST", "/api/tradingbots/simpleserver-lhg/stop"),
             ("POST", "/api/tradingbots/simpleserver-lhg/restart"),
+            ("GET", "/api/me/customer-accounts"),
         ],
     )
     def test_401_without_token(self, client, method, path):
@@ -140,7 +141,7 @@ class TestTradingbotsConfigAndApi:
 
 
 class TestStrategyApi:
-    """/api/strategy/status 仍无需 token；start/stop/restart 需登录且仅交易员。"""
+    """/api/strategy/status 仍无需 token；start/stop/restart 需登录且为交易员或管理员。"""
 
     def test_strategy_status(self, client):
         r = client.get("/api/strategy/status")
@@ -162,16 +163,16 @@ class TestStrategyApi:
         )
         assert r.status_code == 200
 
-    def test_strategy_start_forbidden_for_admin(self, client, auth_headers):
+    def test_strategy_start_ok_for_admin(self, client, auth_headers):
         r = client.post(
             "/api/strategy/start?bot_id=simpleserver-lhg",
             headers=auth_headers,
         )
-        assert r.status_code == 403
+        assert r.status_code == 200
 
 
 class TestBotApi:
-    """POST /api/tradingbots/<id>/start|stop|restart 需交易员 token"""
+    """POST /api/tradingbots/<id>/start|stop|restart 需交易员或管理员 token"""
 
     def test_bot_start_with_token(self, client, trader_headers):
         r = client.post(
@@ -207,12 +208,12 @@ class TestBotApi:
         )
         assert r.status_code == 404
 
-    def test_bot_start_forbidden_for_admin(self, client, auth_headers):
+    def test_bot_start_ok_for_admin(self, client, auth_headers):
         r = client.post(
             "/api/tradingbots/simpleserver-lhg/start",
             headers=auth_headers,
         )
-        assert r.status_code == 403
+        assert r.status_code == 200
 
 
 class TestPositionsApi:
@@ -307,7 +308,7 @@ class TestUsersApi:
 
 
 class TestStrategyAnalystAutoNet:
-    """POST /api/strategy-analyst/auto-net-test"""
+    """POST /api/strategy-analyst/auto-net-test（非客户）"""
 
     def test_auto_net_ok_for_analyst(self, client, analyst_headers):
         r = client.post(
@@ -320,10 +321,39 @@ class TestStrategyAnalystAutoNet:
         data = r.get_json()
         assert data.get("success") is True
 
-    def test_auto_net_forbidden_for_trader(self, client, trader_headers):
+    def test_auto_net_ok_for_trader(self, client, trader_headers):
         r = client.post(
             "/api/strategy-analyst/auto-net-test",
             headers=trader_headers,
+            json={},
+            content_type="application/json",
+        )
+        assert r.status_code == 200
+
+    def test_auto_net_forbidden_for_customer(self, client):
+        import hashlib
+
+        import db as tdb
+
+        tdb.user_create("cust_autonet", hashlib.sha256(b"x").hexdigest())
+        conn = tdb.get_conn()
+        conn.execute(
+            "UPDATE users SET role = ?, linked_account_ids = ? WHERE LOWER(username) = LOWER(?)",
+            ("customer", '["simpleserver-lhg"]', "cust_autonet"),
+        )
+        conn.commit()
+        conn.close()
+        lr = client.post(
+            "/api/login",
+            json={"username": "cust_autonet", "password": "x"},
+            content_type="application/json",
+        )
+        assert lr.status_code == 200
+        tok = lr.get_json()["token"]
+        h = {"Authorization": f"Bearer {tok}"}
+        r = client.post(
+            "/api/strategy-analyst/auto-net-test",
+            headers=h,
             json={},
             content_type="application/json",
         )
@@ -360,6 +390,102 @@ class TestCustomerScope:
         bots = r.get_json().get("bots") or []
         ids = {b.get("tradingbot_id") for b in bots}
         assert ids == {"simpleserver-lhg"}
+
+
+class TestCustomerAccountSetupApi:
+    """客户账号配置：GET /api/me/customer-accounts、PUT okx-json。"""
+
+    def test_customer_accounts_forbidden_for_admin(self, client, auth_headers):
+        r = client.get("/api/me/customer-accounts", headers=auth_headers)
+        assert r.status_code == 403
+
+    def test_customer_accounts_lists_bindings(self, client):
+        import hashlib
+
+        import db as tdb
+
+        tdb.user_create("cust_bind", hashlib.sha256(b"x").hexdigest())
+        conn = tdb.get_conn()
+        conn.execute(
+            "UPDATE users SET role = ?, linked_account_ids = ? WHERE LOWER(username) = LOWER(?)",
+            ("customer", '["OKX_Hztech_Devops"]', "cust_bind"),
+        )
+        conn.commit()
+        conn.close()
+        lr = client.post(
+            "/api/login",
+            json={"username": "cust_bind", "password": "x"},
+            content_type="application/json",
+        )
+        assert lr.status_code == 200
+        tok = lr.get_json()["token"]
+        h = {"Authorization": f"Bearer {tok}"}
+        r = client.get("/api/me/customer-accounts", headers=h)
+        assert r.status_code == 200
+        data = r.get_json()
+        assert data.get("success") is True
+        accounts = data.get("accounts") or []
+        assert len(accounts) == 1
+        row = accounts[0]
+        assert row.get("account_id") == "OKX_Hztech_Devops"
+        assert "key_file_exists" in row
+        assert "missing_in_account_list" in row
+
+    def test_put_okx_json_forbidden_wrong_account(self, client):
+        import hashlib
+
+        import db as tdb
+
+        tdb.user_create("cust_put", hashlib.sha256(b"x").hexdigest())
+        conn = tdb.get_conn()
+        conn.execute(
+            "UPDATE users SET role = ?, linked_account_ids = ? WHERE LOWER(username) = LOWER(?)",
+            ("customer", '["OKX_Hztech_Devops"]', "cust_put"),
+        )
+        conn.commit()
+        conn.close()
+        lr = client.post(
+            "/api/login",
+            json={"username": "cust_put", "password": "x"},
+            content_type="application/json",
+        )
+        tok = lr.get_json()["token"]
+        h = {"Authorization": f"Bearer {tok}"}
+        r = client.put(
+            "/api/me/customer-accounts/other-bot/okx-json",
+            headers=h,
+            json={"api": {"key": "a", "secret": "b", "passphrase": "c"}},
+            content_type="application/json",
+        )
+        assert r.status_code == 403
+
+    def test_put_okx_json_validation_error(self, client):
+        import hashlib
+
+        import db as tdb
+
+        tdb.user_create("cust_bad", hashlib.sha256(b"x").hexdigest())
+        conn = tdb.get_conn()
+        conn.execute(
+            "UPDATE users SET role = ?, linked_account_ids = ? WHERE LOWER(username) = LOWER(?)",
+            ("customer", '["OKX_Hztech_Devops"]', "cust_bad"),
+        )
+        conn.commit()
+        conn.close()
+        lr = client.post(
+            "/api/login",
+            json={"username": "cust_bad", "password": "x"},
+            content_type="application/json",
+        )
+        tok = lr.get_json()["token"]
+        h = {"Authorization": f"Bearer {tok}"}
+        r = client.put(
+            "/api/me/customer-accounts/OKX_Hztech_Devops/okx-json",
+            headers=h,
+            json={"no_api": True},
+            content_type="application/json",
+        )
+        assert r.status_code == 400
 
 
 class TestAccountProfitApi:

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import '../api/models.dart';
 import '../theme/finance_style.dart';
+import '../utils/number_display_format.dart';
 
 DateTime? _parseSnapshotAt(String raw) {
   if (raw.isEmpty) return null;
@@ -46,6 +47,25 @@ DateTime _defaultFocusedMonth(List<BotProfitSnapshot> sorted) {
 DateTime focusedMonthFromProfitSnapshots(List<BotProfitSnapshot> raw) {
   final sorted = _sortedSnapshotsWithDates(raw);
   return _defaultFocusedMonth(sorted);
+}
+
+/// 将 [DailyRealizedPnlResponse.days] 中的 `YYYY-MM-DD` 转为当月「日序 -> 平仓笔数」。
+Map<int, int> dailyCloseCountsMapForMonth(
+  List<DailyRealizedPnlDayRow> rows,
+  int year,
+  int month,
+) {
+  final out = <int, int>{};
+  for (final r in rows) {
+    final p = r.day.split('-');
+    if (p.length != 3) continue;
+    final y = int.tryParse(p[0]);
+    final m = int.tryParse(p[1]);
+    final d = int.tryParse(p[2]);
+    if (y == null || m == null || d == null) continue;
+    if (y == year && m == month) out[d] = r.closeCount;
+  }
+  return out;
 }
 
 /// 将 [month] 限制在快照覆盖的首月～末月之间（按自然月）。
@@ -249,6 +269,22 @@ DateTime _clampEndMonthToData(List<_MonthStat> monthly, DateTime candidate) {
   if (candidate.isBefore(first)) return first;
   if (candidate.isAfter(last)) return last;
   return DateTime(candidate.year, candidate.month);
+}
+
+/// 与 [_MonthEndValueCalendarPanelState._cellHeightForGrid] 使用同一套常数：
+/// 在传入 [MonthEndValueCalendarPanel.gridMaxHeight] 为 [gridMaxHeight] 时，日历网格（表头 + 六行单元格）实际像素高度。
+/// [compact] 须与对应面板的 [MonthEndValueCalendarPanel.compact] 一致（行间距 4 / 6）。
+double calendarGridPixelHeightForCap(
+  double gridMaxHeight, {
+  bool compact = true,
+}) {
+  const headerH = 22.0;
+  const rows = 6;
+  final rowSpacing = compact ? 4.0 : 6.0;
+  final avail =
+      gridMaxHeight - headerH - rowSpacing - rows * rowSpacing;
+  final cellHeight = (avail / rows).clamp(28.0, 58.0);
+  return headerH + rowSpacing + rows * (cellHeight + rowSpacing);
 }
 
 // --- 柱状图卡片 ---
@@ -539,6 +575,8 @@ class MonthEndValueCalendarPanel extends StatefulWidget {
     this.onFocusedMonthChanged,
     /// 限制日历网格最大高度时，按比例缩小单元格（与柱图/折线同卡无内滚动）。
     this.gridMaxHeight,
+    /// 按「日」索引的平仓笔数（与后端 UTC 日一致）；与 [snapshots] 日损益并列展示。
+    this.dailyCloseCounts,
   });
 
   final List<BotProfitSnapshot> snapshots;
@@ -551,6 +589,7 @@ class MonthEndValueCalendarPanel extends StatefulWidget {
   final DateTime? focusedMonth;
   final ValueChanged<DateTime>? onFocusedMonthChanged;
   final double? gridMaxHeight;
+  final Map<int, int>? dailyCloseCounts;
 
   @override
   State<MonthEndValueCalendarPanel> createState() => _MonthEndValueCalendarPanelState();
@@ -585,14 +624,14 @@ class _MonthEndValueCalendarPanelState extends State<MonthEndValueCalendarPanel>
 
   double _cellHeightForGrid() {
     if (widget.gridMaxHeight == null) {
-      return widget.compact ? 30 : 44;
+      return widget.compact ? 34 : 48;
     }
     const headerH = 22.0;
-    const rowSpacing = 4.0;
     const rows = 6;
+    final rowSpacing = widget.compact ? 4.0 : 6.0;
     final avail =
         widget.gridMaxHeight! - headerH - rowSpacing - rows * rowSpacing;
-    return (avail / rows).clamp(22.0, 48.0);
+    return (avail / rows).clamp(28.0, 58.0);
   }
 
   @override
@@ -694,10 +733,10 @@ class _MonthEndValueCalendarPanelState extends State<MonthEndValueCalendarPanel>
             year: focus.year,
             month: focus.month,
             dailyPnL: daily,
+            dailyCloseCounts: widget.dailyCloseCounts,
             cellHeight: _cellHeightForGrid(),
+            compact: widget.compact,
             headerFontSize: widget.compact ? 10 : 12,
-            dayFontSize: widget.compact ? 11 : 13,
-            deltaFontSize: widget.compact ? 7 : 9,
             rowSpacing: widget.compact ? 4 : 6,
           ),
         ],
@@ -711,20 +750,20 @@ class _CalendarGrid extends StatelessWidget {
     required this.year,
     required this.month,
     required this.dailyPnL,
+    this.dailyCloseCounts,
     this.cellHeight = 44,
+    this.compact = false,
     this.headerFontSize = 12,
-    this.dayFontSize = 13,
-    this.deltaFontSize = 9,
     this.rowSpacing = 6,
   });
 
   final int year;
   final int month;
   final Map<int, double> dailyPnL;
+  final Map<int, int>? dailyCloseCounts;
   final double cellHeight;
+  final bool compact;
   final double headerFontSize;
-  final double dayFontSize;
-  final double deltaFontSize;
   final double rowSpacing;
 
   @override
@@ -784,45 +823,99 @@ class _CalendarGrid extends StatelessWidget {
   Widget _dayCell(BuildContext context, int day) {
     final pnl = dailyPnL[day];
     final has = pnl != null;
-    final bg = !has
-        ? Colors.white.withValues(alpha: 0.04)
-        : (pnl >= 0
-              ? AppFinanceStyle.profitGreenEnd.withValues(alpha: 0.22)
-              : Colors.red.withValues(alpha: 0.2));
-    final fg = !has
-        ? AppFinanceStyle.labelColor.withValues(alpha: 0.5)
+    final borderColor = !has
+        ? Colors.white.withValues(alpha: 0.06)
         : (pnl >= 0 ? AppFinanceStyle.profitGreenEnd : Colors.redAccent);
+    final profitColor =
+        !has ? AppFinanceStyle.labelColor : (pnl >= 0 ? AppFinanceStyle.profitGreenEnd : Colors.redAccent);
+    final profitFontSize =
+        (cellHeight * 0.36).clamp(compact ? 14.0 : 16.0, compact ? 19.0 : 23.0);
+    final dayFontSize =
+        (cellHeight * 0.26).clamp(compact ? 10.0 : 11.0, compact ? 12.0 : 14.0);
+    final closeFontSize =
+        (profitFontSize * 0.5).clamp(compact ? 7.5 : 8.0, compact ? 9.5 : 11.0);
+    final closes = dailyCloseCounts?[day];
+
+    if (!has) {
+      return Container(
+        height: cellHeight,
+        margin: const EdgeInsets.symmetric(horizontal: 2),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.04),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+        ),
+        alignment: Alignment.topRight,
+        padding: const EdgeInsets.only(top: 4, right: 5),
+        child: Text(
+          '$day',
+          style: TextStyle(
+            color: AppFinanceStyle.labelColor.withValues(alpha: 0.45),
+            fontSize: dayFontSize,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      );
+    }
 
     return Container(
       height: cellHeight,
       margin: const EdgeInsets.symmetric(horizontal: 2),
       decoration: BoxDecoration(
-        color: bg,
+        color: const Color(0xFFFAFAFA),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+        border: Border.all(color: borderColor, width: 1),
       ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+      clipBehavior: Clip.none,
+      child: Stack(
+        clipBehavior: Clip.none,
         children: [
-          Text(
-            '$day',
-            style: TextStyle(
-              color: AppFinanceStyle.valueColor.withValues(alpha: 0.95),
-              fontSize: dayFontSize,
-              fontWeight: FontWeight.w600,
+          Positioned(
+            top: 4,
+            right: 6,
+            child: Text(
+              '$day',
+              style: TextStyle(
+                color: const Color(0xFF111111),
+                fontSize: dayFontSize,
+                fontWeight: FontWeight.w700,
+              ),
             ),
           ),
-          if (has)
-            Text(
-              pnl.abs() >= 1000
-                  ? '${pnl >= 0 ? '+' : ''}${(pnl / 1000).toStringAsFixed(1)}k'
-                  : '${pnl >= 0 ? '+' : ''}${pnl.toStringAsFixed(0)}',
-              style: TextStyle(
-                color: fg,
-                fontSize: deltaFontSize,
-                fontWeight: FontWeight.w500,
+          Positioned.fill(
+            child: Align(
+              alignment: const Alignment(0, 0.2),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 2),
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Text(
+                    '${formatUiSignedUsdt2(pnl)} USDT',
+                    textAlign: TextAlign.center,
+                    maxLines: 1,
+                    style: TextStyle(
+                      color: profitColor,
+                      fontSize: profitFontSize,
+                      fontWeight: FontWeight.w800,
+                      height: 1.05,
+                    ),
+                  ),
+                ),
               ),
-              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          if (closes != null && closes > 0)
+            Positioned(
+              right: 5,
+              bottom: 3,
+              child: Text(
+                '$closes 笔平仓',
+                style: TextStyle(
+                  color: const Color(0xFF888888),
+                  fontSize: closeFontSize,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
             ),
         ],
       ),

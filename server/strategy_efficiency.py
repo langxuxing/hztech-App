@@ -2,7 +2,7 @@
 """
 按 UTC 自然日汇总账户快照中的现金余额变化，并与 OKX 日线对齐。
 输出含：每日波动率%（|高−低|/收盘）、现金收益率%（日增量÷UTC 自然月月初资金×100，无月初则用当日 sod）、
-策略能效（日增量 USDT÷波幅×1e-7）。
+策略能效（日增量 USDT÷(波幅×1e9)）。日线波动数据由 market_daily_bars 全站缓存，各账户共用。
 """
 from __future__ import annotations
 
@@ -134,7 +134,7 @@ def merge_daily_efficiency_rows(
     cash_by_day: dict[str, dict[str, float]],
     month_base_by_month: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
-    """合并 OKX 日线波动（|高−低|，非负）与现金日增量（非负），并计算 tr_pct、现金收益率%、策略能效。"""
+    """合并日线波动（|高−低|，非负）与现金日增量（非负），并计算 tr_pct、现金收益率%、策略能效。"""
     rows: list[dict[str, Any]] = []
     for bar in market_bars:
         day = str(bar.get("day") or "")
@@ -162,10 +162,10 @@ def merge_daily_efficiency_rows(
             cash_delta_pct = float(cash_delta) / month_base * 100.0
             if yield_from_month_start:
                 month_start_cash_out = month_base
-        # 策略能效 = 每日现金增量(USDT) / 当日价格波动幅度 |高−低| × 1e-7
+        # 策略能效 = 每日现金增量(USDT) / (当日价格波动幅度 |高−低| × 1e9)
         eff = None
         if cash_delta is not None and tr > 1e-18:
-            eff = float(cash_delta) / float(tr) * 1e-7
+            eff = float(cash_delta) / (float(tr) * 1e9)
         rows.append(
             {
                 "day": day,
@@ -185,3 +185,112 @@ def merge_daily_efficiency_rows(
         )
     rows.sort(key=lambda x: x["day"], reverse=True)
     return rows
+
+
+def _utc_today_str() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def _utc_yesterday_str() -> str:
+    return (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
+
+
+def ensure_shared_market_daily_bars(
+    db_mod: Any,
+    okx_mod: Any,
+    inst_id: str,
+    *,
+    backfill_limit: int = 400,
+) -> str | None:
+    """
+    若库中缺少 UTC「昨日」日线，则从 OKX 拉取一段历史并写入 market_daily_bars。
+    供 Account 定时同步与策略能效接口共用，避免每账户重复请求行情。
+    """
+    inst_id = (inst_id or "").strip()
+    if not inst_id:
+        return "empty inst_id"
+    yday = _utc_yesterday_str()
+    if db_mod.market_daily_bars_has_day(inst_id, yday):
+        return None
+    bars, err = okx_mod.okx_fetch_daily_ohlcv_with_tr(inst_id, limit=backfill_limit)
+    if err:
+        return err
+    if not bars:
+        return "no market bars"
+    for b in bars:
+        d = str(b.get("day") or "")
+        if not d:
+            continue
+        db_mod.market_daily_bars_upsert(
+            inst_id,
+            d,
+            float(b.get("open") or 0.0),
+            float(b.get("high") or 0.0),
+            float(b.get("low") or 0.0),
+            float(b.get("close") or 0.0),
+            max(0.0, float(b.get("tr") or 0.0)),
+        )
+    return None
+
+
+def _upsert_okx_bars(db_mod: Any, inst_id: str, bars: list[dict[str, Any]]) -> None:
+    for b in bars:
+        d = str(b.get("day") or "")
+        if not d:
+            continue
+        db_mod.market_daily_bars_upsert(
+            inst_id,
+            d,
+            float(b.get("open") or 0.0),
+            float(b.get("high") or 0.0),
+            float(b.get("low") or 0.0),
+            float(b.get("close") or 0.0),
+            max(0.0, float(b.get("tr") or 0.0)),
+        )
+
+
+def load_market_bars_for_efficiency(
+    db_mod: Any,
+    okx_mod: Any,
+    inst_id: str,
+    days: int,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """
+    返回与 merge_daily_efficiency_rows 兼容的升序 K 线列表（优先读库，必要时拉 OKX 尾段补「当日」）。
+    """
+    inst_id = (inst_id or "").strip()
+    if not inst_id:
+        return [], "empty inst_id"
+    days = max(7, min(366, int(days)))
+    span = days + 12
+    min_day = (datetime.now(timezone.utc).date() - timedelta(days=span)).isoformat()
+
+    miss_err = ensure_shared_market_daily_bars(db_mod, okx_mod, inst_id)
+    bars = db_mod.market_daily_bars_list_since(inst_id, min_day)
+    today = _utc_today_str()
+
+    need_tail = not bars or str(bars[-1].get("day") or "") < today
+    if need_tail:
+        tail, terr = okx_mod.okx_fetch_daily_ohlcv_with_tr(
+            inst_id, limit=min(20, days + 8)
+        )
+        if terr:
+            if not bars:
+                return [], terr
+        elif tail:
+            _upsert_okx_bars(db_mod, inst_id, tail)
+            bars = db_mod.market_daily_bars_list_since(inst_id, min_day)
+
+    if not bars:
+        fb, ferr = okx_mod.okx_fetch_daily_ohlcv_with_tr(inst_id, limit=days + 8)
+        if ferr:
+            return [], ferr or miss_err
+        if not fb:
+            return [], miss_err or "no market data"
+        _upsert_okx_bars(db_mod, inst_id, fb)
+        bars = db_mod.market_daily_bars_list_since(inst_id, min_day)
+
+    cap = days + 10
+    if len(bars) > cap:
+        bars = bars[-cap:]
+    return bars, None

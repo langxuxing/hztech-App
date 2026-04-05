@@ -60,8 +60,8 @@ def test_merge_efficiency_ratio():
     # 无月初表时用当日 sod 作分母：10/1000*100
     assert r["cash_delta_pct"] == 1.0
     assert r["month_start_cash"] is None
-    # 10 / 0.2 * 1e-7 = 5e-6
-    assert abs(r["efficiency_ratio"] - 5e-6) < 1e-12
+    # 10 / (0.2 * 1e9) = 5e-8
+    assert abs(r["efficiency_ratio"] - 5e-8) < 1e-15
 
 
 def test_month_start_cash_by_month_from_snapshots():

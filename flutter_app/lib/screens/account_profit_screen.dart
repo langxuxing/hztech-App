@@ -6,6 +6,7 @@ import '../api/client.dart';
 import '../api/models.dart';
 import '../secure/prefs.dart';
 import '../theme/finance_style.dart';
+import '../utils/number_display_format.dart';
 import '../widgets/equity_cash_percent_line_chart.dart';
 import '../widgets/month_end_profit_panel.dart';
 import '../widgets/water_background.dart';
@@ -53,6 +54,8 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
 
   DateTime? _equityMetricsMonth;
   DateTime? _cashMetricsMonth;
+  Map<int, int>? _equityCalendarCloseCounts;
+  Map<int, int>? _cashCalendarCloseCounts;
   final TextEditingController _noDropdownAccountController =
       TextEditingController();
 
@@ -80,6 +83,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
         _equityMetricsMonth = null;
         _cashMetricsMonth = null;
       });
+      unawaited(_syncCalendarCloseCounts());
       final phase3 = await Future.wait([
         api.getTradingbotPositions(botId),
         api.getTradingbotSeasons(botId, limit: 50),
@@ -158,6 +162,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
           _equityMetricsMonth = null;
           _cashMetricsMonth = null;
         });
+        unawaited(_syncCalendarCloseCounts());
       } catch (e) {
         if (mounted) {
           setState(() => _error = '收益/历史加载失败: $e');
@@ -224,6 +229,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
         _equityMetricsMonth = null;
         _cashMetricsMonth = null;
       });
+      unawaited(_syncCalendarCloseCounts());
     } catch (e) {
       if (mounted) {
         setState(() => _error = '切换账户后加载失败: $e');
@@ -278,8 +284,8 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
     super.dispose();
   }
 
-  String _fmt(double v) => v.toStringAsFixed(2);
-  String _fmtPct(double v) => '${v.toStringAsFixed(2)}%';
+  String _fmt(double v) => formatUiInteger(v);
+  String _fmtPct(double v) => formatUiPercentLabel(v);
 
   String _formatOkxDebug(Map<String, dynamic> m) {
     final b = StringBuffer();
@@ -371,6 +377,63 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
   DateTime _cashMonthFor(List<BotProfitSnapshot> snap) {
     final seed = _cashMetricsMonth ?? focusedMonthFromProfitSnapshots(snap);
     return clampMonthToSnapshots(snap, seed);
+  }
+
+  Future<void> _syncCalendarCloseCounts() async {
+    final list = _bots.isNotEmpty ? _bots : widget.sharedBots;
+    final botId = _selectedBotId ??
+        (list.isNotEmpty ? list.first.tradingbotId : null) ??
+        _defaultBotId;
+    final snap = _snapshots;
+    if (snap.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _equityCalendarCloseCounts = null;
+        _cashCalendarCloseCounts = null;
+      });
+      return;
+    }
+    try {
+      final baseUrl = await _prefs.backendBaseUrl;
+      final token = await _prefs.authToken;
+      final api = ApiClient(baseUrl, token: token);
+      final eq = _equityMonthFor(snap);
+      final cash = _cashMonthFor(snap);
+      if (eq.year == cash.year && eq.month == cash.month) {
+        final r = await api.getDailyRealizedPnl(botId, eq.year, eq.month);
+        if (!mounted) return;
+        if (!r.success) {
+          setState(() {
+            _equityCalendarCloseCounts = null;
+            _cashCalendarCloseCounts = null;
+          });
+          return;
+        }
+        final m = dailyCloseCountsMapForMonth(r.days, eq.year, eq.month);
+        setState(() {
+          _equityCalendarCloseCounts = m;
+          _cashCalendarCloseCounts = m;
+        });
+      } else {
+        final rEq = await api.getDailyRealizedPnl(botId, eq.year, eq.month);
+        final rCash = await api.getDailyRealizedPnl(botId, cash.year, cash.month);
+        if (!mounted) return;
+        setState(() {
+          _equityCalendarCloseCounts = rEq.success
+              ? dailyCloseCountsMapForMonth(rEq.days, eq.year, eq.month)
+              : null;
+          _cashCalendarCloseCounts = rCash.success
+              ? dailyCloseCountsMapForMonth(rCash.days, cash.year, cash.month)
+              : null;
+        });
+      }
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _equityCalendarCloseCounts = null;
+        _cashCalendarCloseCounts = null;
+      });
+    }
   }
 
   void _syncNoDropdownAccountLabel() {
@@ -774,8 +837,10 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
     if (_selectedAccount == null) return const SizedBox.shrink();
     final snap = _snapshots;
     final month = _equityMonthFor(snap);
-    void setEquityMonth(DateTime d) =>
-        setState(() => _equityMetricsMonth = clampMonthToSnapshots(snap, d));
+    void setEquityMonth(DateTime d) {
+      setState(() => _equityMetricsMonth = clampMonthToSnapshots(snap, d));
+      unawaited(_syncCalendarCloseCounts());
+    }
 
     if (!wide) {
       final barH = (_kUnifiedChartBandHeight - 52).clamp(100.0, 600.0);
@@ -834,13 +899,14 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
               snapshots: snap,
               title: '月度权益（日历）',
               description:
-                  '按日展示：当日最后一条快照权益相对前一有效时点的变化（USDT）。',
+                  '按日展示：当日最后一条快照权益相对前一有效时点的变化（USDT）。右下角平仓笔数为 UTC 自然日历史平仓汇总（与盈亏数值口径不同）。',
               valueAt: (s) => s.equityUsdt,
               emptyMessage: '暂无历史快照，无法统计月度权益',
               showMonthNavigator: false,
               focusedMonth: month,
               onFocusedMonthChanged: setEquityMonth,
               gridMaxHeight: _kUnifiedChartBandHeight,
+              dailyCloseCounts: _equityCalendarCloseCounts,
             ),
           ),
         ],
@@ -925,6 +991,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
                         focusedMonth: month,
                         onFocusedMonthChanged: setEquityMonth,
                         gridMaxHeight: gridMax,
+                        dailyCloseCounts: _equityCalendarCloseCounts,
                       );
                     },
                   ),
@@ -941,8 +1008,10 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
     if (_selectedAccount == null) return const SizedBox.shrink();
     final snap = _snapshots;
     final month = _cashMonthFor(snap);
-    void setCashMonth(DateTime d) =>
-        setState(() => _cashMetricsMonth = clampMonthToSnapshots(snap, d));
+    void setCashMonth(DateTime d) {
+      setState(() => _cashMetricsMonth = clampMonthToSnapshots(snap, d));
+      unawaited(_syncCalendarCloseCounts());
+    }
 
     if (!wide) {
       final barH = (_kUnifiedChartBandHeight - 52).clamp(100.0, 600.0);
@@ -1001,13 +1070,14 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
               snapshots: snap,
               title: '月度现金（日历）',
               description:
-                  '按日展示：当日最后一条快照现金余额相对前一有效时点的变化（USDT）。',
+                  '按日展示：当日最后一条快照现金余额相对前一有效时点的变化（USDT）。右下角平仓笔数为 UTC 自然日历史平仓汇总（与盈亏数值口径不同）。',
               valueAt: (s) => s.currentBalance,
               emptyMessage: '暂无历史快照，无法统计月度现金余额',
               showMonthNavigator: false,
               focusedMonth: month,
               onFocusedMonthChanged: setCashMonth,
               gridMaxHeight: _kUnifiedChartBandHeight,
+              dailyCloseCounts: _cashCalendarCloseCounts,
             ),
           ),
         ],
@@ -1092,6 +1162,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
                         focusedMonth: month,
                         onFocusedMonthChanged: setCashMonth,
                         gridMaxHeight: gridMax,
+                        dailyCloseCounts: _cashCalendarCloseCounts,
                       );
                     },
                   ),
@@ -1285,7 +1356,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '${p.instId} $side ${p.pos.toStringAsFixed(4)}',
+                        '${p.instId} $side ${formatUiInteger(p.pos)}',
                         style: small,
                       ),
                       const SizedBox(height: 4),
@@ -1561,11 +1632,7 @@ class _PriceAxisBar extends StatelessWidget {
         .map((p) => p.avgPx)
         .where((x) => x > 0);
 
-    String fmtPrice(double v) {
-      if (v >= 1000) return v.toStringAsFixed(0);
-      if (v >= 1) return v.toStringAsFixed(1);
-      return v.toStringAsFixed(2);
-    }
+    String fmtPrice(double v) => formatUiInteger(v);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,

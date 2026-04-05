@@ -14,6 +14,10 @@ import 'web_dashboard_screen.dart';
 import 'web_home_screen.dart';
 import 'web_account_profit_screen.dart';
 import 'web_strategy_performance_screen.dart';
+import 'web_seasons_position_hub_screen.dart';
+import 'web_account_config_admin_screen.dart';
+import 'web_service_status_screen.dart';
+import '../customer_account_setup_screen.dart';
 
 class _NavItem {
   const _NavItem({
@@ -31,8 +35,8 @@ class _NavItem {
 
 /// 浏览器端主导航：侧栏 / 抽屉 + 多 Tab，与移动端 [MainScreen] 分流。
 /// 侧栏使用可滚动列表，避免条目过多时在矮视口下看不到「用户管理」等项。
-/// 顺序：主页 → 仪表盘 → 账户收益 → 策略能效 → 策略启停（交易员/管理员）
-/// → 收网测试（策略分析师）→ 用户管理（管理员）→ 下载 → 设置。
+/// 顺序：主页 → 仪表盘 → 账户收益 → 策略启停 → 策略能效 → 赛季与历史仓位
+/// → 收网测试（交易员/管理员/策略分析师）→ 账号配置（客户 OKX JSON）→ 账号管理 / 用户管理（管理员）→ 下载 → 设置。
 class WebMainShell extends StatefulWidget {
   const WebMainShell({super.key, this.onLogout});
 
@@ -87,12 +91,36 @@ class _WebMainShellState extends State<WebMainShell> {
           selectedIcon: Icons.speed,
           page: WebStrategyPerformanceScreen(sharedBots: bots),
         ),
+      if (_role.canViewStrategyPerformance)
+        _NavItem(
+          title: '赛季与历史仓位',
+          icon: Icons.emoji_events_outlined,
+          selectedIcon: Icons.emoji_events,
+          page: WebSeasonsPositionHubScreen(
+            sharedBots: bots,
+            appUserRole: _role,
+          ),
+        ),
+      if (_role.canConfigureLinkedOkxKeys)
+        _NavItem(
+          title: '账号配置',
+          icon: Icons.vpn_key_outlined,
+          selectedIcon: Icons.vpn_key,
+          page: const CustomerAccountSetupScreen(embedInShell: true),
+        ),
       if (_role.canViewAutoNettingTest)
         _NavItem(
           title: '收网测试',
           icon: Icons.science_outlined,
           selectedIcon: Icons.science,
           page: WebAutoNettingTestScreen(sharedBots: bots, embedInShell: true),
+        ),
+      if (_role.canManageUsers)
+        _NavItem(
+          title: '账号管理',
+          icon: Icons.account_balance_wallet_outlined,
+          selectedIcon: Icons.account_balance_wallet,
+          page: const WebAccountConfigAdminScreen(embedInShell: true),
         ),
       if (_role.canManageUsers)
         _NavItem(
@@ -115,6 +143,8 @@ class _WebMainShellState extends State<WebMainShell> {
           embedInShell: true,
           onLogout: widget.onLogout,
           appUserRole: _role,
+          onOpenUserManagement:
+              _role.canManageUsers ? _openUserManagementFromSettings : null,
         ),
       ),
     ];
@@ -207,6 +237,13 @@ class _WebMainShellState extends State<WebMainShell> {
     if (_index >= len) setState(() => _index = 0);
   }
 
+  /// 设置页「用户管理」按钮：跳到侧栏同名入口。
+  void _openUserManagementFromSettings() {
+    final items = _itemsForRole();
+    final i = items.indexWhere((e) => e.title == '用户管理');
+    if (i >= 0) setState(() => _index = i);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -245,6 +282,19 @@ class _WebMainShellState extends State<WebMainShell> {
           backgroundColor: AppFinanceStyle.backgroundDark,
           foregroundColor: AppFinanceStyle.valueColor,
           surfaceTintColor: Colors.transparent,
+          actions: [
+            IconButton(
+              tooltip: '服务状态',
+              icon: const Icon(Icons.monitor_heart_outlined),
+              onPressed: () {
+                Navigator.of(context).push<void>(
+                  MaterialPageRoute<void>(
+                    builder: (ctx) => const WebServiceStatusScreen(),
+                  ),
+                );
+              },
+            ),
+          ],
         ),
         body: Row(
           children: [
@@ -275,6 +325,19 @@ class _WebMainShellState extends State<WebMainShell> {
           icon: const Icon(Icons.menu),
           onPressed: () => _scaffoldKey.currentState?.openDrawer(),
         ),
+        actions: [
+          IconButton(
+            tooltip: '服务状态',
+            icon: const Icon(Icons.monitor_heart_outlined),
+            onPressed: () {
+              Navigator.of(context).push<void>(
+                MaterialPageRoute<void>(
+                  builder: (ctx) => const WebServiceStatusScreen(),
+                ),
+              );
+            },
+          ),
+        ],
       ),
       drawer: Drawer(
         backgroundColor: const Color(0xFF12121a),

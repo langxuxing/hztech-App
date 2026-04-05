@@ -22,6 +22,9 @@ build/
 .DS_Store
 *.log
 .temp-cursor/
+# Flutter web：OKX 1m 标记价格 K 线同步 JSON（由 server kline_web_sync 生成）
+flutter_app/web/kline/*.json
+
 # 服务端 sqlite 持久化（用户/配置/日志）
 server/sqlite/
 # 已废弃，现用 server/sqlite/tradingbots.db

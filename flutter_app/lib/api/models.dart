@@ -309,6 +309,65 @@ class BotProfitHistoryResponse {
   }
 }
 
+/// GET /api/tradingbots/{id}/daily-realized-pnl（UTC 自然日平仓汇总）。
+class DailyRealizedPnlDayRow {
+  DailyRealizedPnlDayRow({
+    required this.day,
+    required this.netPnl,
+    required this.closeCount,
+  });
+
+  final String day;
+  final double netPnl;
+  final int closeCount;
+
+  factory DailyRealizedPnlDayRow.fromJson(Map<String, dynamic> json) {
+    return DailyRealizedPnlDayRow(
+      day: json['day'] as String? ?? '',
+      netPnl: (json['net_pnl'] as num?)?.toDouble() ?? 0,
+      closeCount: (json['close_count'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
+class DailyRealizedPnlResponse {
+  DailyRealizedPnlResponse({
+    required this.success,
+    this.message,
+    this.botId = '',
+    this.year = 0,
+    this.month = 0,
+    this.days = const [],
+  });
+
+  final bool success;
+  final String? message;
+  final String botId;
+  final int year;
+  final int month;
+  final List<DailyRealizedPnlDayRow> days;
+
+  factory DailyRealizedPnlResponse.fromJson(Map<String, dynamic> json) {
+    final raw = json['days'];
+    List<DailyRealizedPnlDayRow> list = const [];
+    if (raw is List) {
+      list = raw
+          .map(
+            (e) => DailyRealizedPnlDayRow.fromJson(e as Map<String, dynamic>),
+          )
+          .toList();
+    }
+    return DailyRealizedPnlResponse(
+      success: json['success'] as bool? ?? false,
+      message: json['message'] as String?,
+      botId: json['bot_id'] as String? ?? '',
+      year: (json['year'] as num?)?.toInt() ?? 0,
+      month: (json['month'] as num?)?.toInt() ?? 0,
+      days: list,
+    );
+  }
+}
+
 /// 策略效能：每日波动率、现金收益率%（分母多为 UTC 自然月月初资金）、策略能效。
 class StrategyDailyEfficiencyRow {
   final String day;
@@ -327,7 +386,7 @@ class StrategyDailyEfficiencyRow {
   final double? cashDeltaPct;
   /// 有值表示收益率分母为 UTC 月初资金；null 表示用了当日 sod 回退。
   final double? monthStartCash;
-  /// 策略能效 = 当日现金增量 USDT ÷ 价格波幅 |高−低| × 1e-7。
+  /// 策略能效 = 当日现金增量 USDT ÷ (价格波幅 |高−低| × 1e9)。
   final double? efficiencyRatio;
 
   StrategyDailyEfficiencyRow({
@@ -492,6 +551,8 @@ class BotSeason {
   final double? finalBalance;
   final double? profitAmount;
   final double? profitPercent;
+  final bool? isActive;
+  final int? durationSeconds;
 
   BotSeason({
     required this.id,
@@ -502,6 +563,8 @@ class BotSeason {
     this.finalBalance,
     this.profitAmount,
     this.profitPercent,
+    this.isActive,
+    this.durationSeconds,
   });
 
   factory BotSeason.fromJson(Map<String, dynamic> json) {
@@ -514,6 +577,8 @@ class BotSeason {
       finalBalance: (json['final_balance'] as num?)?.toDouble(),
       profitAmount: (json['profit_amount'] as num?)?.toDouble(),
       profitPercent: (json['profit_percent'] as num?)?.toDouble(),
+      isActive: json['is_active'] as bool?,
+      durationSeconds: (json['duration_seconds'] as num?)?.toInt(),
     );
   }
 }
@@ -522,11 +587,13 @@ class TradingbotSeasonsResponse {
   final bool success;
   final String botId;
   final List<BotSeason> seasons;
+  final int? activeSeasonCount;
 
   TradingbotSeasonsResponse({
     required this.success,
     required this.botId,
     required this.seasons,
+    this.activeSeasonCount,
   });
 
   factory TradingbotSeasonsResponse.fromJson(Map<String, dynamic> json) {
@@ -538,6 +605,7 @@ class TradingbotSeasonsResponse {
               ?.map((e) => BotSeason.fromJson(e as Map<String, dynamic>))
               .toList() ??
           [],
+      activeSeasonCount: (json['active_season_count'] as num?)?.toInt(),
     );
   }
 }
@@ -592,6 +660,333 @@ class TradingbotEventsResponse {
               ?.map((e) => StrategyEvent.fromJson(e as Map<String, dynamic>))
               .toList() ??
           [],
+    );
+  }
+}
+
+/// GET /api/health
+class HealthResponse {
+  final bool ok;
+  final String? service;
+  final int? accountSyncIntervalSec;
+  final bool staticOnly;
+  final String? processStartedAtUtc;
+
+  HealthResponse({
+    required this.ok,
+    this.service,
+    this.accountSyncIntervalSec,
+    this.staticOnly = false,
+    this.processStartedAtUtc,
+  });
+
+  factory HealthResponse.fromJson(Map<String, dynamic> json) {
+    return HealthResponse(
+      ok: json['ok'] as bool? ?? false,
+      service: json['service'] as String?,
+      accountSyncIntervalSec: (json['account_sync_interval_sec'] as num?)?.toInt(),
+      staticOnly: json['static_only'] as bool? ?? false,
+      processStartedAtUtc: json['process_started_at_utc'] as String?,
+    );
+  }
+}
+
+/// GET /api/status 中的 sync.steps 单项
+class SyncStepStatus {
+  final bool? ok;
+  final String? error;
+
+  SyncStepStatus({this.ok, this.error});
+
+  factory SyncStepStatus.fromJson(Map<String, dynamic>? json) {
+    if (json == null) {
+      return SyncStepStatus();
+    }
+    return SyncStepStatus(
+      ok: json['ok'] as bool?,
+      error: json['error'] as String?,
+    );
+  }
+}
+
+/// GET /api/status
+class ServerStatusResponse {
+  final bool success;
+  final int? uptimeSeconds;
+  final int? accountSyncIntervalSec;
+  final String? syncDocumentation;
+  final String? processStartedAtUtc;
+  final String? lastRunCompletedAt;
+  final String? lastLoopError;
+  final Map<String, SyncStepStatus> steps;
+
+  ServerStatusResponse({
+    required this.success,
+    this.uptimeSeconds,
+    this.accountSyncIntervalSec,
+    this.syncDocumentation,
+    this.processStartedAtUtc,
+    this.lastRunCompletedAt,
+    this.lastLoopError,
+    this.steps = const {},
+  });
+
+  factory ServerStatusResponse.fromJson(Map<String, dynamic> json) {
+    final sync = json['sync'];
+    String? lastAt;
+    String? loopErr;
+    Map<String, SyncStepStatus> stepMap = {};
+    if (sync is Map<String, dynamic>) {
+      lastAt = sync['last_run_completed_at'] as String?;
+      loopErr = sync['last_loop_error'] as String?;
+      final rawSteps = sync['steps'];
+      if (rawSteps is Map) {
+        rawSteps.forEach((k, v) {
+          if (k is String && v is Map) {
+            stepMap[k] = SyncStepStatus.fromJson(
+              Map<String, dynamic>.from(v),
+            );
+          }
+        });
+      }
+    }
+    return ServerStatusResponse(
+      success: json['success'] as bool? ?? false,
+      uptimeSeconds: (json['uptime_seconds'] as num?)?.toInt(),
+      accountSyncIntervalSec:
+          (json['account_sync_interval_sec'] as num?)?.toInt(),
+      syncDocumentation: json['sync_documentation'] as String?,
+      processStartedAtUtc: json['process_started_at_utc'] as String?,
+      lastRunCompletedAt: lastAt,
+      lastLoopError: loopErr,
+      steps: stepMap,
+    );
+  }
+}
+
+/// 历史仓位单行（GET .../position-history）
+class PositionHistoryRow {
+  final int? id;
+  final String? accountId;
+  final String? okxPosId;
+  final String? instId;
+  final String? instType;
+  final String? posSide;
+  final String? mgnMode;
+  final String? openAvgPx;
+  final String? closeAvgPx;
+  final String? openMaxPos;
+  final String? closeTotalPos;
+  final String? pnl;
+  final String? realizedPnl;
+  final String? fee;
+  final String? fundingFee;
+  final String? closeType;
+  final String? cTimeMs;
+  final String? uTimeMs;
+  final String? lever;
+  final String? pnlRatio;
+  final String? syncedAt;
+
+  PositionHistoryRow({
+    this.id,
+    this.accountId,
+    this.okxPosId,
+    this.instId,
+    this.instType,
+    this.posSide,
+    this.mgnMode,
+    this.openAvgPx,
+    this.closeAvgPx,
+    this.openMaxPos,
+    this.closeTotalPos,
+    this.pnl,
+    this.realizedPnl,
+    this.fee,
+    this.fundingFee,
+    this.closeType,
+    this.cTimeMs,
+    this.uTimeMs,
+    this.lever,
+    this.pnlRatio,
+    this.syncedAt,
+  });
+
+  static String? _dynStr(Object? v) {
+    if (v == null) return null;
+    if (v is num) return v.toString();
+    final s = v.toString().trim();
+    return s.isEmpty ? null : s;
+  }
+
+  factory PositionHistoryRow.fromJson(Map<String, dynamic> json) {
+    return PositionHistoryRow(
+      id: (json['id'] as num?)?.toInt(),
+      accountId: _dynStr(json['account_id']),
+      okxPosId: _dynStr(json['okx_pos_id']),
+      instId: _dynStr(json['inst_id']),
+      instType: _dynStr(json['inst_type']),
+      posSide: _dynStr(json['pos_side']),
+      mgnMode: _dynStr(json['mgn_mode']),
+      openAvgPx: _dynStr(json['open_avg_px']),
+      closeAvgPx: _dynStr(json['close_avg_px']),
+      openMaxPos: _dynStr(json['open_max_pos']),
+      closeTotalPos: _dynStr(json['close_total_pos']),
+      pnl: _dynStr(json['pnl']),
+      realizedPnl: _dynStr(json['realized_pnl']),
+      fee: _dynStr(json['fee']),
+      fundingFee: _dynStr(json['funding_fee']),
+      closeType: _dynStr(json['close_type']),
+      cTimeMs: _dynStr(json['c_time_ms']),
+      uTimeMs: _dynStr(json['u_time_ms']),
+      lever: _dynStr(json['lever']),
+      pnlRatio: _dynStr(json['pnl_ratio']),
+      syncedAt: _dynStr(json['synced_at']),
+    );
+  }
+}
+
+class PositionHistoryResponse {
+  final bool success;
+  final String botId;
+  final List<PositionHistoryRow> rows;
+  final int? nextBeforeUtime;
+  final bool hasMore;
+
+  PositionHistoryResponse({
+    required this.success,
+    required this.botId,
+    required this.rows,
+    this.nextBeforeUtime,
+    this.hasMore = false,
+  });
+
+  factory PositionHistoryResponse.fromJson(Map<String, dynamic> json) {
+    return PositionHistoryResponse(
+      success: json['success'] as bool? ?? false,
+      botId: json['bot_id'] as String? ?? '',
+      rows:
+          (json['rows'] as List<dynamic>?)
+              ?.map(
+                (e) => PositionHistoryRow.fromJson(e as Map<String, dynamic>),
+              )
+              .toList() ??
+          [],
+      nextBeforeUtime: (json['next_before_utime'] as num?)?.toInt(),
+      hasMore: json['has_more'] as bool? ?? false,
+    );
+  }
+}
+
+/// Account_List.json 一行（管理员）
+class AccountConfigRow {
+  final String accountId;
+  final String? accountName;
+  final String? exchangeAccount;
+  final String? symbol;
+  final double? initialCapital;
+  final String? tradingStrategy;
+  final String? accountKeyFile;
+  final String? scriptFile;
+  final bool enabled;
+
+  AccountConfigRow({
+    required this.accountId,
+    this.accountName,
+    this.exchangeAccount,
+    this.symbol,
+    this.initialCapital,
+    this.tradingStrategy,
+    this.accountKeyFile,
+    this.scriptFile,
+    this.enabled = true,
+  });
+
+  factory AccountConfigRow.fromJson(Map<String, dynamic> json) {
+    final en = json['enbaled'];
+    bool ev = true;
+    if (en is bool) {
+      ev = en;
+    } else if (en is num) {
+      ev = en != 0;
+    } else if (en is String) {
+      ev = !['false', '0', 'no'].contains(en.toLowerCase());
+    }
+    return AccountConfigRow(
+      accountId: json['account_id'] as String? ?? '',
+      accountName: json['account_name'] as String?,
+      exchangeAccount: json['exchange_account'] as String?,
+      symbol: json['symbol'] as String?,
+      initialCapital: (json['Initial_capital'] as num?)?.toDouble(),
+      tradingStrategy: json['trading_strategy'] as String?,
+      accountKeyFile: json['account_key_file'] as String?,
+      scriptFile: json['script_file'] as String?,
+      enabled: ev,
+    );
+  }
+
+  Map<String, dynamic> toJsonBody() {
+    return <String, dynamic>{
+      'account_id': accountId,
+      'account_name': accountName ?? '',
+      'exchange_account': exchangeAccount ?? 'OKX',
+      'symbol': symbol ?? '',
+      'Initial_capital': initialCapital ?? 0,
+      'trading_strategy': tradingStrategy ?? '',
+      'account_key_file': accountKeyFile ?? '',
+      'script_file': scriptFile ?? '',
+      'enbaled': enabled,
+    };
+  }
+}
+
+class AdminAccountListResponse {
+  final bool success;
+  final List<AccountConfigRow> accounts;
+
+  AdminAccountListResponse({required this.success, required this.accounts});
+
+  factory AdminAccountListResponse.fromJson(Map<String, dynamic> json) {
+    return AdminAccountListResponse(
+      success: json['success'] as bool? ?? false,
+      accounts:
+          (json['accounts'] as List<dynamic>?)
+              ?.map(
+                (e) => AccountConfigRow.fromJson(e as Map<String, dynamic>),
+              )
+              .toList() ??
+          [],
+    );
+  }
+}
+
+class AdminAccountOneResponse {
+  final bool success;
+  final AccountConfigRow? account;
+
+  AdminAccountOneResponse({required this.success, this.account});
+
+  factory AdminAccountOneResponse.fromJson(Map<String, dynamic> json) {
+    final a = json['account'];
+    return AdminAccountOneResponse(
+      success: json['success'] as bool? ?? false,
+      account: a is Map<String, dynamic>
+          ? AccountConfigRow.fromJson(a)
+          : null,
+    );
+  }
+}
+
+class SimpleMessageResponse {
+  final bool success;
+  final String? message;
+
+  SimpleMessageResponse({required this.success, this.message});
+
+  factory SimpleMessageResponse.fromJson(Map<String, dynamic> json) {
+    return SimpleMessageResponse(
+      success: json['success'] as bool? ?? false,
+      message: json['message'] as String?,
     );
   }
 }

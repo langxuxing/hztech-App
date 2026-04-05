@@ -24,6 +24,7 @@ def test_positions_history_insert_dedup():
         "fee": "-0.0001",
         "fundingFee": "0",
         "type": "1",
+        "lever": "50",
     }
     n1 = db.account_positions_history_insert_batch("acct-a", [row], ts)
     n2 = db.account_positions_history_insert_batch("acct-a", [row], ts)
@@ -33,3 +34,4 @@ def test_positions_history_insert_dedup():
     assert len(q) == 1
     assert q[0]["okx_pos_id"] == "452587086133239818"
     assert q[0]["u_time_ms"] == "1654177174419"
+    assert q[0].get("lever") == "50"

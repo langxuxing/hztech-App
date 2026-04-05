@@ -7,8 +7,8 @@ import '../../theme/finance_style.dart';
 import '../../widgets/water_background.dart';
 import 'web_account_profit_screen.dart';
 
-/// Web「策略启动」：多列玻璃卡网格，展示赛季时间与启停/重启（与 [TradingBotControl] 同源 API）。
-/// 全局资金概览见导航「仪表盘」[WebDashboardScreen]。
+/// Web「策略启停」：与侧栏 [WebMainShell] 一致；多列玻璃卡网格，赛季 + 机器人会话时长 + 启停/重启。
+/// 账户级资金曲线与汇总见侧栏「账号总览」[WebDashboardScreen]。
 class WebTradingBotControlScreen extends StatefulWidget {
   const WebTradingBotControlScreen({super.key, this.sharedBots = const []});
 
@@ -473,13 +473,23 @@ class _WebTradingBotControlScreenState
                     SliverPadding(
                       padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
                       sliver: SliverToBoxAdapter(
-                        child: Text(
-                          '账户总数（${_accounts.length}）',
-                          style: Theme.of(context).textTheme.titleLarge
-                              ?.copyWith(
-                                color: AppFinanceStyle.valueColor,
-                                fontWeight: FontWeight.w900,
-                              ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '策略启停',
+                              style: Theme.of(context).textTheme.titleLarge
+                                  ?.copyWith(
+                                    color: AppFinanceStyle.valueColor,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              '账户总数（${_accounts.length}）',
+                              style: AppFinanceStyle.labelTextStyle(context),
+                            ),
+                          ],
                         ),
                       ),
                     ),
@@ -701,18 +711,29 @@ class _AccountGlassCard extends StatelessWidget {
           ),
           const SizedBox(height: 12),
 
-          _WebControlMetaRow(
-            label: '赛季启动',
-            value: seasonStart,
-            labelColor: _labelColor,
-            valueStyle: valueStyle,
-          ),
-          const SizedBox(height: 4),
-          _WebControlMetaRow(
-            label: '运行时长',
-            value: seasonDuration,
-            labelColor: _labelColor,
-            valueStyle: valueStyle.copyWith(color: _numberColor),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('赛季控制', style: valueStyle.copyWith(color: _labelColor)),
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      seasonStart,
+                      style: valueStyle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    seasonDuration,
+                    style: valueStyle.copyWith(color: _numberColor),
+                  ),
+                ],
+              ),
+            ],
           ),
           const SizedBox(height: 10),
           DecoratedBox(
@@ -726,8 +747,8 @@ class _AccountGlassCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    '策略启停',
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                    '赛季',
+                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
                       color: Colors.cyanAccent.withValues(alpha: 0.85),
                       fontWeight: FontWeight.w600,
                       letterSpacing: 0.3,
@@ -765,23 +786,35 @@ class _AccountGlassCard extends StatelessWidget {
           ),
           const SizedBox(height: 12),
 
-          _WebControlMetaRow(
-            label: '机器人启动',
-            value: robotStart,
-            labelColor: _labelColor,
-            valueStyle: valueStyle,
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('机器人启动', style: valueStyle.copyWith(color: _labelColor)),
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      robotStart,
+                      style: valueStyle,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    robotDuration,
+                    style: valueStyle.copyWith(color: _numberColor),
+                  ),
+                ],
+              ),
+            ],
           ),
-          const SizedBox(height: 4),
-          _WebControlMetaRow(
-            label: '运行时长',
-            value: robotDuration,
-            labelColor: _labelColor,
-            valueStyle: valueStyle.copyWith(color: _numberColor),
-          ),
+
           const SizedBox(height: 10),
           Text(
-            '进程控制',
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
+            '策略控制',
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
               color: AppFinanceStyle.profitGreenEnd.withValues(alpha: 0.9),
               fontWeight: FontWeight.w600,
               letterSpacing: 0.3,
@@ -927,47 +960,6 @@ class _WebRobotCircleIconButton extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-/// 与 [WebDashboardScreen] 概览卡一致：小标签 + 数值行。
-class _WebControlMetaRow extends StatelessWidget {
-  const _WebControlMetaRow({
-    required this.label,
-    required this.value,
-    required this.labelColor,
-    required this.valueStyle,
-  });
-
-  final String label;
-  final String value;
-  final Color labelColor;
-  final TextStyle valueStyle;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 112,
-          child: Text(
-            label,
-            style: Theme.of(
-              context,
-            ).textTheme.bodySmall?.copyWith(color: labelColor),
-          ),
-        ),
-        Expanded(
-          child: Text(
-            value,
-            style: valueStyle,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-          ),
-        ),
-      ],
     );
   }
 }

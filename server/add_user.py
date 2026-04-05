@@ -8,7 +8,7 @@ from db import user_create
 
 def main():
     username = "linsong"
-    password = "Ls@2026"
+    password = "i23321"
     pwd_hash = hashlib.sha256(password.encode()).hexdigest()
     if user_create(username, pwd_hash):
         print(f"用户 {username} 已创建。")

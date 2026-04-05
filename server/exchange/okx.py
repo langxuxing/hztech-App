@@ -10,6 +10,7 @@ import hmac
 import json
 import logging
 import os
+from typing import Any
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -547,7 +548,8 @@ def okx_normalize_swap_inst_id(symbol_or_inst: str) -> str:
     return s
 
 
-def okx_fetch_market_candles(
+def _okx_fetch_public_ohlc_rows(
+    request_path: str,
     inst_id: str,
     *,
     bar: str = "1D",
@@ -555,10 +557,7 @@ def okx_fetch_market_candles(
     after_ms: int | None = None,
     before_ms: int | None = None,
 ) -> tuple[list[list[str]], str | None]:
-    """
-    公开 K 线：GET /api/v5/market/candles（不经过 ccxt）。
-    返回 data 中行列表，每行 OKX 格式 [ts,o,h,l,c,vol,...] 字符串数组。
-    """
+    """OKX 公开 K 线类接口：candles / mark-price-candles / history-mark-price-candles 等。"""
     inst = okx_normalize_swap_inst_id(inst_id)
     if not inst:
         return [], "empty inst_id"
@@ -572,7 +571,7 @@ def okx_fetch_market_candles(
         params["after"] = str(int(after_ms))
     if before_ms is not None:
         params["before"] = str(int(before_ms))
-    data, err = okx_public_get("/api/v5/market/candles", params)
+    data, err = okx_public_get(request_path, params)
     if err:
         return [], err
     if not isinstance(data, dict):
@@ -585,6 +584,56 @@ def okx_fetch_market_candles(
         if isinstance(row, list) and len(row) >= 5:
             out.append([str(x) for x in row])
     return out, None
+
+
+def okx_fetch_market_candles(
+    inst_id: str,
+    *,
+    bar: str = "1D",
+    limit: int = 100,
+    after_ms: int | None = None,
+    before_ms: int | None = None,
+) -> tuple[list[list[str]], str | None]:
+    """
+    公开 K 线：GET /api/v5/market/candles（不经过 ccxt）。
+    返回 data 中行列表，每行 OKX 格式 [ts,o,h,l,c,vol,...] 字符串数组。
+    """
+    return _okx_fetch_public_ohlc_rows(
+        "/api/v5/market/candles",
+        inst_id,
+        bar=bar,
+        limit=limit,
+        after_ms=after_ms,
+        before_ms=before_ms,
+    )
+
+
+def okx_fetch_mark_price_candles(
+    inst_id: str,
+    *,
+    bar: str = "1m",
+    limit: int = 100,
+    after_ms: int | None = None,
+    before_ms: int | None = None,
+    use_history: bool = False,
+) -> tuple[list[list[str]], str | None]:
+    """
+    标记价格 K 线：/api/v5/market/mark-price-candles；
+    历史更长区间可用 history-mark-price-candles（use_history=True）。
+    """
+    path = (
+        "/api/v5/market/history-mark-price-candles"
+        if use_history
+        else "/api/v5/market/mark-price-candles"
+    )
+    return _okx_fetch_public_ohlc_rows(
+        path,
+        inst_id,
+        bar=bar,
+        limit=limit,
+        after_ms=after_ms,
+        before_ms=before_ms,
+    )
 
 
 def okx_fetch_ticker(inst_id: str) -> float | None:
@@ -894,3 +943,160 @@ def okx_fetch_pending_orders(
         except (TypeError, ValueError):
             continue
     return (out, None)
+
+
+def _parse_okx_lever_value(value: object) -> float | None:
+    try:
+        return float(value) if value is not None and str(value).strip() != "" else None
+    except (TypeError, ValueError):
+        return None
+
+
+def okx_test_account_full(
+    config_path: Path | None,
+    symbol_for_inst: str,
+    *,
+    target_leverage: float = 50.0,
+) -> dict[str, Any]:
+    """测连并检查交易配置（对齐 QTrader account_tester：账户 config、SWAP、双向持仓、目标杠杆）。
+
+    - ``success``：余额接口成功（密钥可用）。
+    - ``configuration_ok``：SWAP 标的、双向持仓、多空杠杆均满足目标（无法判定时相应项为 null 并附说明）。
+    """
+    inst_id = okx_normalize_swap_inst_id(symbol_for_inst)
+    swap_format_ok = inst_id.upper().endswith("-SWAP")
+
+    out: dict[str, Any] = {
+        "success": False,
+        "message": "",
+        "balance_summary": None,
+        "account_config": {},
+        "leverage_info": None,
+        "inst_id_checked": inst_id,
+        "target_leverage": target_leverage,
+        "configuration_ok": False,
+        "configuration_warnings": [],
+        "checks": {
+            "swap_symbol_format": swap_format_ok,
+            "pos_mode_long_short": None,
+            "leverage_long_ok": None,
+            "leverage_short_ok": None,
+        },
+    }
+
+    bal, bal_err = _okx_fetch_balance_fallback(config_path)
+    if bal is None:
+        out["message"] = bal_err or "OKX 余额请求失败"
+        if not swap_format_ok:
+            out["configuration_warnings"].append(
+                "交易对应 symbol 未规范为永续 SWAP instId（应以 -SWAP 结尾）"
+            )
+        return out
+
+    out["success"] = True
+    out["balance_summary"] = bal
+    out["message"] = "OKX 连接成功"
+
+    cfg_raw, cfg_err = okx_request(
+        "GET", "/api/v5/account/config", config_path=config_path
+    )
+    pos_mode = ""
+    if cfg_err:
+        out["configuration_warnings"].append(f"账户配置接口失败: {cfg_err}")
+    elif isinstance(cfg_raw, dict) and cfg_raw.get("code") == "0":
+        data = cfg_raw.get("data")
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            c0 = data[0]
+            out["account_config"] = {
+                "uid": c0.get("uid", ""),
+                "settle_ccy": c0.get("settleCcy", ""),
+                "pos_mode": c0.get("posMode", ""),
+                "mgn_mode": c0.get("mgnMode", ""),
+                "acct_lv": c0.get("acctLv", ""),
+            }
+            pos_mode = (c0.get("posMode") or "").strip()
+            long_short = pos_mode == "long_short_mode"
+            out["checks"]["pos_mode_long_short"] = long_short
+            if not long_short:
+                out["configuration_warnings"].append(
+                    "持仓模式须为双向持仓（OKX posMode=long_short_mode），"
+                    "请在 OKX 交易设置中切换为双向持仓"
+                )
+    else:
+        if isinstance(cfg_raw, dict):
+            out["configuration_warnings"].append(
+                _okx_business_error_detail(cfg_raw)
+            )
+        else:
+            out["configuration_warnings"].append("账户配置接口返回异常")
+
+    if not swap_format_ok:
+        out["configuration_warnings"].append(
+            "Account_List 中 symbol 建议为永续 instId，例如 PEPE-USDT-SWAP"
+        )
+
+    lev_raw, lev_err = okx_request(
+        "GET",
+        "/api/v5/account/leverage-info",
+        config_path=config_path,
+        params={"instType": "SWAP", "instId": inst_id},
+    )
+    if lev_err:
+        out["configuration_warnings"].append(f"杠杆查询失败: {lev_err}")
+    elif isinstance(lev_raw, dict) and lev_raw.get("code") == "0":
+        rows = lev_raw.get("data")
+        out["leverage_info"] = rows if isinstance(rows, list) else []
+        long_lev: float | None = None
+        short_lev: float | None = None
+        if isinstance(rows, list):
+            want = inst_id.strip()
+            for item in rows:
+                if not isinstance(item, dict):
+                    continue
+                if (item.get("instId") or "").strip() != want:
+                    continue
+                ps = (item.get("posSide") or "net").strip().lower()
+                lv = _parse_okx_lever_value(item.get("lever"))
+                if lv is None:
+                    continue
+                if ps == "long":
+                    long_lev = lv
+                elif ps == "short":
+                    short_lev = lv
+                elif ps == "net":
+                    long_lev = short_lev = lv
+        tol = 0.01
+        if long_lev is not None:
+            ok_l = abs(long_lev - target_leverage) <= tol
+            out["checks"]["leverage_long_ok"] = ok_l
+            if not ok_l:
+                out["configuration_warnings"].append(
+                    f"多仓杠杆为 {long_lev}，目标为 {target_leverage:g}x"
+                )
+        if short_lev is not None:
+            ok_s = abs(short_lev - target_leverage) <= tol
+            out["checks"]["leverage_short_ok"] = ok_s
+            if not ok_s:
+                out["configuration_warnings"].append(
+                    f"空仓杠杆为 {short_lev}，目标为 {target_leverage:g}x"
+                )
+
+        if long_lev is None and short_lev is None:
+            out["configuration_warnings"].append(
+                "杠杆接口未返回该合约多空杠杆（可能尚未开仓或需在 OKX 将 "
+                f"{inst_id} 多空均设为 {target_leverage:g}x 双向持仓）"
+            )
+    else:
+        if isinstance(lev_raw, dict):
+            out["configuration_warnings"].append(
+                _okx_business_error_detail(lev_raw)
+            )
+
+    chk = out["checks"]
+    out["configuration_ok"] = bool(
+        swap_format_ok
+        and chk.get("pos_mode_long_short") is True
+        and chk.get("leverage_long_ok") is True
+        and chk.get("leverage_short_ok") is True
+    )
+    return out

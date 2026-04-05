@@ -6,6 +6,7 @@ import '../auth/app_user_role.dart';
 import '../secure/prefs.dart';
 import '../theme/finance_style.dart';
 import '../widgets/water_background.dart';
+import 'web/web_service_status_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({
@@ -149,11 +150,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           if (widget.appUserRole == AppUserRole.admin) ...[
                             const SizedBox(height: 12),
                             Text(
-                              '系统配置：请在 Web 侧栏「用户管理」维护用户类型与客户绑定账户；此处可修改后端地址与退出登录。',
+                              '系统配置：请在 Web 侧栏「用户管理」维护用户类型与客户绑定账户；「账号管理」维护 Account_List；此处可修改后端地址与退出登录。',
                               style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 13, height: 1.4),
                             ),
                           ],
-                          if (widget.appUserRole == AppUserRole.strategyAnalyst) ...[
+                          if (widget.appUserRole == AppUserRole.customer) ...[
+                            const SizedBox(height: 12),
+                            Text(
+                              '请在「账号配置」上传 OKX 密钥 JSON（与 QTrader 格式一致）。管理员须先在「账号管理」创建账户并在「用户管理」中绑定您的 account_id。',
+                              style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 13, height: 1.4),
+                            ),
+                          ],
+                          if (widget.appUserRole != null &&
+                              widget.appUserRole!.canViewAutoNettingTest) ...[
                             const SizedBox(height: 12),
                             Text(
                               'Web 侧栏「收网测试」仅调用测试接口并写日志，不会真实平仓。',
@@ -190,6 +199,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     ),
                     const SizedBox(height: 20),
                   ],
+                  FinanceCard(
+                    padding: const EdgeInsets.all(20),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        onPressed: () {
+                          Navigator.of(context).push<void>(
+                            MaterialPageRoute<void>(
+                              builder: (ctx) => const WebServiceStatusScreen(),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.monitor_heart_outlined),
+                        label: const Text('服务状态与同步'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppFinanceStyle.valueColor,
+                          side: const BorderSide(color: AppFinanceStyle.cardBorder),
+                          minimumSize: const Size(double.infinity, 48),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
                   FinanceCard(
                     padding: const EdgeInsets.all(20),
                     child: Column(

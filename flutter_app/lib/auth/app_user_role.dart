@@ -43,18 +43,25 @@ enum AppUserRole {
       this == AppUserRole.admin ||
       this == AppUserRole.strategyAnalyst;
 
-  /// Web 策略启动（多账户卡片启停/重启，原「仪表盘」实现）
+  /// Web 策略启停（多账户卡片赛季/进程启停与重启）
   bool get canViewStrategyStart =>
       this == AppUserRole.trader || this == AppUserRole.admin;
 
-  /// 策略启停（仅交易员，不含管理员、客户）
-  bool get canUseStrategyControl => this == AppUserRole.trader;
+  /// 策略启停（移动端等）：交易员或管理员
+  bool get canUseStrategyControl =>
+      this == AppUserRole.trader || this == AppUserRole.admin;
 
   /// 用户与角色管理（增删改权限）
   bool get canManageUsers => this == AppUserRole.admin;
 
-  /// Web「自动收网」测试页（仅策略分析师）
-  bool get canViewAutoNettingTest => this == AppUserRole.strategyAnalyst;
+  /// 已绑定账户的 OKX 密钥 JSON 上传与测连（Web 侧栏「账号配置」）
+  bool get canConfigureLinkedOkxKeys => this == AppUserRole.customer;
+
+  /// Web「收网测试」页：交易员、管理员、策略分析师（与后端一致；客户无）
+  bool get canViewAutoNettingTest =>
+      this == AppUserRole.strategyAnalyst ||
+      this == AppUserRole.trader ||
+      this == AppUserRole.admin;
 
   /// Web 侧栏「账户收益与详情」「策略能效评估」等（客户仅能看到已绑定账户，由接口过滤）
   bool get canViewStrategyPerformance =>

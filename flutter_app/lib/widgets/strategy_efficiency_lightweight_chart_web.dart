@@ -12,8 +12,8 @@ import '../api/models.dart';
 
 /// Web：使用 TradingView [Lightweight Charts](https://www.tradingview.com/lightweight-charts/) 展示策略能效。
 /// 每日波动率% 柱：低于 6% 白、6%–10% 黄、高于 10% 红。
-/// 现金收益率% 柱与折线共用阈值：&lt;0.5% 灰、0.5%–1% 白、≥1% 绿。
-/// 策略能效折线：右侧价轴。
+/// 现金收益率% 柱：&lt;0.5% 灰、0.5%–1% 白、≥1% 绿（无现金收益率折线）。
+/// 策略能效折线（右轴）：&lt;0.25 灰、0.25–0.5 绿、≥0.5 深绿。
 class StrategyEfficiencyLightweightChart extends StatefulWidget {
   const StrategyEfficiencyLightweightChart({
     super.key,
@@ -124,94 +124,84 @@ html,body{margin:0;padding:0;height:100%;background:#141419;overflow:hidden;}
     if (cp < 1) return 'rgba(245, 245, 245, 0.52)';
     return 'rgba(34, 197, 94, 0.62)';
   }
-  function cashYieldLineColor(cp) {
-    if (cp == null || cp !== cp) return null;
-    if (cp < 0.5) return 'rgba(107, 114, 128, 0.98)';
-    if (cp < 1) return 'rgba(245, 245, 245, 0.98)';
-    return 'rgba(34, 197, 94, 0.98)';
+  function effLineColor(rv) {
+    if (rv == null || rv !== rv) return null;
+    if (rv < 0.25) return 'rgba(107, 114, 128, 0.98)';
+    if (rv < 0.5) return 'rgba(74, 222, 128, 0.98)';
+    return 'rgba(22, 101, 52, 0.98)';
   }
   var trH = chart.addHistogramSeries({
     priceScaleId: 'left',
-    priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+    priceFormat: { type: 'price', precision: 1, minMove: 0.1 },
   });
   var cashH = chart.addHistogramSeries({
     priceScaleId: 'left',
-    priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
-  });
-  var ratioL = chart.addLineSeries({
-    priceScaleId: 'right',
-    color: '#FBBF24',
-    lineWidth: 2,
-    priceFormat: { type: 'price', precision: 8, minMove: 0.00000001 },
+    priceFormat: { type: 'price', precision: 1, minMove: 0.1 },
   });
   var cashArr = [];
   var trArr = [];
-  var ratioArr = [];
   for (var i = 0; i < DATA.length; i++) {
     var d = DATA[i];
     if (!d || !d.day) continue;
     var cp = n(d.cashPct);
     var tp = n(d.trPct);
-    var rv = n(d.ratio);
     cashArr.push({
       time: d.day,
-      value: cp == null ? 0 : cp,
+      value: cp == null ? 0 : Math.round(cp * 10) / 10,
       color: cashYieldBarColor(cp),
     });
     trArr.push({
       time: d.day,
-      value: tp == null ? 0 : tp,
+      value: tp == null ? 0 : Math.round(tp * 10) / 10,
       color: trBarColor(tp),
     });
-    if (rv != null) ratioArr.push({ time: d.day, value: rv });
   }
   trH.setData(trArr);
   cashH.setData(cashArr);
-  ratioL.setData(ratioArr);
-  var curC = null;
-  var run = [];
+  var curE = null;
+  var runE = [];
   for (var j = 0; j < DATA.length; j++) {
     var row = DATA[j];
     if (!row || !row.day) continue;
-    var cpn = n(row.cashPct);
-    var lc = cashYieldLineColor(cpn);
-    if (lc == null) {
-      if (curC != null && run.length) {
-        var ser = chart.addLineSeries({
-          priceScaleId: 'left',
-          color: curC,
+    var rv = n(row.ratio);
+    var ec = effLineColor(rv);
+    if (ec == null) {
+      if (curE != null && runE.length) {
+        var serE = chart.addLineSeries({
+          priceScaleId: 'right',
+          color: curE,
           lineWidth: 2,
-          priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+          priceFormat: { type: 'price', precision: 8, minMove: 0.00000001 },
         });
-        ser.setData(run);
-        run = [];
-        curC = null;
+        serE.setData(runE);
+        runE = [];
+        curE = null;
       }
       continue;
     }
-    if (lc !== curC) {
-      if (curC != null && run.length) {
-        var ser2 = chart.addLineSeries({
-          priceScaleId: 'left',
-          color: curC,
+    if (ec !== curE) {
+      if (curE != null && runE.length) {
+        var serE2 = chart.addLineSeries({
+          priceScaleId: 'right',
+          color: curE,
           lineWidth: 2,
-          priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+          priceFormat: { type: 'price', precision: 8, minMove: 0.00000001 },
         });
-        ser2.setData(run);
+        serE2.setData(runE);
       }
-      run = [];
-      curC = lc;
+      runE = [];
+      curE = ec;
     }
-    run.push({ time: row.day, value: cpn });
+    runE.push({ time: row.day, value: rv });
   }
-  if (curC != null && run.length) {
-    var ser3 = chart.addLineSeries({
-      priceScaleId: 'left',
-      color: curC,
+  if (curE != null && runE.length) {
+    var serE3 = chart.addLineSeries({
+      priceScaleId: 'right',
+      color: curE,
       lineWidth: 2,
-      priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+      priceFormat: { type: 'price', precision: 8, minMove: 0.00000001 },
     });
-    ser3.setData(run);
+    serE3.setData(runE);
   }
   chart.timeScale().fitContent();
   function resize() {

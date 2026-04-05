@@ -1,5 +1,5 @@
--- 添加 lhg 用户（密码与 admin 一致：123）。仅当 username 不存在时插入。
+-- 添加 lhg 用户（缺省密码：i23321，SHA256）。仅当 username 不存在时插入。
 INSERT OR IGNORE INTO users (username, password_hash) VALUES (
   'lhg',
-  'a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3'
+  '4f1e136e8913a8d4748d82e6c401edb30b9dd88e1fac0d63140b23ea259ddf94'
 );

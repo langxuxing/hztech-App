@@ -11,15 +11,25 @@ App 所需 API（与 QtraderApi.kt 一致）：
   GET  /api/tradingbots           交易账户列表（需 Bearer token）
   POST /api/tradingbots/{id}/start|stop|restart|season-start|season-stop（需 Bearer token；赛季操作需 script 支持 season-start/stop）
   GET  /api/tradingbots/{id}/pending-orders | /ticker  当前委托、行情（不入库；id 可为 Account_List 的 account_id）
-  GET  /api/tradingbots/{id}/strategy-daily-efficiency  每日波动率/现金收益率%(较UTC月初)/策略能效（?inst_id=&days=）
+  GET  /api/tradingbots/{id}/strategy-daily-efficiency  每日波动率/现金收益率%(较UTC月初)/策略能效（?inst_id=&days=；日线波动全站缓存 market_daily_bars）
+  GET  /kline/<file>.json  PEPE 等 1m 标记价格 K 线 JSON（写入 flutter_app/web/kline；夜间定时补历史）
   GET  /api/tradingbots/{id}/tradingbot-events  账户启停事件（需 Bearer token）
   GET  /api/logs                  日志查询（需 Bearer token，?limit=100&level=&source=）
   GET  /api/users                 用户列表（仅管理员，含 role、linked_account_ids）
   POST /api/users                 新建用户（仅管理员）Body: {username, password, role?, linked_account_ids?}
   DELETE /api/users/<id>          删除用户（仅管理员，不可删自己）
   PATCH /api/users/<id>           更新角色/客户绑定账户（仅管理员）
-  POST /api/strategy-analyst/auto-net-test  自动收网测试桩（仅 strategy_analyst）
+  POST /api/strategy-analyst/auto-net-test  自动收网测试桩（交易员/管理员/策略分析师，客户不可用）
   GET  /api/me                    当前用户 role、linked_account_ids
+  GET  /api/health                服务存活（无需登录，供负载均衡探测）
+  GET  /api/status                同步状态与周期说明（需登录）
+  GET  /api/tradingbots/{id}/position-history  历史仓位分页（入库数据，需登录）
+  POST /api/tradingbots/{id}/position-history/sync  手动拉取该账户 OKX 历史仓位（仅管理员）
+  GET|POST|PUT|DELETE /api/admin/accounts  Account_List.json + account_meta 库表同步（仅管理员）
+  POST /api/admin/accounts/{id}/test-connection  测连 OKX + 检查 SWAP/双向持仓/50x 杠杆（仅管理员）
+  GET  /api/me/customer-accounts  客户已绑定账户列表与密钥文件是否存在（仅客户）
+  PUT  /api/me/customer-accounts/{id}/okx-json  客户上传 OKX 密钥 JSON（须已绑定该 account_id）
+  POST /api/me/customer-accounts/{id}/test-connection  客户测连（同管理员扩展项）
 管控：
   GET  /api/strategy/status
   POST /api/strategy/start | stop | restart（需 query bot_id=simpleserver-lhg|simpleserver-hztech）
@@ -44,7 +54,9 @@ import jwt
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory, g
 
 import db as _db
+import account_list_store as _account_list_store
 import strategy_efficiency as _strategy_efficiency
+import kline_web_sync as _kline_web_sync
 from Accounts import AccountMgr as _account_mgr
 from exchange import okx as _okx
 from tradingbot_ctrl import (
@@ -98,6 +110,46 @@ try:
 except ValueError:
     _ACCOUNT_SYNC_INTERVAL_SEC = 300
 _ACCOUNT_SYNC_INTERVAL_SEC = max(30, min(_ACCOUNT_SYNC_INTERVAL_SEC, 86400))
+
+# 策略能效默认标的：market_daily_bars 按此 inst_id 全站共用（与接口默认 inst_id 一致）
+_DEFAULT_STRATEGY_EFFICIENCY_INST_ID = "PEPE-USDT-SWAP"
+
+# 进程启动时间（Wall ISO + monotonic 用于 uptime）
+_PROCESS_START_WALL = datetime.now(timezone.utc).isoformat()
+_PROCESS_START_MONO = time.monotonic()
+
+_SYNC_STATE_LOCK = threading.Lock()
+_SYNC_STATE: dict = {
+    "last_run_completed_at": None,
+    "steps": {
+        "balance_snapshots": {"ok": None, "error": None},
+        "tradingbot_snapshots": {"ok": None, "error": None},
+        "positions_history": {"ok": None, "error": None},
+    },
+    "last_loop_error": None,
+}
+
+
+def _sync_record_step(step: str, ok: bool, err: str | None) -> None:
+    with _SYNC_STATE_LOCK:
+        bucket = _SYNC_STATE["steps"].setdefault(
+            step, {"ok": None, "error": None}
+        )
+        bucket["ok"] = ok
+        bucket["error"] = err
+
+
+def _sync_mark_completed(loop_err: str | None = None) -> None:
+    with _SYNC_STATE_LOCK:
+        _SYNC_STATE["last_run_completed_at"] = datetime.now(
+            timezone.utc
+        ).isoformat()
+        _SYNC_STATE["last_loop_error"] = loop_err
+
+
+def _sync_state_snapshot() -> dict:
+    with _SYNC_STATE_LOCK:
+        return json.loads(json.dumps(_SYNC_STATE))
 
 # 调试日志：LOG_LEVEL=DEBUG 时输出请求/响应详情（便于排查“收到 HTML 而非 JSON”等）
 _LOG_LEVEL = os.environ.get("LOG_LEVEL", "").strip().upper()
@@ -292,21 +344,105 @@ def _require_admin():
     return jsonify({"success": False, "message": "需要管理员权限"}), 403
 
 
+def _sync_account_meta_after_list_json_write():
+    """Account_List.json 已落盘后同步 SQLite account_meta（与 JSON 一致）。"""
+    try:
+        _account_mgr.sync_account_meta_after_account_list_write(_db)
+    except Exception:
+        logging.exception("Account_List 写入后 account_meta 同步失败")
+        return jsonify(
+            {
+                "success": False,
+                "message": "JSON 已更新但数据库 account_meta 同步失败，请查看服务端日志",
+            }
+        ), 500
+    return None
+
+
 def _is_strategy_analyst() -> bool:
     return _role() == "strategy_analyst"
 
 
-def _require_strategy_analyst():
-    if _is_strategy_analyst():
+def _require_trader_or_admin():
+    """策略启停、赛季等：交易员或管理员；客户与策略分析师不可调用。"""
+    if _is_trader() or _is_admin():
         return None
-    return jsonify({"success": False, "message": "仅策略分析师可使用"}), 403
+    return jsonify({"success": False, "message": "仅交易员或管理员可操作策略启停"}), 403
 
 
-def _require_trader_only():
-    """策略启停等：仅交易员（不含管理员、客户）。"""
-    if _is_trader():
+def _validate_customer_okx_json_body(data: object) -> tuple[dict | None, str | None]:
+    """客户上传的密钥文件体：与 Accounts/OKX_Api_Key 下 JSON 一致，须含 api.key/secret/passphrase。"""
+    if not isinstance(data, dict):
+        return None, "请求体须为 JSON 对象"
+    api = data.get("api")
+    if not isinstance(api, dict):
+        return None, "须包含 api 对象（与 QTrader / 本系统密钥 JSON 格式一致）"
+    key = (api.get("key") or api.get("apikey") or "").strip()
+    secret = (
+        (api.get("secret") or api.get("secretkey") or api.get("secret_key") or "")
+        .strip()
+    )
+    passphrase = (api.get("passphrase") or "").strip()
+    if not key or not secret or not passphrase:
+        return None, "api 内须包含 key、secret、passphrase"
+    return data, None
+
+
+def _okx_account_test_http_response(account_id: str):
+    """管理员与客户测连共用：余额 + 账户配置 + 杠杆检查（见 exchange.okx.okx_test_account_full）。"""
+    aid = (account_id or "").strip()
+    row = _account_list_store.get_account(aid)
+    if not row:
+        return jsonify({"success": False, "message": "未找到"}), 404
+    path = _account_mgr.resolve_okx_key_write_path(aid)
+    if path is None:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "message": "无法解析密钥路径，请检查 Account_List 中 account_key_file",
+                }
+            ),
+            400,
+        )
+    if not path.is_file():
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "message": "密钥文件不存在，请先上传或配置 OKX API JSON",
+                }
+            ),
+            400,
+        )
+    sym = str(row.get("symbol") or "").strip()
+    payload = _okx.okx_test_account_full(path, sym)
+    status = 200 if payload.get("success") else 502
+    return (
+        jsonify(
+            {
+                "success": payload.get("success", False),
+                "account_id": aid,
+                "balance_summary": payload.get("balance_summary"),
+                "message": payload.get("message"),
+                "configuration_ok": payload.get("configuration_ok"),
+                "configuration_warnings": payload.get("configuration_warnings", []),
+                "checks": payload.get("checks", {}),
+                "account_config": payload.get("account_config", {}),
+                "leverage_info": payload.get("leverage_info"),
+                "inst_id_checked": payload.get("inst_id_checked"),
+                "target_leverage": payload.get("target_leverage"),
+            }
+        ),
+        status,
+    )
+
+
+def _require_trader_admin_or_analyst():
+    """收网测试等：客户不可调用。"""
+    if _is_trader() or _is_admin() or _is_strategy_analyst():
         return None
-    return jsonify({"success": False, "message": "仅交易员可使用策略启停"}), 403
+    return jsonify({"success": False, "message": "客户账号无权使用此功能"}), 403
 
 
 def _customer_bot_forbidden(bot_id: str):
@@ -404,11 +540,11 @@ def _resolve_okx_config_path(bot_or_account_id: str) -> Path | None:
 # 账号信息同步器：从okx交易所读取账号信息并写入数据库
 def _job_fetch_account_and_save_snapshots() -> None:
     """定时任务：Account_List 账户写入 account_snapshots + account_positions_history（由 AccountMgr；另兼容 tradingbots.json 旧 bot 写入 bot_profit_snapshots）。"""
-    
-    # 1. 读取 Account_List 中的账户信息并写入数据库
     try:
         _account_mgr.refresh_all_balance_snapshots(_db, app.logger)
+        _sync_record_step("balance_snapshots", True, None)
     except Exception as e:
+        _sync_record_step("balance_snapshots", False, str(e))
         _db.log_insert(
             "WARN",
             "account_mgr_snapshot_failed",
@@ -418,24 +554,40 @@ def _job_fetch_account_and_save_snapshots() -> None:
 
     try:
         _account_mgr._fetch_and_save_tradingbot_snapshots(_db, app.logger)
+        _sync_record_step("tradingbot_snapshots", True, None)
     except Exception as e:
+        _sync_record_step("tradingbot_snapshots", False, str(e))
         _db.log_insert(
             "WARN",
             "account_mgr_tradingbot_snapshot_failed",
             source="timer",
             extra={"error": str(e)},
         )
-        
-    # 2. 读取 Account_List 中的账户信息并写入数据库
+
     try:
         _account_mgr.refresh_all_positions_history(_db, app.logger)
+        _sync_record_step("positions_history", True, None)
     except Exception as e:
+        _sync_record_step("positions_history", False, str(e))
         _db.log_insert(
             "WARN",
             "account_mgr_positions_history_failed",
             source="timer",
             extra={"error": str(e)},
         )
+
+    try:
+        _mb_err = _strategy_efficiency.ensure_shared_market_daily_bars(
+            _db, _okx, _DEFAULT_STRATEGY_EFFICIENCY_INST_ID
+        )
+        if _mb_err:
+            app.logger.debug(
+                "market_daily_bars 未补齐昨日: %s", _mb_err
+            )
+    except Exception as _e_mdb:
+        app.logger.warning("market_daily_bars ensure 异常: %s", _e_mdb)
+
+    _sync_mark_completed(None)
 
 
 def _start_account_snapshot_timer() -> None:
@@ -451,6 +603,7 @@ def _start_account_snapshot_timer() -> None:
                     _ACCOUNT_SYNC_INTERVAL_SEC,
                 )
             except Exception as e:
+                _sync_mark_completed(str(e))
                 _db.log_insert(
                     "WARN",
                     "账号信息同步器：周期错误",
@@ -485,6 +638,43 @@ def download_apk(filename):
     if not path.exists() or not path.is_file():
         return jsonify({"error": "not found"}), 404
     return send_file(path, as_attachment=True, download_name=filename)
+
+
+# ---------- API：健康与状态 ----------
+@app.route("/api/health", methods=["GET"])
+def api_health():
+    """无需登录：负载均衡或客户端探测服务是否在线。"""
+    payload: dict = {
+        "ok": True,
+        "service": "hztech-api",
+        "account_sync_interval_sec": _ACCOUNT_SYNC_INTERVAL_SEC,
+        "static_only": STATIC_ONLY,
+    }
+    if not STATIC_ONLY:
+        payload["process_started_at_utc"] = _PROCESS_START_WALL
+    return jsonify(payload)
+
+
+@app.route("/api/status", methods=["GET"])
+@require_auth
+def api_status():
+    """已登录：进程 uptime、Account_List 定时同步各步骤结果与说明。"""
+    up = int(time.monotonic() - _PROCESS_START_MONO)
+    doc = (
+        "后台线程按 HZTECH_ACCOUNT_SYNC_INTERVAL_SEC（默认 300 秒）从 OKX 拉取 "
+        "权益/现金写入 account_snapshots，并拉取 positions-history 写入 "
+        "account_positions_history；进程启动后约 30 秒首次执行一轮。"
+    )
+    return jsonify(
+        {
+            "success": True,
+            "uptime_seconds": up,
+            "account_sync_interval_sec": _ACCOUNT_SYNC_INTERVAL_SEC,
+            "sync_documentation": doc,
+            "sync": _sync_state_snapshot(),
+            "process_started_at_utc": _PROCESS_START_WALL,
+        }
+    )
 
 
 # ---------- API：登录（无需 token） ----------
@@ -642,8 +832,8 @@ def api_users_patch(user_id: int):
 @app.route("/api/strategy-analyst/auto-net-test", methods=["POST"])
 @require_auth
 def api_strategy_analyst_auto_net_test():
-    """自动收网测试桩：仅记录请求，便于后续对接实盘逻辑。"""
-    denied = _require_strategy_analyst()
+    """自动收网测试桩：仅记录请求；交易员/管理员/策略分析师可调用。"""
+    denied = _require_trader_admin_or_analyst()
     if denied:
         return denied
     data = request.get_json(silent=True) or {}
@@ -850,7 +1040,7 @@ def _bot_op_response(resp: dict, bot_id: str) -> dict:
 @app.route("/api/tradingbots/<bot_id>/start", methods=["POST"])
 @require_auth
 def api_bot_start(bot_id):
-    denied = _require_trader_only()
+    denied = _require_trader_or_admin()
     if denied:
         return denied
     if not _bot_is_controllable(bot_id):
@@ -883,7 +1073,7 @@ def api_bot_start(bot_id):
 @app.route("/api/tradingbots/<bot_id>/stop", methods=["POST"])
 @require_auth
 def api_bot_stop(bot_id):
-    denied = _require_trader_only()
+    denied = _require_trader_or_admin()
     if denied:
         return denied
     if not _bot_is_controllable(bot_id):
@@ -916,7 +1106,7 @@ def api_bot_stop(bot_id):
 @app.route("/api/tradingbots/<bot_id>/restart", methods=["POST"])
 @require_auth
 def api_bot_restart(bot_id):
-    denied = _require_trader_only()
+    denied = _require_trader_or_admin()
     if denied:
         return denied
     if not _bot_is_controllable(bot_id):
@@ -941,7 +1131,7 @@ def api_bot_restart(bot_id):
 @app.route("/api/tradingbots/<bot_id>/season-start", methods=["POST"])
 @require_auth
 def api_bot_season_start(bot_id):
-    denied = _require_trader_only()
+    denied = _require_trader_or_admin()
     if denied:
         return denied
     if not _bot_is_controllable(bot_id):
@@ -963,7 +1153,7 @@ def api_bot_season_start(bot_id):
 @app.route("/api/tradingbots/<bot_id>/season-stop", methods=["POST"])
 @require_auth
 def api_bot_season_stop(bot_id):
-    denied = _require_trader_only()
+    denied = _require_trader_or_admin()
     if denied:
         return denied
     if not _bot_is_controllable(bot_id):
@@ -1019,7 +1209,7 @@ def api_bot_profit_history(bot_id):
 def api_strategy_daily_efficiency(bot_id):
     """
     策略效能：每日波动率（|高−低|/收盘%）、现金收益率%（日现金增量/UTC 自然月月初资金×100）、
-    策略能效（日增量 USDT÷波幅×1e-7）。数据来自 OKX 日线 + 账户快照。
+    策略能效（日增量 USDT÷(波幅×1e9)）。日线 OHLC/TR 来自 market_daily_bars 全站缓存（与账户快照合并）。
     Query: inst_id=PEPE-USDT-SWAP&days=90
     """
     denied = _customer_bot_forbidden(bot_id)
@@ -1031,7 +1221,9 @@ def api_strategy_daily_efficiency(bot_id):
     except (TypeError, ValueError):
         days = 90
     days = max(7, min(366, days))
-    bars, m_err = _okx.okx_fetch_daily_ohlcv_with_tr(inst_id, limit=days + 5)
+    bars, m_err = _strategy_efficiency.load_market_bars_for_efficiency(
+        _db, _okx, inst_id, days
+    )
     if m_err or not bars:
         return (
             jsonify(
@@ -1206,6 +1398,75 @@ def api_bot_positions(bot_id):
     return jsonify(payload)
 
 
+@app.route("/api/tradingbots/<bot_id>/position-history", methods=["GET"])
+@require_auth
+def api_bot_position_history(bot_id):
+    """已入库的历史平仓记录（OKX positions-history 同步），按更新时间倒序分页。"""
+    denied = _customer_bot_forbidden(bot_id)
+    if denied:
+        return denied
+    try:
+        limit = int(request.args.get("limit", 100))
+    except (TypeError, ValueError):
+        limit = 100
+    limit = max(1, min(limit, 500))
+    before_raw = request.args.get("before_utime")
+    since_raw = request.args.get("since_utime")
+    before_utime_ms = None
+    since_utime_ms = None
+    if before_raw is not None and str(before_raw).strip() != "":
+        try:
+            before_utime_ms = int(before_raw)
+        except (TypeError, ValueError):
+            return jsonify(
+                {"success": False, "message": "before_utime 无效"}
+            ), 400
+    if since_raw is not None and str(since_raw).strip() != "":
+        try:
+            since_utime_ms = int(since_raw)
+        except (TypeError, ValueError):
+            return jsonify(
+                {"success": False, "message": "since_utime 无效"}
+            ), 400
+    bid = (bot_id or "").strip()
+    rows = _db.account_positions_history_query_by_account(
+        bid,
+        limit=limit,
+        before_utime_ms=before_utime_ms,
+        since_utime_ms=since_utime_ms,
+    )
+    next_before = None
+    if rows and len(rows) >= limit:
+        last_ut = rows[-1].get("u_time_ms")
+        if last_ut is not None:
+            try:
+                next_before = int(last_ut)
+            except (TypeError, ValueError):
+                next_before = None
+    return jsonify(
+        {
+            "success": True,
+            "bot_id": bid,
+            "rows": rows,
+            "next_before_utime": next_before,
+            "has_more": next_before is not None,
+        }
+    )
+
+
+@app.route("/api/tradingbots/<bot_id>/position-history/sync", methods=["POST"])
+@require_auth
+def api_bot_position_history_sync(bot_id):
+    """仅管理员：立即从 OKX 拉取该 account_id 的历史仓位并入库。"""
+    denied = _require_admin()
+    if denied:
+        return denied
+    bid = (bot_id or "").strip()
+    ok, msg = _account_mgr.refresh_positions_history_one(_db, bid, app.logger)
+    code = 200 if ok else 400
+    return jsonify({"success": ok, "bot_id": bid, "message": msg}), code
+
+
 @app.route("/api/tradingbots/<bot_id>/pending-orders", methods=["GET"])
 @require_auth
 def api_bot_pending_orders(bot_id):
@@ -1262,6 +1523,31 @@ def api_bot_ticker(bot_id):
     )
 
 
+def _enrich_season_row(row: dict) -> dict:
+    """补充 is_active、duration_seconds 便于前端展示。"""
+    out = dict(row)
+    stopped = row.get("stopped_at")
+    st = stopped is None or (
+        isinstance(stopped, str) and not stopped.strip()
+    )
+    out["is_active"] = bool(st)
+    started = row.get("started_at")
+    dur = None
+    if started and stopped and str(stopped).strip():
+        try:
+            s = datetime.fromisoformat(
+                str(started).replace("Z", "+00:00")
+            )
+            e = datetime.fromisoformat(
+                str(stopped).replace("Z", "+00:00")
+            )
+            dur = max(0, int((e - s).total_seconds()))
+        except (TypeError, ValueError):
+            dur = None
+    out["duration_seconds"] = dur
+    return out
+
+
 @app.route("/api/tradingbots/<bot_id>/seasons", methods=["GET"])
 @require_auth
 def api_tradingbot_seasons(bot_id):
@@ -1270,8 +1556,17 @@ def api_tradingbot_seasons(bot_id):
     if denied:
         return denied
     limit = min(int(request.args.get("limit", 50)), 100)
-    rows = _db.bot_season_list_by_bot(bot_id, limit=limit)
-    return jsonify({"success": True, "bot_id": bot_id, "seasons": rows})
+    raw = _db.bot_season_list_by_bot(bot_id, limit=limit)
+    rows = [_enrich_season_row(r) for r in raw]
+    active_count = sum(1 for r in rows if r.get("is_active"))
+    return jsonify(
+        {
+            "success": True,
+            "bot_id": bot_id,
+            "seasons": rows,
+            "active_season_count": active_count,
+        }
+    )
 
 
 @app.route("/api/tradingbots/<bot_id>/tradingbot-events", methods=["GET"])
@@ -1295,7 +1590,7 @@ def api_strategy_status():
 @app.route("/api/strategy/start", methods=["POST", "GET"])
 @require_auth
 def api_strategy_start():
-    denied = _require_trader_only()
+    denied = _require_trader_or_admin()
     if denied:
         return denied
     bot_id = (
@@ -1320,7 +1615,7 @@ def api_strategy_start():
 @app.route("/api/strategy/stop", methods=["POST", "GET"])
 @require_auth
 def api_strategy_stop():
-    denied = _require_trader_only()
+    denied = _require_trader_or_admin()
     if denied:
         return denied
     bot_id = (
@@ -1345,7 +1640,7 @@ def api_strategy_stop():
 @app.route("/api/strategy/restart", methods=["POST", "GET"])
 @require_auth
 def api_strategy_restart():
-    denied = _require_trader_only()
+    denied = _require_trader_or_admin()
     if denied:
         return denied
     bot_id = (
@@ -1381,6 +1676,169 @@ def api_logs():
     return jsonify({"success": True, "logs": rows})
 
 
+# ---------- API：Account_List.json（仅管理员） ----------
+@app.route("/api/admin/accounts", methods=["GET"])
+@require_auth
+def api_admin_accounts_list():
+    denied = _require_admin()
+    if denied:
+        return denied
+    return jsonify(
+        {"success": True, "accounts": _account_list_store.list_accounts()}
+    )
+
+
+@app.route("/api/admin/accounts", methods=["POST"])
+@require_auth
+def api_admin_accounts_create():
+    denied = _require_admin()
+    if denied:
+        return denied
+    data = request.get_json(silent=True) or {}
+    aid = str(data.get("account_id") or "").strip()
+    if not aid:
+        return jsonify({"success": False, "message": "缺少 account_id"}), 400
+    if _account_list_store.get_account(aid):
+        return jsonify(
+            {"success": False, "message": "account_id 已存在"}
+        ), 409
+    try:
+        row = _account_list_store.upsert_account(data)
+    except ValueError as e:
+        return jsonify({"success": False, "message": str(e)}), 400
+    err = _sync_account_meta_after_list_json_write()
+    if err:
+        return err
+    return jsonify({"success": True, "account": row})
+
+
+@app.route("/api/admin/accounts/<account_id>", methods=["GET"])
+@require_auth
+def api_admin_accounts_one(account_id):
+    denied = _require_admin()
+    if denied:
+        return denied
+    row = _account_list_store.get_account(account_id)
+    if not row:
+        return jsonify({"success": False, "message": "未找到"}), 404
+    return jsonify({"success": True, "account": row})
+
+
+@app.route("/api/admin/accounts/<account_id>", methods=["PUT", "PATCH"])
+@require_auth
+def api_admin_accounts_update(account_id):
+    denied = _require_admin()
+    if denied:
+        return denied
+    aid = (account_id or "").strip()
+    existing = _account_list_store.get_account(aid)
+    if not existing:
+        return jsonify({"success": False, "message": "未找到"}), 404
+    patch = request.get_json(silent=True) or {}
+    merged = {**existing, **patch}
+    merged["account_id"] = aid
+    try:
+        row = _account_list_store.upsert_account(merged)
+    except ValueError as e:
+        return jsonify({"success": False, "message": str(e)}), 400
+    err = _sync_account_meta_after_list_json_write()
+    if err:
+        return err
+    return jsonify({"success": True, "account": row})
+
+
+@app.route("/api/admin/accounts/<account_id>", methods=["DELETE"])
+@require_auth
+def api_admin_accounts_delete(account_id):
+    denied = _require_admin()
+    if denied:
+        return denied
+    aid = (account_id or "").strip()
+    if not _account_list_store.delete_account(aid):
+        return jsonify({"success": False, "message": "未找到"}), 404
+    err = _sync_account_meta_after_list_json_write()
+    if err:
+        return err
+    return jsonify({"success": True, "message": "已删除"})
+
+
+@app.route("/api/admin/accounts/<account_id>/test-connection", methods=["POST"])
+@require_auth
+def api_admin_accounts_test(account_id):
+    denied = _require_admin()
+    if denied:
+        return denied
+    return _okx_account_test_http_response(account_id)
+
+
+@app.route("/api/me/customer-accounts", methods=["GET"])
+@require_auth
+def api_me_customer_accounts():
+    if not _is_customer():
+        return jsonify({"success": False, "message": "仅客户可使用此接口"}), 403
+    linked = _db.user_get_linked_account_ids(g.current_username)
+    out: list[dict] = []
+    for aid in linked:
+        aid = (aid or "").strip()
+        if not aid:
+            continue
+        row = _account_list_store.get_account(aid)
+        if not row:
+            out.append(
+                {
+                    "account_id": aid,
+                    "missing_in_account_list": True,
+                    "key_file_exists": False,
+                }
+            )
+            continue
+        basic = _account_mgr.account_basic_dict(row)
+        wp = _account_mgr.resolve_okx_key_write_path(aid)
+        basic["key_file_exists"] = bool(wp and wp.is_file())
+        basic["missing_in_account_list"] = False
+        out.append(basic)
+    return jsonify({"success": True, "accounts": out})
+
+
+@app.route("/api/me/customer-accounts/<account_id>/okx-json", methods=["PUT"])
+@require_auth
+def api_me_customer_okx_json(account_id):
+    if not _is_customer():
+        return jsonify({"success": False, "message": "仅客户可上传密钥"}), 403
+    aid = (account_id or "").strip()
+    allowed = {x.strip() for x in _db.user_get_linked_account_ids(g.current_username) if x}
+    if aid not in allowed:
+        return jsonify({"success": False, "message": "未绑定该账户，请联系管理员"}), 403
+    if not _account_list_store.get_account(aid):
+        return jsonify({"success": False, "message": "服务端无此账户配置，请联系管理员维护 Account_List"}), 404
+    data = request.get_json(silent=True)
+    body, verr = _validate_customer_okx_json_body(data)
+    if verr:
+        return jsonify({"success": False, "message": verr}), 400
+    path = _account_mgr.resolve_okx_key_write_path(aid)
+    if path is None:
+        return jsonify({"success": False, "message": "无法解析密钥保存路径"}), 400
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(body, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+    return jsonify(
+        {"success": True, "message": "已保存", "account_key_file": path.name}
+    )
+
+
+@app.route("/api/me/customer-accounts/<account_id>/test-connection", methods=["POST"])
+@require_auth
+def api_me_customer_accounts_test(account_id):
+    if not _is_customer():
+        return jsonify({"success": False, "message": "仅客户可测连"}), 403
+    aid = (account_id or "").strip()
+    allowed = {x.strip() for x in _db.user_get_linked_account_ids(g.current_username) if x}
+    if aid not in allowed:
+        return jsonify({"success": False, "message": "未绑定该账户"}), 403
+    return _okx_account_test_http_response(aid)
+
+
 # ---------- API：OKX 账号信息（脱敏） ----------
 @app.route("/api/okx/info", methods=["GET"])
 def api_okx_info():
@@ -1391,8 +1849,10 @@ def api_okx_info():
 
 
 # 启动 5 分钟定时器：AccountMgr 写入 account_snapshots、account_positions_history，并兼容 tradingbots 盈利快照
+# 夜间：PEPE（可配置）1m 标记价格 K 线写入 flutter_app/web/kline，并由 /kline/ 提供静态 JSON
 if not STATIC_ONLY:
     _start_account_snapshot_timer()
+    _kline_web_sync.start_kline_nightly_scheduler(app.logger, PROJECT_ROOT)
 
 # App 进程启停写入 strategy_events（bot_id="app"），便于审计
 _APP_EVENT_BOT_ID = "app"
@@ -1419,6 +1879,24 @@ def _app_on_stop_signal(*_args):
     sys.exit(0)
 
 
+@app.route("/kline/<path:kline_rel>")
+def serve_kline_json(kline_rel: str):
+    """Flutter `web/kline` 下 JSON（OKX 1m 标记价格 K 线同步产物），供前端或 QTrader-web 类客户端拉取。"""
+    if ".." in kline_rel or kline_rel.startswith(("/", "\\")):
+        abort(404)
+    if not kline_rel.lower().endswith(".json"):
+        abort(404)
+    base = _kline_web_sync.kline_output_dir(PROJECT_ROOT).resolve()
+    full = (base / kline_rel).resolve()
+    try:
+        full.relative_to(base)
+    except ValueError:
+        abort(404)
+    if not full.is_file():
+        abort(404)
+    return send_file(full, mimetype="application/json", max_age=120)
+
+
 def _flutter_web_safe_path(root: Path, rel: str) -> Path | None:
     """将 URL 路径解析为 root 下的文件路径，防止跳出目录。"""
     if ".." in rel or rel.startswith("/"):
@@ -1440,6 +1918,8 @@ def serve_flutter_web(spa_path: str):
     """托管 Flutter Web（flutter build web）；未知路径回退 index.html 以支持前端路由。"""
     if spa_path == "api" or spa_path.startswith("api/"):
         return jsonify({"error": "not_found", "path": "/" + spa_path}), 404
+    if spa_path == "kline" or spa_path.startswith("kline/"):
+        return jsonify({"error": "not_found", "hint": "use /kline/<file>.json"}), 404
     root = FLUTTER_WEB_DIR.resolve()
     index_html = root / "index.html"
     if not index_html.is_file():

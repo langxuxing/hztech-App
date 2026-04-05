@@ -5,6 +5,7 @@ import '../api/client.dart';
 import '../api/models.dart';
 import '../secure/prefs.dart';
 import '../theme/finance_style.dart';
+import '../utils/number_display_format.dart';
 import '../widgets/water_background.dart';
 
 /// 交易机器人：列表来自 main.py /api/tradingbots（Account_List + tradingbots.json），
@@ -92,7 +93,7 @@ class _TradingBotControlState extends State<TradingBotControl> {
     return _accounts.isNotEmpty ? _accounts.first : null;
   }
 
-  String _fmt(double v) => v.toStringAsFixed(2);
+  String _fmt(double v) => formatUiInteger(v);
 
   void _onTapButton(UnifiedTradingBot bot) {
     final running = bot.status == 'running' || bot.isRunning == true;
@@ -431,7 +432,9 @@ class _TradingBotControlState extends State<TradingBotControl> {
                                               ),
                                               const SizedBox(height: 8),
                                               Text(
-                                                '${account.profitPercent.toStringAsFixed(1)}%',
+                                                formatUiPercentLabel(
+                                                  account.profitPercent,
+                                                ),
                                                 style: (Theme.of(context)
                                                             .textTheme.titleMedium ??
                                                         const TextStyle())

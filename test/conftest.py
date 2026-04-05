@@ -18,11 +18,12 @@ import db  # noqa: E402
 _tmp = tempfile.mkdtemp(prefix="hztech_test_")
 db.DB_PATH = os.path.join(_tmp, "test.db")
 db.init_db()
-db.user_create("admin", hashlib.sha256(b"123").hexdigest())
-db.user_create("trader", hashlib.sha256(b"trader").hexdigest())
+_pwd = hashlib.sha256(b"i23321").hexdigest()
+db.user_create("admin", _pwd)
+db.user_create("trader", _pwd)
 db.user_create(
     "analyst",
-    hashlib.sha256(b"a").hexdigest(),
+    _pwd,
     role="strategy_analyst",
 )
 _conn = db.get_conn()
@@ -45,7 +46,7 @@ def client():
 def token(client):
     r = client.post(
         "/api/login",
-        json={"username": "admin", "password": "123"},
+        json={"username": "admin", "password": "i23321"},
         content_type="application/json",
     )
     assert r.status_code == 200, r.get_data(as_text=True)
@@ -63,7 +64,7 @@ def auth_headers(token):
 def trader_token(client):
     r = client.post(
         "/api/login",
-        json={"username": "trader", "password": "trader"},
+        json={"username": "trader", "password": "i23321"},
         content_type="application/json",
     )
     assert r.status_code == 200, r.get_data(as_text=True)
@@ -82,7 +83,7 @@ def trader_headers(trader_token):
 def analyst_token(client):
     r = client.post(
         "/api/login",
-        json={"username": "analyst", "password": "a"},
+        json={"username": "analyst", "password": "i23321"},
         content_type="application/json",
     )
     assert r.status_code == 200, r.get_data(as_text=True)

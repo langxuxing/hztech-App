@@ -9,6 +9,7 @@ import 'accounts_list.dart';
 import 'settings_screen.dart';
 import 'tradingbot_control.dart';
 import 'user_management_screen.dart';
+import 'customer_account_setup_screen.dart';
 import '../widgets/water_background.dart';
 
 const _navBarTextColor = Color(0xFFD8D8D8); // RGB(216,216,216)
@@ -40,12 +41,14 @@ class _MainScreenState extends State<MainScreen> {
     if (_isCustomer) {
       return [
         (label: '账户收益', icon: Icons.account_balance_wallet),
+        (label: '账号配置', icon: Icons.vpn_key_outlined),
         (label: '应用设置', icon: Icons.settings),
       ];
     }
     if (_isAdmin) {
       return [
         (label: '账户管理', icon: Icons.manage_accounts),
+        (label: '策略启停', icon: Icons.smart_toy_outlined),
         (label: '账户收益', icon: Icons.account_balance_wallet),
         (label: '应用设置', icon: Icons.settings),
       ];
@@ -67,7 +70,8 @@ class _MainScreenState extends State<MainScreen> {
 
   int get _profitTabIndex {
     if (_isCustomer) return 0;
-    if (_isAdmin || _isStrategyAnalyst) return 1;
+    if (_isAdmin) return 2;
+    if (_isStrategyAnalyst) return 1;
     return 2;
   }
 
@@ -117,6 +121,7 @@ class _MainScreenState extends State<MainScreen> {
             sharedBots: _sharedBots,
             periodicRefreshActive: _index == 0,
           ),
+          const CustomerAccountSetupScreen(),
           SettingsScreen(
             onLogout: widget.onLogout,
             appUserRole: _role,
@@ -130,9 +135,10 @@ class _MainScreenState extends State<MainScreen> {
         sizing: StackFit.expand,
         children: [
           const AccountsList(),
+          const TradingBotControl(),
           AccountProfitScreen(
             sharedBots: _sharedBots,
-            periodicRefreshActive: _index == 1,
+            periodicRefreshActive: _index == 2,
           ),
           SettingsScreen(
             onLogout: widget.onLogout,

@@ -4,12 +4,13 @@ import '../../api/client.dart';
 import '../../api/models.dart';
 import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
+import '../../utils/number_display_format.dart';
 import '../../widgets/profit_percent_line_chart.dart';
 import '../../widgets/water_background.dart';
 import 'web_account_profit_screen.dart';
 
-/// Web 全局数据看板：汇总权益与盈亏，点击进入账户详情。
-/// 脚本启停见 [WebTradingBotControlScreen]（导航「策略启动」）。
+/// Web「账号总览」：与侧栏 [WebMainShell] 文案一致，汇总权益与盈亏，点击进入账号详情。
+/// 脚本启停见 [WebTradingBotControlScreen]（侧栏「策略启停」）。
 class WebDashboardScreen extends StatefulWidget {
   const WebDashboardScreen({super.key, this.sharedBots = const []});
   final List<UnifiedTradingBot> sharedBots;
@@ -139,20 +140,16 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              '全局概览',
+                              '账号总览',
                               style: Theme.of(context).textTheme.titleLarge
                                   ?.copyWith(
                                     color: AppFinanceStyle.valueColor,
-                                    // fontWeight（字体粗细）用于设置文本的字重。FontWeight.w900 表示极粗（Black）。
                                     fontWeight: FontWeight.w900,
                                   ),
                             ),
                             const SizedBox(height: 16),
-
-                            if (_accounts.isNotEmpty) ...[
-                              const SizedBox(height: 16),
+                            if (_accounts.isNotEmpty)
                               _SummaryStrip(accounts: _accounts),
-                            ],
                           ],
                         ),
                       ),
@@ -243,30 +240,30 @@ class _SummaryStrip extends StatelessWidget {
             _SummaryCell(
               label: '账户数',
               value: '${accounts.length}',
-              valueStyle: v(22),
-              narrow: narrow,
+              valueStyle: v(24),
+              trailingLabel: !narrow,
             ),
             _SummaryCell(
               label: '总权益',
-              value: eq.toStringAsFixed(0),
-              valueStyle: v(22),
-              narrow: narrow,
+              value: formatUiInteger(eq),
+              valueStyle: v(24),
+              trailingLabel: !narrow,
             ),
             _SummaryCell(
               label: '总盈亏',
-              value: profit.toStringAsFixed(0),
-              valueStyle: v(22).copyWith(
+              value: formatUiInteger(profit),
+              valueStyle: v(24).copyWith(
                 color: profit >= 0
                     ? AppFinanceStyle.profitGreenEnd
                     : Colors.redAccent,
               ),
-              narrow: narrow,
+              trailingLabel: !narrow,
             ),
             _SummaryCell(
               label: '收益率',
-              value: '${pct.toStringAsFixed(0)}%',
-              valueStyle: v(22),
-              narrow: narrow,
+              value: formatUiPercentLabel(pct),
+              valueStyle: v(24),
+              trailingLabel: !narrow,
             ),
           ];
           if (narrow) {
@@ -299,30 +296,39 @@ class _SummaryCell extends StatelessWidget {
     required this.label,
     required this.value,
     required this.valueStyle,
-    required this.narrow,
+
+    /// 宽屏：数值在上、标签在下，列内右对齐（标签在数值右下）。窄屏：整体左对齐。
+    required this.trailingLabel,
   });
 
   final String label;
   final String value;
   final TextStyle valueStyle;
-  final bool narrow;
+  final bool trailingLabel;
 
   @override
   Widget build(BuildContext context) {
+    final baseLabel = AppFinanceStyle.labelTextStyle(context);
+    final labelStyle = baseLabel.copyWith(
+      fontSize: (baseLabel.fontSize ?? 14) - 2,
+    );
+    final align = trailingLabel
+        ? CrossAxisAlignment.end
+        : CrossAxisAlignment.start;
+    final ta = trailingLabel ? TextAlign.end : TextAlign.start;
     return Column(
-      crossAxisAlignment: narrow
-          ? CrossAxisAlignment.start
-          : CrossAxisAlignment.center,
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: align,
       children: [
-        Text(label, style: AppFinanceStyle.labelTextStyle(context)),
-        const SizedBox(height: 4),
         Text(
           value,
           style: valueStyle,
-          textAlign: narrow ? TextAlign.start : TextAlign.center,
+          textAlign: ta,
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
+        const SizedBox(height: 4),
+        Text(label, style: labelStyle, textAlign: ta),
       ],
     );
   }
@@ -410,15 +416,15 @@ class _OverviewGlassCard extends StatelessWidget {
             children: [
               _OverviewStatCol(
                 label: '月初',
-                value: account.initialBalance.toStringAsFixed(0),
+                value: formatUiInteger(account.initialBalance),
               ),
               _OverviewStatCol(
-                label: '现金余额',
-                value: account.balanceUsdt.toStringAsFixed(0),
+                label: '当前',
+                value: formatUiInteger(account.balanceUsdt),
               ),
               _OverviewStatCol(
-                label: '盈利率',
-                value: '${account.profitPercent.toStringAsFixed(0)}%',
+                label: '增长',
+                value: formatUiPercentLabel(account.profitPercent),
               ),
             ],
           ),
@@ -448,23 +454,27 @@ class _OverviewStatCol extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final baseNumSize = Theme.of(context).textTheme.titleLarge?.fontSize ?? 20;
     final numStyle =
         (Theme.of(context).textTheme.titleSmall ?? const TextStyle()).copyWith(
           color: _OverviewGlassCard._numberColor,
-          fontWeight: FontWeight.bold,
-          fontSize: (Theme.of(context).textTheme.titleLarge?.fontSize ?? 20),
+          fontWeight: FontWeight.w600,
+          fontSize: baseNumSize - 2,
         );
-    return Column(
+    final baseLabelSize = Theme.of(context).textTheme.bodySmall?.fontSize ?? 12;
+    final labelStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
+      color: _OverviewGlassCard._labelColor,
+      fontSize: baseLabelSize - 2,
+    );
+    return Row(
       mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.baseline,
+      textBaseline: TextBaseline.alphabetic,
       children: [
-        Text(
-          label,
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: _OverviewGlassCard._labelColor,
-          ),
-        ),
-        const SizedBox(height: 3),
         Text(value, style: numStyle),
+        const SizedBox(width: 6),
+        Text(label, style: labelStyle),
       ],
     );
   }

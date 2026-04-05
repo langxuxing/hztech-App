@@ -79,6 +79,14 @@ class ApiClient {
     return h;
   }
 
+  /// 无需 Bearer（健康检查）
+  Map<String, String> get _headersPublic {
+    return <String, String>{
+      'Accept': 'application/json',
+      'Connection': 'close',
+    };
+  }
+
   /// POST /api/login，返回 success、token、message（401 时 success=false）
   Future<LoginResponse> login(String username, String password) async {
     final uri = Uri.parse('${_normalizedBase}api/login');
@@ -186,7 +194,7 @@ class ApiClient {
     }
   }
 
-  /// POST /api/strategy-analyst/auto-net-test（仅 strategy_analyst）
+  /// POST /api/strategy-analyst/auto-net-test（交易员/管理员/策略分析师）
   Future<String> postStrategyAnalystAutoNetTest({String? botId}) async {
     final uri = Uri.parse('${_normalizedBase}api/strategy-analyst/auto-net-test');
     final body = <String, dynamic>{};
@@ -286,6 +294,21 @@ class ApiClient {
     return BotProfitHistoryResponse.fromJson(map);
   }
 
+  /// 历史平仓按 UTC 自然日汇总（净盈亏、平仓笔数），供月度日历展示。
+  Future<DailyRealizedPnlResponse> getDailyRealizedPnl(
+    String botId,
+    int year,
+    int month,
+  ) async {
+    final uri = Uri.parse(
+      '${_normalizedBase}api/tradingbots/$botId/daily-realized-pnl'
+      '?year=$year&month=$month',
+    );
+    final resp = await _getWithRetry(uri, _headers);
+    final map = jsonDecode(resp.body) as Map<String, dynamic>;
+    return DailyRealizedPnlResponse.fromJson(map);
+  }
+
   Future<OkxPositionsResponse> getOkxPositions() async {
     final uri = Uri.parse('${_normalizedBase}api/okx/positions');
     final resp = await _getWithRetry(uri, _headers);
@@ -334,7 +357,7 @@ class ApiClient {
     return TradingbotEventsResponse.fromJson(map);
   }
 
-  /// OKX 日线波动 |高−低| + 账户现金日增量（UTC）。失败时 success=false，message 为原因。
+  /// 日线波动来自全站缓存 market_daily_bars，与账户现金日增量（UTC）合并。失败时 success=false。
   Future<StrategyDailyEfficiencyResponse> getStrategyDailyEfficiency(
     String botId, {
     String instId = 'PEPE-USDT-SWAP',
@@ -347,5 +370,148 @@ class ApiClient {
     final resp = await _getWithRetry(uri, _headers);
     final map = jsonDecode(resp.body) as Map<String, dynamic>;
     return StrategyDailyEfficiencyResponse.fromJson(map);
+  }
+
+  /// GET /api/health（无需登录）
+  Future<HealthResponse> getHealth() async {
+    final uri = Uri.parse('${_normalizedBase}api/health');
+    final resp = await http.get(uri, headers: _headersPublic).timeout(_timeout);
+    final map = jsonDecode(resp.body) as Map<String, dynamic>;
+    return HealthResponse.fromJson(map);
+  }
+
+  /// GET /api/status
+  Future<ServerStatusResponse> getServerStatus() async {
+    final uri = Uri.parse('${_normalizedBase}api/status');
+    final resp = await _getWithRetry(uri, _headers);
+    final map = jsonDecode(resp.body) as Map<String, dynamic>;
+    return ServerStatusResponse.fromJson(map);
+  }
+
+  /// GET /api/tradingbots/{id}/position-history
+  Future<PositionHistoryResponse> getPositionHistory(
+    String botId, {
+    int limit = 100,
+    int? beforeUtime,
+    int? sinceUtime,
+  }) async {
+    final params = <String, String>{'limit': '$limit'};
+    if (beforeUtime != null) {
+      params['before_utime'] = '$beforeUtime';
+    }
+    if (sinceUtime != null) {
+      params['since_utime'] = '$sinceUtime';
+    }
+    final uri = Uri.parse(
+      '${_normalizedBase}api/tradingbots/${Uri.encodeComponent(botId)}/position-history',
+    ).replace(queryParameters: params);
+    final resp = await _getWithRetry(uri, _headers);
+    final map = jsonDecode(resp.body) as Map<String, dynamic>;
+    return PositionHistoryResponse.fromJson(map);
+  }
+
+  /// POST .../position-history/sync（仅管理员）
+  Future<SimpleMessageResponse> syncPositionHistory(String botId) async {
+    final uri = Uri.parse(
+      '${_normalizedBase}api/tradingbots/${Uri.encodeComponent(botId)}/position-history/sync',
+    );
+    final resp = await _postWithRetry(uri, _headers);
+    final map = jsonDecode(resp.body) as Map<String, dynamic>;
+    return SimpleMessageResponse.fromJson(map);
+  }
+
+  Future<AdminAccountListResponse> adminListAccounts() async {
+    final uri = Uri.parse('${_normalizedBase}api/admin/accounts');
+    final resp = await _getWithRetry(uri, _headers);
+    final map = jsonDecode(resp.body) as Map<String, dynamic>;
+    return AdminAccountListResponse.fromJson(map);
+  }
+
+  Future<AdminAccountOneResponse> adminGetAccount(String accountId) async {
+    final uri = Uri.parse(
+      '${_normalizedBase}api/admin/accounts/${Uri.encodeComponent(accountId)}',
+    );
+    final resp = await _getWithRetry(uri, _headers);
+    final map = jsonDecode(resp.body) as Map<String, dynamic>;
+    return AdminAccountOneResponse.fromJson(map);
+  }
+
+  Future<AdminAccountOneResponse> adminCreateAccount(
+    AccountConfigRow row,
+  ) async {
+    final uri = Uri.parse('${_normalizedBase}api/admin/accounts');
+    final resp = await _postWithRetry(
+      uri,
+      _headers,
+      body: jsonEncode(row.toJsonBody()),
+    );
+    final map = jsonDecode(resp.body) as Map<String, dynamic>;
+    return AdminAccountOneResponse.fromJson(map);
+  }
+
+  Future<AdminAccountOneResponse> adminUpdateAccount(
+    String accountId,
+    Map<String, dynamic> patch,
+  ) async {
+    final uri = Uri.parse(
+      '${_normalizedBase}api/admin/accounts/${Uri.encodeComponent(accountId)}',
+    );
+    final resp = await http
+        .put(uri, headers: _headers, body: jsonEncode(patch))
+        .timeout(_timeout);
+    final map = jsonDecode(resp.body) as Map<String, dynamic>;
+    return AdminAccountOneResponse.fromJson(map);
+  }
+
+  Future<SimpleMessageResponse> adminDeleteAccount(String accountId) async {
+    final uri = Uri.parse(
+      '${_normalizedBase}api/admin/accounts/${Uri.encodeComponent(accountId)}',
+    );
+    final resp = await http.delete(uri, headers: _headers).timeout(_timeout);
+    final map = jsonDecode(resp.body) as Map<String, dynamic>;
+    return SimpleMessageResponse.fromJson(map);
+  }
+
+  /// POST .../test-connection
+  Future<Map<String, dynamic>> adminTestAccountConnection(
+    String accountId,
+  ) async {
+    final uri = Uri.parse(
+      '${_normalizedBase}api/admin/accounts/${Uri.encodeComponent(accountId)}/test-connection',
+    );
+    final resp = await _postWithRetry(uri, _headers);
+    return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
+  /// GET /api/me/customer-accounts（仅客户）
+  Future<Map<String, dynamic>> getCustomerLinkedAccounts() async {
+    final uri = Uri.parse('${_normalizedBase}api/me/customer-accounts');
+    final resp = await _getWithRetry(uri, _headers);
+    return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
+  /// PUT /api/me/customer-accounts/{id}/okx-json
+  Future<Map<String, dynamic>> putCustomerOkxJson(
+    String accountId,
+    Map<String, dynamic> body,
+  ) async {
+    final uri = Uri.parse(
+      '${_normalizedBase}api/me/customer-accounts/${Uri.encodeComponent(accountId)}/okx-json',
+    );
+    final resp = await http
+        .put(uri, headers: _headers, body: jsonEncode(body))
+        .timeout(_timeout);
+    return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
+  /// POST .../test-connection（客户）
+  Future<Map<String, dynamic>> customerTestAccountConnection(
+    String accountId,
+  ) async {
+    final uri = Uri.parse(
+      '${_normalizedBase}api/me/customer-accounts/${Uri.encodeComponent(accountId)}/test-connection',
+    );
+    final resp = await _postWithRetry(uri, _headers);
+    return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 }

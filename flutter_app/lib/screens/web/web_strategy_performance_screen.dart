@@ -7,10 +7,11 @@ import '../../api/client.dart';
 import '../../api/models.dart';
 import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
+import '../../utils/number_display_format.dart';
 import '../../widgets/strategy_efficiency_lightweight_chart.dart';
 import '../../widgets/water_background.dart';
 
-/// Web：策略效能——每日波动率、现金收益率%（较 UTC 月初）、策略能效，全账户同页对比。
+/// Web：策略效能——每日波动率、现金收益率%（较 UTC 月初）、策略能效，全账户同页对比（日线波动全站共用缓存）。
 class WebStrategyPerformanceScreen extends StatefulWidget {
   const WebStrategyPerformanceScreen({super.key, this.sharedBots = const []});
 
@@ -21,11 +22,11 @@ class WebStrategyPerformanceScreen extends StatefulWidget {
       _WebStrategyPerformanceScreenState();
 }
 
-/// 效能三等：相对排序，一等绿、二等黄、三等灰。
-enum _EfficiencyTier {
-  first,
-  second,
-  third,
+/// 策略能效分档（按账户均能效绝对阈值）：小于 0.25 灰、0.25–0.5 绿、≥0.5 深绿。
+enum _EffBand {
+  gray,
+  green,
+  darkGreen,
 }
 
 class _BotEfficiencyBundle {
@@ -38,7 +39,7 @@ class _BotEfficiencyBundle {
   final UnifiedTradingBot bot;
   final StrategyDailyEfficiencyResponse? response;
   final String? fetchError;
-  _EfficiencyTier tier = _EfficiencyTier.third;
+  _EffBand band = _EffBand.gray;
   double scoreForChart = 0;
 
   bool get fetchOk => fetchError == null;
@@ -59,6 +60,13 @@ class _BotEfficiencyBundle {
       s += r;
     }
     return s / ratios.length;
+  }
+
+  static _EffBand bandForScore(double? v) {
+    if (v == null || !v.isFinite) return _EffBand.gray;
+    if (v < 0.25) return _EffBand.gray;
+    if (v < 0.5) return _EffBand.green;
+    return _EffBand.darkGreen;
   }
 
   static _BotEfficiencyBundle fromLoad(
@@ -88,9 +96,9 @@ class _WebStrategyPerformanceScreenState
   bool _loading = true;
   String? _loadError;
 
-  static const Color _tierGreen = Color(0xFF7EC850);
-  static const Color _tierYellow = Color(0xFFEAB308);
-  static const Color _tierGray = Color(0xFF6B7280);
+  static const Color _bandGray = Color(0xFF6B7280);
+  static const Color _bandGreen = Color(0xFF4ADE80);
+  static const Color _bandDarkGreen = Color(0xFF166534);
 
   Future<void> _loadBots() async {
     if (widget.sharedBots.isNotEmpty) {
@@ -132,7 +140,7 @@ class _WebStrategyPerformanceScreenState
         }),
       );
       if (!mounted) return;
-      _applyTiers(loaded);
+      _applyEffBands(loaded);
       setState(() {
         _bundles = loaded;
         _loading = false;
@@ -147,54 +155,41 @@ class _WebStrategyPerformanceScreenState
     }
   }
 
-  /// 按平均能效比值降序，三等分：前 1/3 绿、中 1/3 黄、后 1/3 灰。
-  void _applyTiers(List<_BotEfficiencyBundle> list) {
-    final scored = list.where((b) => b.hasEfficiencyData).toList()
-      ..sort((a, b) => b.scoreForChart.compareTo(a.scoreForChart));
-    final n = scored.length;
-    for (var i = 0; i < n; i++) {
-      scored[i].tier = _tierForRank(i, n);
-    }
+  void _applyEffBands(List<_BotEfficiencyBundle> list) {
     for (final b in list) {
-      if (!b.hasEfficiencyData) {
-        b.tier = _EfficiencyTier.third;
-      }
+      b.band = _BotEfficiencyBundle.bandForScore(
+        b.hasEfficiencyData ? b.scoreForChart : null,
+      );
     }
   }
 
-  static _EfficiencyTier _tierForRank(int rank, int n) {
-    if (n <= 0) return _EfficiencyTier.third;
-    if (n == 1) return _EfficiencyTier.first;
-    if (n == 2) {
-      return rank == 0 ? _EfficiencyTier.first : _EfficiencyTier.second;
-    }
-    final firstEnd = (n / 3).ceil();
-    final secondEnd = (2 * n / 3).ceil();
-    if (rank < firstEnd) return _EfficiencyTier.first;
-    if (rank < secondEnd) return _EfficiencyTier.second;
-    return _EfficiencyTier.third;
-  }
-
-  static Color _tierColor(_EfficiencyTier t) {
+  static Color _bandColor(_EffBand t) {
     switch (t) {
-      case _EfficiencyTier.first:
-        return _tierGreen;
-      case _EfficiencyTier.second:
-        return _tierYellow;
-      case _EfficiencyTier.third:
-        return _tierGray;
+      case _EffBand.gray:
+        return _bandGray;
+      case _EffBand.green:
+        return _bandGreen;
+      case _EffBand.darkGreen:
+        return _bandDarkGreen;
     }
   }
 
-  static String _tierLabel(_EfficiencyTier t) {
+  static String _bandLabel(_EffBand t) {
     switch (t) {
-      case _EfficiencyTier.first:
-        return '一等';
-      case _EfficiencyTier.second:
-        return '二等';
-      case _EfficiencyTier.third:
-        return '三等';
+      case _EffBand.gray:
+        return '偏低';
+      case _EffBand.green:
+        return '中等';
+      case _EffBand.darkGreen:
+        return '优良';
     }
+  }
+
+  static Color _efficiencyPointColor(double? v) {
+    if (v == null || !v.isFinite) return _bandGray;
+    if (v < 0.25) return _bandGray;
+    if (v < 0.5) return _bandGreen;
+    return _bandDarkGreen;
   }
 
   @override
@@ -209,9 +204,16 @@ class _WebStrategyPerformanceScreenState
     await _loadAllEfficiency();
   }
 
-  String _fmtOpt(double? v, {int digits = 2}) {
+  /// 金额类：表内展示为整数。
+  static String _fmtIntAmount(double? v) {
     if (v == null || !v.isFinite) return '—';
-    return v.toStringAsFixed(digits);
+    return v.round().toString();
+  }
+
+  /// 百分数：一位小数。
+  static String _fmtPctOne(double? v) {
+    if (v == null || !v.isFinite) return '—';
+    return v.toStringAsFixed(1);
   }
 
   /// 波动 |高−低| 数值细，表内用 ×1e9 取整展示。
@@ -220,21 +222,12 @@ class _WebStrategyPerformanceScreenState
     return (v * 1e9).round().toString();
   }
 
-  /// 能效比可能很小，表内用科学计数法更易读。
-  static String _fmtEfficiencyCell(double? v) {
-    if (v == null || !v.isFinite) return '—';
-    final a = v.abs();
-    if (a == 0) return '0';
-    if (a >= 1e-2) return v.toStringAsFixed(6);
-    if (a >= 1e-6) return v.toStringAsFixed(8);
-    return v.toStringAsExponential(2);
-  }
+  /// 策略能效：界面与其它数值一致，四舍五入为整数。
+  static String _fmtEfficiencyCell(double? v) => formatUiIntegerOpt(v);
 
   static String _fmtAxisEfficiency(double v) {
     if (!v.isFinite) return '';
-    final a = v.abs();
-    if (a >= 0.01 || a == 0) return v.toStringAsFixed(3);
-    return v.toStringAsExponential(1);
+    return formatUiInteger(v);
   }
 
   static Widget _chartLegendRow(
@@ -273,19 +266,19 @@ class _WebStrategyPerformanceScreenState
     );
   }
 
-  Widget _buildTierLegend(BuildContext context) {
+  Widget _buildBandLegend(BuildContext context) {
     return Wrap(
       spacing: 20,
       runSpacing: 8,
       children: [
-        _tierLegendChip(context, _tierGreen, '一等（优）'),
-        _tierLegendChip(context, _tierYellow, '二等（良）'),
-        _tierLegendChip(context, _tierGray, '三等（待提升）'),
+        _bandLegendChip(context, _bandGray, '偏低（能效<0.25）'),
+        _bandLegendChip(context, _bandGreen, '中等（0.25–0.5）'),
+        _bandLegendChip(context, _bandDarkGreen, '优良（≥0.5）'),
       ],
     );
   }
 
-  static Widget _tierLegendChip(
+  static Widget _bandLegendChip(
     BuildContext context,
     Color color,
     String text,
@@ -624,7 +617,7 @@ class _WebStrategyPerformanceScreenState
               (e) => Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
                 child: Text(
-                  _fmtOpt(e.trPct),
+                  _fmtPctOne(e.trPct),
                   style: valStyle,
                   textAlign: TextAlign.right,
                 ),
@@ -640,7 +633,7 @@ class _WebStrategyPerformanceScreenState
               (e) => Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
                 child: Text(
-                  _fmtOpt(e.cashDeltaUsdt),
+                  _fmtIntAmount(e.cashDeltaUsdt),
                   style: valStyle.copyWith(
                     color: (e.cashDeltaUsdt ?? 0) > 0
                         ? AppFinanceStyle.profitGreenEnd
@@ -661,7 +654,7 @@ class _WebStrategyPerformanceScreenState
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
                 child: Text(
                   e.monthStartCash != null
-                      ? _fmtOpt(e.monthStartCash)
+                      ? _fmtIntAmount(e.monthStartCash)
                       : '—',
                   style: valStyle,
                   textAlign: TextAlign.right,
@@ -678,7 +671,7 @@ class _WebStrategyPerformanceScreenState
               (e) => Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
                 child: Text(
-                  _fmtOpt(e.cashDeltaPct, digits: 1),
+                  _fmtPctOne(e.cashDeltaPct),
                   style: valStyle,
                   textAlign: TextAlign.right,
                 ),
@@ -695,7 +688,9 @@ class _WebStrategyPerformanceScreenState
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
                 child: Text(
                   _fmtEfficiencyCell(e.efficiencyRatio),
-                  style: valStyle,
+                  style: valStyle.copyWith(
+                    color: _efficiencyPointColor(e.efficiencyRatio),
+                  ),
                   textAlign: TextAlign.right,
                 ),
               ),
@@ -720,7 +715,7 @@ class _WebStrategyPerformanceScreenState
                   width: 10,
                   height: 10,
                   decoration: BoxDecoration(
-                    color: _tierColor(bundle.tier),
+                    color: _bandColor(bundle.band),
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
@@ -758,7 +753,7 @@ class _WebStrategyPerformanceScreenState
                   width: 10,
                   height: 10,
                   decoration: BoxDecoration(
-                    color: _tierColor(bundle.tier),
+                    color: _bandColor(bundle.band),
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
@@ -773,9 +768,9 @@ class _WebStrategyPerformanceScreenState
                   ),
                 ),
                 Text(
-                  _tierLabel(bundle.tier),
+                  _bandLabel(bundle.band),
                   style: TextStyle(
-                    color: _tierColor(bundle.tier),
+                    color: _bandColor(bundle.band),
                     fontWeight: FontWeight.w600,
                     fontSize: 13,
                   ),
@@ -809,7 +804,7 @@ class _WebStrategyPerformanceScreenState
                 height: 10,
                 margin: const EdgeInsets.only(top: 4),
                 decoration: BoxDecoration(
-                  color: _tierColor(bundle.tier),
+                  color: _bandColor(bundle.band),
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
@@ -824,9 +819,9 @@ class _WebStrategyPerformanceScreenState
                 ),
               ),
               Text(
-                '${_tierLabel(bundle.tier)} · 均比 ${_fmtEfficiencyCell(bundle.hasEfficiencyData ? bundle.scoreForChart : null)}',
+                '${_bandLabel(bundle.band)} · 均比 ${_fmtEfficiencyCell(bundle.hasEfficiencyData ? bundle.scoreForChart : null)}',
                 style: TextStyle(
-                  color: _tierColor(bundle.tier),
+                  color: _bandColor(bundle.band),
                   fontWeight: FontWeight.w600,
                   fontSize: 13,
                 ),
@@ -837,7 +832,7 @@ class _WebStrategyPerformanceScreenState
           Text(
             '${eff.instId}：每日波动率% = |最高−最低|÷收盘×100；'
             '现金收益率% = 当日现金增量 USDT ÷ 当 UTC 自然月月初资金×100（无月初快照时用当日日初 sod）；'
-            '策略能效 = 当日现金增量 USDT ÷ 价格波幅 ×1e-7。'
+            '策略能效 = 当日现金增量 USDT ÷ (价格波幅|高−低|×1e9)；日线波动全站共用 DB 缓存。'
             '$cashNote',
             style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 12),
           ),
@@ -884,14 +879,8 @@ class _WebStrategyPerformanceScreenState
                               ),
                               _chartLegendRow(
                                 context,
-                                const Color.fromRGBO(234, 179, 8, 0.95),
-                                '现金收益率%（线，阈值同柱）',
-                                isLine: true,
-                              ),
-                              _chartLegendRow(
-                                context,
-                                const Color(0xFFFBBF24),
-                                '策略能效',
+                                const Color(0xFF6B7280),
+                                '策略能效折线（灰/绿/深绿：<0.25 / 0.25–0.5 / ≥0.5）',
                                 isLine: true,
                               ),
                             ],
@@ -909,7 +898,7 @@ class _WebStrategyPerformanceScreenState
                         padding: const EdgeInsets.only(top: 12),
                         children: [
                           Text(
-                            '日明细（日期为列；现金收益率% 一位小数；「UTC 月初基准」有值表示收益率按月初资金计算）',
+                            '日明细（金额取整；百分数一位小数；「UTC 月初基准」有值表示收益率按月初资金计算）',
                             style: Theme.of(context).textTheme.titleSmall?.copyWith(
                                   color: AppFinanceStyle.valueColor,
                                   fontWeight: FontWeight.w600,
@@ -932,19 +921,19 @@ class _WebStrategyPerformanceScreenState
 
   List<Widget> _sortedAccountSections(BuildContext context) {
     final copy = List<_BotEfficiencyBundle>.from(_bundles);
-    int tierOrder(_EfficiencyTier t) {
+    int bandOrder(_EffBand t) {
       switch (t) {
-        case _EfficiencyTier.first:
+        case _EffBand.darkGreen:
           return 0;
-        case _EfficiencyTier.second:
+        case _EffBand.green:
           return 1;
-        case _EfficiencyTier.third:
+        case _EffBand.gray:
           return 2;
       }
     }
 
     copy.sort((a, b) {
-      final c = tierOrder(a.tier).compareTo(tierOrder(b.tier));
+      final c = bandOrder(a.band).compareTo(bandOrder(b.band));
       if (c != 0) return c;
       return b.scoreForChart.compareTo(a.scoreForChart);
     });
@@ -1025,13 +1014,13 @@ class _WebStrategyPerformanceScreenState
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              '按时间对比各账户「策略能效」（当日现金增量 USDT ÷ 当日价格波幅 × 1e-7）。'
-                              '折线持续走弱或长期垫底可优先人工干预。账户卡片上的绿/黄/灰仍表示相对排名。',
+                              '按时间对比各账户「策略能效」（当日现金增量 USDT ÷ (价格波幅×1e9)）。'
+                              '折线持续走弱可优先人工干预。卡片颜色按能效绝对阈值：灰/绿/深绿。',
                               style: AppFinanceStyle.labelTextStyle(context)
                                   .copyWith(fontSize: 12),
                             ),
                             const SizedBox(height: 12),
-                            _buildTierLegend(context),
+                            _buildBandLegend(context),
                             const SizedBox(height: 16),
                             _buildComparisonChart(context),
                           ],

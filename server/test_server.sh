@@ -56,9 +56,9 @@ echo -n "GET /api/strategy/status ... "
 code=$(curl -s -o /dev/null -w "%{http_code}" $CURL_EXTRA --connect-timeout 5 --max-time "$CURL_TIMEOUT" "$HOST_URL_API/api/strategy/status" || echo "000")
 [ "$code" = "200" ] && echo "OK ($code)" || { echo "FAIL ($code)"; exit 1; }
 
-# 3) 登录（需已知用户，admin/123 为常见测试账号，若未配置则跳过断言）
+# 3) 登录（需已知用户，缺省 admin/i23321，若未配置则跳过断言）
 echo -n "POST /api/login ... "
-resp=$(curl -s $CURL_EXTRA --connect-timeout 5 --max-time "$CURL_TIMEOUT" -X POST "$HOST_URL_API/api/login" -H "Content-Type: application/json" -d '{"username":"admin","password":"123"}' || echo '{}')
+resp=$(curl -s $CURL_EXTRA --connect-timeout 5 --max-time "$CURL_TIMEOUT" -X POST "$HOST_URL_API/api/login" -H "Content-Type: application/json" -d '{"username":"admin","password":"i23321"}' || echo '{}')
 if echo "$resp" | grep -q '"success":true'; then
   echo "OK (login success)"
   TOKEN=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('token',''))")

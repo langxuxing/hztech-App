@@ -86,6 +86,23 @@ def resolve_okx_config_path(account_id: str) -> Path | None:
     return None
 
 
+def resolve_okx_key_write_path(account_id: str) -> Path | None:
+    """客户上传密钥时写入路径（与 Account_List 中 account_key_file 一致；文件可尚不存在）。"""
+    want = (account_id or "").strip()
+    if not want:
+        return None
+    for row in load_account_list():
+        if str(row.get("account_id") or "").strip() != want:
+            continue
+        if (row.get("exchange_account") or "").strip().upper() != "OKX":
+            return None
+        key_name = (row.get("account_key_file") or "").strip()
+        if not key_name:
+            return None
+        return resolve_key_file_path(key_name)
+    return None
+
+
 def _initial_capital(row: dict) -> float:
     v = row.get("Initial_capital")
     if v is None:
@@ -123,6 +140,17 @@ def sync_account_meta_from_json(db_module: Any) -> None:
         if not aid:
             continue
         db_module.account_meta_upsert(aid, _initial_capital(row))
+
+
+def sync_account_meta_after_account_list_write(db_module: Any) -> None:
+    """管理员写入 Account_List.json 后调用：按 JSON 同步各账户 initial_capital，并删除已从列表移除的 meta 行。"""
+    sync_account_meta_from_json(db_module)
+    valid_ids = {
+        str(r.get("account_id") or "").strip()
+        for r in load_account_list()
+        if str(r.get("account_id") or "").strip()
+    }
+    db_module.account_meta_prune_except(valid_ids)
 
 
 def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None = None) -> None:
@@ -261,6 +289,36 @@ def refresh_all_positions_history(
             len(hist),
             n,
         )
+
+
+def refresh_positions_history_one(
+    db_module: Any, account_id: str, logger: logging.Logger | None = None
+) -> tuple[bool, str]:
+    """拉取单个 OKX 账户的 positions-history 并写入 account_positions_history。"""
+    log = logger or logging.getLogger(__name__)
+    import exchange.okx as okx_mod
+
+    aid = str(account_id or "").strip()
+    if not aid:
+        return False, "缺少 account_id"
+    path = resolve_okx_config_path(aid)
+    if not path:
+        return False, "未找到密钥配置"
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    hist, err = okx_mod.okx_fetch_positions_history(config_path=path)
+    if err:
+        db_module.log_insert(
+            "WARN",
+            "positions_history_fetch_failed",
+            source="account_mgr",
+            extra={"account_id": aid, "error": err},
+        )
+        return False, err
+    if not hist:
+        return True, "无新历史仓位数据"
+    n = db_module.account_positions_history_insert_batch(aid, hist, ts)
+    log.info("positions_history_one_ok: %s api_rows=%d inserted=%d", aid, len(hist), n)
+    return True, f"已写入 {n} 条新记录"
 
 
 # --- 实时查询（不入库） ---

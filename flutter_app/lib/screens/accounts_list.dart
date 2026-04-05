@@ -4,6 +4,7 @@ import '../api/client.dart';
 import '../api/models.dart';
 import '../secure/prefs.dart';
 import '../theme/finance_style.dart';
+import '../utils/number_display_format.dart';
 import '../widgets/water_background.dart';
 import 'account_profit_screen.dart';
 
@@ -214,7 +215,7 @@ class _AccountsListState extends State<AccountsList> {
                                               CrossAxisAlignment.end,
                                           children: [
                                             Text(
-                                              '权益 ${a.equityUsdt.toStringAsFixed(2)}',
+                                              '权益 ${formatUiInteger(a.equityUsdt)}',
                                               style: Theme.of(context)
                                                   .textTheme
                                                   .bodyMedium
@@ -225,7 +226,9 @@ class _AccountsListState extends State<AccountsList> {
                                                   ),
                                             ),
                                             Text(
-                                              '${a.profitPercent.toStringAsFixed(1)}%',
+                                              formatUiPercentLabel(
+                                                a.profitPercent,
+                                              ),
                                               style: AppFinanceStyle.labelTextStyle(
                                                 context,
                                               ),

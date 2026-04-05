@@ -14,7 +14,9 @@ class ProfitPercentLineChart extends StatelessWidget {
   Widget build(BuildContext context) {
     if (snapshots.isEmpty) return const SizedBox.shrink();
     final spots = <FlSpot>[];
-    double minY = 0, maxY = 0;
+    final firstY = snapshots.first.profitPercent;
+    var minY = firstY;
+    var maxY = firstY;
     for (var i = 0; i < snapshots.length; i++) {
       final p = snapshots[i].profitPercent;
       spots.add(FlSpot(i.toDouble(), p));
@@ -37,12 +39,29 @@ class ProfitPercentLineChart extends StatelessWidget {
         gridData: const FlGridData(show: false),
         titlesData: const FlTitlesData(show: false),
         borderData: FlBorderData(show: false),
+        lineTouchData: LineTouchData(
+          enabled: true,
+          touchTooltipData: LineTouchTooltipData(
+            getTooltipItems: (touchedSpots) {
+              return touchedSpots.map((spot) {
+                return LineTooltipItem(
+                  '${spot.y.toStringAsFixed(1)}%',
+                  TextStyle(
+                    color: lineColor,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                  ),
+                );
+              }).toList();
+            },
+          ),
+        ),
         lineBarsData: [
           LineChartBarData(
             spots: spots,
             isCurved: true,
             color: lineColor,
-            barWidth: 3,
+            barWidth: 1.5,
             isStrokeCapRound: true,
             dotData: const FlDotData(show: false),
             belowBarData: BarAreaData(

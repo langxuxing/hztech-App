@@ -174,6 +174,18 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_aph_account ON account_positions_history(account_id);
             CREATE INDEX IF NOT EXISTS idx_aph_utime ON account_positions_history(u_time_ms);
+            CREATE TABLE IF NOT EXISTS market_daily_bars (
+                inst_id TEXT NOT NULL,
+                day TEXT NOT NULL,
+                open REAL NOT NULL,
+                high REAL NOT NULL,
+                low REAL NOT NULL,
+                close REAL NOT NULL,
+                tr REAL NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (inst_id, day)
+            );
+            CREATE INDEX IF NOT EXISTS idx_market_daily_bars_inst_day ON market_daily_bars(inst_id, day);
         """)
         conn.commit()
         # 若用户表为空且存在 users.json，则导入
@@ -806,6 +818,19 @@ def account_meta_get(account_id: str) -> dict | None:
         conn.close()
 
 
+def account_meta_prune_except(keep_account_ids: set[str]) -> None:
+    """删除 account_meta 中不在 keep_account_ids 内的行（与 Account_List.json 账户集合对齐）。"""
+    conn = get_conn()
+    try:
+        cur = conn.execute("SELECT account_id FROM account_meta")
+        for (aid,) in cur.fetchall():
+            if aid not in keep_account_ids:
+                conn.execute("DELETE FROM account_meta WHERE account_id = ?", (aid,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def account_snapshot_insert(
     account_id: str,
     snapshot_at: str,
@@ -1032,21 +1057,41 @@ def account_positions_history_insert_batch(
 
 
 def account_positions_history_query_by_account(
-    account_id: str, limit: int = 500
+    account_id: str,
+    limit: int = 500,
+    *,
+    before_utime_ms: int | None = None,
+    since_utime_ms: int | None = None,
 ) -> list[dict]:
-    """按 u_time_ms 倒序返回历史仓位（解析常用字段 + raw_json）。"""
+    """按 u_time_ms 倒序返回历史仓位（解析常用字段 + raw_json）。
+
+    before_utime_ms: 仅返回 u_time 严格小于该值的记录（分页游标）。
+    since_utime_ms: 仅返回 u_time 大于等于该值的记录（可选时间下界）。
+    """
+    aid = account_id.strip()
+    lim = max(1, int(limit))
+    clauses = ["account_id = ?"]
+    params: list = [aid]
+    if before_utime_ms is not None:
+        clauses.append("CAST(u_time_ms AS INTEGER) < ?")
+        params.append(int(before_utime_ms))
+    if since_utime_ms is not None:
+        clauses.append("CAST(u_time_ms AS INTEGER) >= ?")
+        params.append(int(since_utime_ms))
+    where_sql = " AND ".join(clauses)
+    params.append(lim)
     conn = get_conn()
     try:
         cur = conn.execute(
-            """SELECT id, account_id, okx_pos_id, inst_id, inst_type, pos_side, mgn_mode,
+            f"""SELECT id, account_id, okx_pos_id, inst_id, inst_type, pos_side, mgn_mode,
                       open_avg_px, close_avg_px, open_max_pos, close_total_pos,
                       pnl, realized_pnl, fee, funding_fee, close_type,
                       c_time_ms, u_time_ms, raw_json, synced_at
                FROM account_positions_history
-               WHERE account_id = ?
+               WHERE {where_sql}
                ORDER BY CAST(u_time_ms AS INTEGER) DESC
                LIMIT ?""",
-            (account_id.strip(), max(1, int(limit))),
+            tuple(params),
         )
         out: list[dict] = []
         for r in cur.fetchall():
@@ -1055,6 +1100,16 @@ def account_positions_history_query_by_account(
                 parsed = json.loads(raw) if raw else {}
             except (TypeError, json.JSONDecodeError):
                 parsed = {}
+            if not isinstance(parsed, dict):
+                parsed = {}
+            lev = parsed.get("lever")
+            lev_s = str(lev).strip() if lev is not None and str(lev).strip() else None
+            pnl_ratio = parsed.get("pnlRatio")
+            pr_s = (
+                str(pnl_ratio).strip()
+                if pnl_ratio is not None and str(pnl_ratio).strip()
+                else None
+            )
             out.append(
                 {
                     "id": r[0],
@@ -1075,6 +1130,8 @@ def account_positions_history_query_by_account(
                     "close_type": r[15],
                     "c_time_ms": r[16],
                     "u_time_ms": r[17],
+                    "lever": lev_s,
+                    "pnl_ratio": pr_s,
                     "raw": parsed,
                     "synced_at": r[19],
                 }
@@ -1132,6 +1189,84 @@ def account_positions_daily_realized(
             }
             for r in cur.fetchall()
             if r[0]
+        ]
+    finally:
+        conn.close()
+
+
+# ---------- 策略能效：全站共用 OKX 日线缓存（market_daily_bars） ----------
+
+
+def market_daily_bars_has_day(inst_id: str, day: str) -> bool:
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "SELECT 1 FROM market_daily_bars WHERE inst_id = ? AND day = ? LIMIT 1",
+            ((inst_id or "").strip(), (day or "").strip()),
+        )
+        return cur.fetchone() is not None
+    finally:
+        conn.close()
+
+
+def market_daily_bars_upsert(
+    inst_id: str,
+    day: str,
+    open_v: float,
+    high_v: float,
+    low_v: float,
+    close_v: float,
+    tr_v: float,
+) -> None:
+    conn = get_conn()
+    try:
+        conn.execute(
+            """INSERT INTO market_daily_bars
+               (inst_id, day, open, high, low, close, tr, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+               ON CONFLICT(inst_id, day) DO UPDATE SET
+                 open = excluded.open,
+                 high = excluded.high,
+                 low = excluded.low,
+                 close = excluded.close,
+                 tr = excluded.tr,
+                 updated_at = datetime('now')""",
+            (
+                (inst_id or "").strip(),
+                (day or "").strip(),
+                float(open_v),
+                float(high_v),
+                float(low_v),
+                float(close_v),
+                float(tr_v),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def market_daily_bars_list_since(inst_id: str, min_day: str) -> list[dict[str, Any]]:
+    """UTC 日历日 day >= min_day，按 day 升序。项与 OKX merge 用字段一致。"""
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """SELECT day, open, high, low, close, tr
+               FROM market_daily_bars
+               WHERE inst_id = ? AND day >= ?
+               ORDER BY day ASC""",
+            ((inst_id or "").strip(), (min_day or "").strip()),
+        )
+        return [
+            {
+                "day": str(r[0]),
+                "open": float(r[1] or 0.0),
+                "high": float(r[2] or 0.0),
+                "low": float(r[3] or 0.0),
+                "close": float(r[4] or 0.0),
+                "tr": float(r[5] or 0.0),
+            }
+            for r in cur.fetchall()
         ]
     finally:
         conn.close()

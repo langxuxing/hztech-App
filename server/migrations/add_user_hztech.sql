@@ -1,5 +1,5 @@
--- 添加 hztech 用户（密码：Hz@2026）。仅当 username 不存在时插入。
+-- 添加 hztech 用户（缺省密码：i23321，SHA256）。仅当 username 不存在时插入。
 INSERT OR IGNORE INTO users (username, password_hash) VALUES (
   'hztech',
-  '213f3a6e6d4b5052e28e5b8e8b2b1e8f7406044ca9619f967eca346573a8c736'
+  '4f1e136e8913a8d4748d82e6c401edb30b9dd88e1fac0d63140b23ea259ddf94'
 );
