@@ -8,7 +8,7 @@ import '../../widgets/profit_percent_line_chart.dart';
 import '../../widgets/water_background.dart';
 
 /// Web：账户画像页（[WebAccountProfileScreen]）— 收益率曲线与赛季网格。
-/// 策略日线能效见 [WebStrategyPerformanceScreen]。与 [WebAccountProfitScreen]（嵌入 [AccountProfitScreen]）区分。
+/// 策略日线能效见 [WebStrategyPerformanceScreen]。与 [WebAccountProfitScreen]（[AccountProfitPage]）区分。
 class WebAccountProfileScreen extends StatefulWidget {
   const WebAccountProfileScreen({super.key, this.sharedBots = const []});
 

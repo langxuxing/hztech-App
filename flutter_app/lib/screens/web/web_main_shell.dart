@@ -11,7 +11,7 @@ import 'download_app_page.dart';
 import 'tradingbot_control_screen.dart';
 import 'web_dashboard_screen.dart';
 import 'web_home_screen.dart';
-import 'web_account_profile_screen.dart';
+import 'web_account_profit_screen.dart';
 import 'web_strategy_performance_screen.dart';
 
 class _NavItem {
@@ -69,7 +69,10 @@ class _WebMainShellState extends State<WebMainShell> {
           title: '账户收益',
           icon: Icons.insights_outlined,
           selectedIcon: Icons.insights,
-          page: WebAccountProfileScreen(sharedBots: bots),
+          page: WebAccountProfitScreen(
+            sharedBots: bots,
+            embedInShell: true,
+          ),
         ),
       if (_role.canViewStrategyPerformance)
         _NavItem(
