@@ -62,10 +62,16 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   String? _tickerSubscribedInstId;
   static const String _defaultBotId = 'simpleserver';
   static const double _kLayoutWideBp = 960;
-  /// 权益/现金三列（折线|柱|日历）统一行高。
-  static const double _kTripleRowHeight = 500;
+  /// 权益/现金宽屏三列整行高度（无内层滚动）。
+  static const double _kTripleRowHeight = 520;
   static const double _kTripleGutter = 12;
-  static const double _kTripleBarChartH = 118;
+  /// 窄屏与宽屏单列内折线/柱/日历图表区统一高度。
+  static const double _kUnifiedChartBandHeight = 420;
+
+  DateTime? _equityMetricsMonth;
+  DateTime? _cashMetricsMonth;
+  final TextEditingController _noDropdownAccountController =
+      TextEditingController();
 
   /// 保持当前选中账户，拉取最新收益、曲线、持仓与赛季（用于定时刷新与下拉切换后的全量刷新）
   Future<void> _refreshLatestData() async {
@@ -88,6 +94,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
       setState(() {
         _accounts = profitResp.accounts ?? [];
         _snapshots = historyResp.snapshots;
+        _equityMetricsMonth = null;
+        _cashMetricsMonth = null;
       });
       final phase3 = await Future.wait([
         api.getTradingbotPositions(botId),
@@ -165,6 +173,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         setState(() {
           _accounts = profitResp.accounts ?? [];
           _snapshots = historyResp.snapshots;
+          _equityMetricsMonth = null;
+          _cashMetricsMonth = null;
         });
       } catch (e) {
         if (mounted) {
@@ -231,6 +241,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         _positionsLoadError = positionsResp.positionsError;
         _positionsOkxDebug = positionsResp.okxDebug;
         _error = null;
+        _equityMetricsMonth = null;
+        _cashMetricsMonth = null;
       });
       _syncOkxTickerSubscription();
     } catch (e) {
@@ -294,6 +306,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
 
   @override
   void dispose() {
+    _noDropdownAccountController.dispose();
     _tickerSub?.cancel();
     _tickerWs?.dispose();
     _autoRefreshTimer?.cancel();
@@ -463,6 +476,110 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     return null;
   }
 
+  DateTime _equityMonthFor(List<BotProfitSnapshot> snap) {
+    final seed = _equityMetricsMonth ?? focusedMonthFromProfitSnapshots(snap);
+    return clampMonthToSnapshots(snap, seed);
+  }
+
+  DateTime _cashMonthFor(List<BotProfitSnapshot> snap) {
+    final seed = _cashMetricsMonth ?? focusedMonthFromProfitSnapshots(snap);
+    return clampMonthToSnapshots(snap, seed);
+  }
+
+  void _syncNoDropdownAccountLabel() {
+    if (_effectiveBots.isNotEmpty) return;
+    final a = _selectedAccount;
+    final text = a == null
+        ? ''
+        : (a.exchangeAccount.trim().isNotEmpty ? a.exchangeAccount : a.botId);
+    if (_noDropdownAccountController.text != text) {
+      _noDropdownAccountController.text = text;
+    }
+  }
+
+  /// 权益/现金区块共用：折线、柱、日历同一月份。
+  Widget _buildMetricsMonthNav({
+    required List<BotProfitSnapshot> snapshots,
+    required DateTime month,
+    required ValueChanged<DateTime> onMonthChanged,
+  }) {
+    if (snapshots.isEmpty) return const SizedBox.shrink();
+    return Row(
+      children: [
+        Text(
+          '查看月份',
+          style: AppFinanceStyle.labelTextStyle(context).copyWith(
+            fontWeight: FontWeight.w600,
+            fontSize: 13,
+          ),
+        ),
+        const Spacer(),
+        IconButton(
+          tooltip: '上一月',
+          icon: const Icon(Icons.chevron_left, color: AppFinanceStyle.valueColor),
+          onPressed: () {
+            onMonthChanged(
+              clampMonthToSnapshots(
+                snapshots,
+                DateTime(month.year, month.month - 1),
+              ),
+            );
+          },
+        ),
+        Text(
+          '${month.year}-${month.month.toString().padLeft(2, '0')}',
+          style: TextStyle(
+            color: AppFinanceStyle.valueColor,
+            fontWeight: FontWeight.w600,
+            fontSize: 14,
+          ),
+        ),
+        IconButton(
+          tooltip: '下一月',
+          icon: const Icon(Icons.chevron_right, color: AppFinanceStyle.valueColor),
+          onPressed: () {
+            onMonthChanged(
+              clampMonthToSnapshots(
+                snapshots,
+                DateTime(month.year, month.month + 1),
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  /// 无机器人下拉列表时，用只读输入框展示当前账户标识（交易所账户名或 botId）。
+  Widget _buildNoDropdownAccountField() {
+    final a = _selectedAccount;
+    if (a == null) return const SizedBox.shrink();
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: (MediaQuery.of(context).size.width * 0.92).clamp(200.0, 520.0),
+          minHeight: kMinInteractiveDimension,
+        ),
+        child: _glassCard(
+          TextField(
+            readOnly: true,
+            controller: _noDropdownAccountController,
+            style: const TextStyle(color: AppFinanceStyle.valueColor),
+            decoration: InputDecoration(
+              isDense: true,
+              labelText: '当前账户',
+              labelStyle: AppFinanceStyle.labelTextStyle(context),
+              border: InputBorder.none,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
+            ),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        ),
+      ),
+    );
+  }
+
   Widget _buildBotSelector() {
     final list = _effectiveBots;
     if (list.isEmpty) return const SizedBox.shrink();
@@ -534,6 +651,9 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         if (_effectiveBots.isNotEmpty) ...[
           _buildBotSelector(),
           const SizedBox(height: 24),
+        ] else if (_selectedAccount != null) ...[
+          _buildNoDropdownAccountField(),
+          const SizedBox(height: 24),
         ],
         if (_accounts.isEmpty && _error == null)
           const Padding(
@@ -567,6 +687,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
+    _syncNoDropdownAccountLabel();
     final canPop = Navigator.of(context).canPop();
     final scaffold = Scaffold(
       backgroundColor: AppFinanceStyle.backgroundDark,
@@ -793,28 +914,40 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   Widget _buildEquityMetricsSection(bool wide) {
     if (_selectedAccount == null) return const SizedBox.shrink();
     final snap = _snapshots;
+    final month = _equityMonthFor(snap);
+    void setEquityMonth(DateTime d) =>
+        setState(() => _equityMetricsMonth = clampMonthToSnapshots(snap, d));
+
     if (!wide) {
+      final barH = (_kUnifiedChartBandHeight - 52).clamp(100.0, 600.0);
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _sectionTitle('权益信息'),
+          const SizedBox(height: 8),
+          _buildMetricsMonthNav(
+            snapshots: snap,
+            month: month,
+            onMonthChanged: setEquityMonth,
+          ),
           const SizedBox(height: 12),
           _glassCard(
             Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(
-                  '收益率（权益）',
+                  '收益率（权益）%',
                   style: AppFinanceStyle.labelTextStyle(context)
                       .copyWith(fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 8),
                 SizedBox(
-                  height: 200,
+                  height: _kUnifiedChartBandHeight,
                   child: SnapshotPercentLineChart(
                     snapshots: snap,
                     series: SnapshotReturnSeries.equity,
                     compact: true,
+                    focusedMonth: month,
                   ),
                 ),
               ],
@@ -829,6 +962,11 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                   '按自然月汇总：当月最后一条快照权益相对上月末（或期初）的变化（USDT）。',
               valueAt: (s) => s.equityUsdt,
               emptyMessage: '暂无历史快照，无法统计月度权益',
+              showMonthNavigator: false,
+              selectedEndMonth: month,
+              onSelectedEndMonthChanged: setEquityMonth,
+              barChartHeight: barH,
+              maxBars: 8,
             ),
           ),
           const SizedBox(height: 16),
@@ -840,6 +978,10 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                   '按日展示：当日最后一条快照权益相对前一有效时点的变化（USDT）。',
               valueAt: (s) => s.equityUsdt,
               emptyMessage: '暂无历史快照，无法统计月度权益',
+              showMonthNavigator: false,
+              focusedMonth: month,
+              onFocusedMonthChanged: setEquityMonth,
+              gridMaxHeight: _kUnifiedChartBandHeight,
             ),
           ),
         ],
@@ -849,6 +991,12 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _sectionTitle('权益信息'),
+        const SizedBox(height: 8),
+        _buildMetricsMonthNav(
+          snapshots: snap,
+          month: month,
+          onMonthChanged: setEquityMonth,
+        ),
         const SizedBox(height: 12),
         SizedBox(
           height: _kTripleRowHeight,
@@ -871,6 +1019,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                           snapshots: snap,
                           series: SnapshotReturnSeries.equity,
                           compact: true,
+                          focusedMonth: month,
                         ),
                       ),
                     ],
@@ -880,32 +1029,45 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
               SizedBox(width: _kTripleGutter),
               Expanded(
                 child: _tripleMetricCard(
-                  child: SingleChildScrollView(
-                    child: MonthEndValueBarPanel(
-                      snapshots: snap,
-                      title: '月度权益（柱）',
-                      description: '',
-                      valueAt: (s) => s.equityUsdt,
-                      emptyMessage: '暂无历史快照',
-                      compact: true,
-                      barChartHeight: _kTripleBarChartH,
-                      maxBars: 8,
-                    ),
+                  child: LayoutBuilder(
+                    builder: (context, c) {
+                      final chartH = (c.maxHeight - 44).clamp(96.0, 520.0);
+                      return MonthEndValueBarPanel(
+                        snapshots: snap,
+                        title: '月度权益（柱）',
+                        description: '',
+                        valueAt: (s) => s.equityUsdt,
+                        emptyMessage: '暂无历史快照',
+                        compact: true,
+                        showMonthNavigator: false,
+                        selectedEndMonth: month,
+                        onSelectedEndMonthChanged: setEquityMonth,
+                        barChartHeight: chartH,
+                        maxBars: 8,
+                      );
+                    },
                   ),
                 ),
               ),
               SizedBox(width: _kTripleGutter),
               Expanded(
                 child: _tripleMetricCard(
-                  child: SingleChildScrollView(
-                    child: MonthEndValueCalendarPanel(
-                      snapshots: snap,
-                      title: '月度权益（日历）',
-                      description: '',
-                      valueAt: (s) => s.equityUsdt,
-                      emptyMessage: '暂无历史快照',
-                      compact: true,
-                    ),
+                  child: LayoutBuilder(
+                    builder: (context, c) {
+                      final gridMax = (c.maxHeight - 36).clamp(140.0, 520.0);
+                      return MonthEndValueCalendarPanel(
+                        snapshots: snap,
+                        title: '月度权益（日历）',
+                        description: '',
+                        valueAt: (s) => s.equityUsdt,
+                        emptyMessage: '暂无历史快照',
+                        compact: true,
+                        showMonthNavigator: false,
+                        focusedMonth: month,
+                        onFocusedMonthChanged: setEquityMonth,
+                        gridMaxHeight: gridMax,
+                      );
+                    },
                   ),
                 ),
               ),
@@ -919,28 +1081,40 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   Widget _buildCashMetricsSection(bool wide) {
     if (_selectedAccount == null) return const SizedBox.shrink();
     final snap = _snapshots;
+    final month = _cashMonthFor(snap);
+    void setCashMonth(DateTime d) =>
+        setState(() => _cashMetricsMonth = clampMonthToSnapshots(snap, d));
+
     if (!wide) {
+      final barH = (_kUnifiedChartBandHeight - 52).clamp(100.0, 600.0);
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _sectionTitle('现金信息'),
+          const SizedBox(height: 8),
+          _buildMetricsMonthNav(
+            snapshots: snap,
+            month: month,
+            onMonthChanged: setCashMonth,
+          ),
           const SizedBox(height: 12),
           _glassCard(
             Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(
-                  '收益率（现金）',
+                  '收益率（现金）%',
                   style: AppFinanceStyle.labelTextStyle(context)
                       .copyWith(fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 8),
                 SizedBox(
-                  height: 200,
+                  height: _kUnifiedChartBandHeight,
                   child: SnapshotPercentLineChart(
                     snapshots: snap,
                     series: SnapshotReturnSeries.cash,
                     compact: true,
+                    focusedMonth: month,
                   ),
                 ),
               ],
@@ -955,6 +1129,11 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                   '按自然月汇总：当月最后一条快照现金余额相对上月末（或期初）的变化（USDT）。',
               valueAt: (s) => s.currentBalance,
               emptyMessage: '暂无历史快照，无法统计月度现金余额',
+              showMonthNavigator: false,
+              selectedEndMonth: month,
+              onSelectedEndMonthChanged: setCashMonth,
+              barChartHeight: barH,
+              maxBars: 8,
             ),
           ),
           const SizedBox(height: 16),
@@ -966,6 +1145,10 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                   '按日展示：当日最后一条快照现金余额相对前一有效时点的变化（USDT）。',
               valueAt: (s) => s.currentBalance,
               emptyMessage: '暂无历史快照，无法统计月度现金余额',
+              showMonthNavigator: false,
+              focusedMonth: month,
+              onFocusedMonthChanged: setCashMonth,
+              gridMaxHeight: _kUnifiedChartBandHeight,
             ),
           ),
         ],
@@ -975,6 +1158,12 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _sectionTitle('现金信息'),
+        const SizedBox(height: 8),
+        _buildMetricsMonthNav(
+          snapshots: snap,
+          month: month,
+          onMonthChanged: setCashMonth,
+        ),
         const SizedBox(height: 12),
         SizedBox(
           height: _kTripleRowHeight,
@@ -997,6 +1186,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                           snapshots: snap,
                           series: SnapshotReturnSeries.cash,
                           compact: true,
+                          focusedMonth: month,
                         ),
                       ),
                     ],
@@ -1006,32 +1196,45 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
               SizedBox(width: _kTripleGutter),
               Expanded(
                 child: _tripleMetricCard(
-                  child: SingleChildScrollView(
-                    child: MonthEndValueBarPanel(
-                      snapshots: snap,
-                      title: '月度现金（柱）',
-                      description: '',
-                      valueAt: (s) => s.currentBalance,
-                      emptyMessage: '暂无历史快照',
-                      compact: true,
-                      barChartHeight: _kTripleBarChartH,
-                      maxBars: 8,
-                    ),
+                  child: LayoutBuilder(
+                    builder: (context, c) {
+                      final chartH = (c.maxHeight - 44).clamp(96.0, 520.0);
+                      return MonthEndValueBarPanel(
+                        snapshots: snap,
+                        title: '月度现金（柱）',
+                        description: '',
+                        valueAt: (s) => s.currentBalance,
+                        emptyMessage: '暂无历史快照',
+                        compact: true,
+                        showMonthNavigator: false,
+                        selectedEndMonth: month,
+                        onSelectedEndMonthChanged: setCashMonth,
+                        barChartHeight: chartH,
+                        maxBars: 8,
+                      );
+                    },
                   ),
                 ),
               ),
               SizedBox(width: _kTripleGutter),
               Expanded(
                 child: _tripleMetricCard(
-                  child: SingleChildScrollView(
-                    child: MonthEndValueCalendarPanel(
-                      snapshots: snap,
-                      title: '月度现金（日历）',
-                      description: '',
-                      valueAt: (s) => s.currentBalance,
-                      emptyMessage: '暂无历史快照',
-                      compact: true,
-                    ),
+                  child: LayoutBuilder(
+                    builder: (context, c) {
+                      final gridMax = (c.maxHeight - 36).clamp(140.0, 520.0);
+                      return MonthEndValueCalendarPanel(
+                        snapshots: snap,
+                        title: '月度现金（日历）',
+                        description: '',
+                        valueAt: (s) => s.currentBalance,
+                        emptyMessage: '暂无历史快照',
+                        compact: true,
+                        showMonthNavigator: false,
+                        focusedMonth: month,
+                        onFocusedMonthChanged: setCashMonth,
+                        gridMaxHeight: gridMax,
+                      );
+                    },
                   ),
                 ),
               ),

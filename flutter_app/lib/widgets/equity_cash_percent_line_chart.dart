@@ -30,11 +30,14 @@ class SnapshotPercentLineChart extends StatelessWidget {
     required this.snapshots,
     required this.series,
     this.compact = false,
+    /// 非空时仅展示该自然月内的快照点（与月度日历/柱图对齐）。
+    this.focusedMonth,
   });
 
   final List<BotProfitSnapshot> snapshots;
   final SnapshotReturnSeries series;
   final bool compact;
+  final DateTime? focusedMonth;
 
   static const Color _cashLineColor = Color(0xFF7DB7FF);
 
@@ -51,8 +54,31 @@ class SnapshotPercentLineChart extends StatelessWidget {
         ),
       );
     }
-    final sorted = _sortedByTime(snapshots);
-    final denom = sorted.first.initialBalance;
+    final fullSorted = _sortedByTime(snapshots);
+    var sorted = fullSorted;
+    if (focusedMonth != null) {
+      final y = focusedMonth!.year;
+      final m = focusedMonth!.month;
+      final monthStart = DateTime(y, m, 1);
+      final monthEnd = DateTime(y, m + 1, 0, 23, 59, 59, 999);
+      sorted = fullSorted.where((s) {
+        final d = _parseSnapshotAt(s.snapshotAt);
+        if (d == null) return false;
+        return !d.isBefore(monthStart) && !d.isAfter(monthEnd);
+      }).toList();
+    }
+    if (sorted.isEmpty) {
+      return Center(
+        child: Text(
+          focusedMonth != null ? '该月无快照' : '暂无快照',
+          style: TextStyle(
+            color: AppFinanceStyle.labelColor,
+            fontSize: compact ? 11 : 13,
+          ),
+        ),
+      );
+    }
+    final denom = fullSorted.first.initialBalance;
     if (denom <= 0) {
       return Center(
         child: Text(

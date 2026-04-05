@@ -289,6 +289,22 @@ class TestUsersApi:
         assert r2.status_code == 200
         assert r2.get_json().get("success") is True
 
+    def test_users_cannot_demote_last_admin(self, client, auth_headers):
+        r = client.get("/api/users", headers=auth_headers)
+        aid = next(
+            u["id"]
+            for u in r.get_json()["users"]
+            if u.get("role") == "admin" and u.get("username") == "admin"
+        )
+        r2 = client.patch(
+            f"/api/users/{aid}",
+            headers=auth_headers,
+            json={"role": "trader"},
+            content_type="application/json",
+        )
+        assert r2.status_code == 400
+        assert "管理员" in (r2.get_json() or {}).get("message", "")
+
 
 class TestStrategyAnalystAutoNet:
     """POST /api/strategy-analyst/auto-net-test"""

@@ -309,7 +309,7 @@ class BotProfitHistoryResponse {
   }
 }
 
-/// 策略效能：OKX 日线波动 |high−low|（非负）与账户现金余额日增量（UTC 日，非负：max(0, eod-sod)）
+/// 策略效能：每日波动率、现金收益率%（分母多为 UTC 自然月月初资金）、策略能效。
 class StrategyDailyEfficiencyRow {
   final String day;
   final double open;
@@ -318,12 +318,16 @@ class StrategyDailyEfficiencyRow {
   final double close;
   /// 服务端字段名仍为 tr，数值为当日 |high−low|（非负）。
   final double tr;
+  /// 每日波动率% = |高−低| / 收盘 × 100。
   final double? trPct;
   final double? sodCash;
   final double? eodCash;
   final double? cashDeltaUsdt;
+  /// 现金收益率% = 当日现金增量 USDT ÷ 当 UTC 自然月月初资金 × 100（无月初表时用当日日初 sod）。
   final double? cashDeltaPct;
-  /// 服务端：现金日增量 USDT ÷ 当日 |高−低| × 1e-7（tr=0 或无现金增量时为 null）。
+  /// 有值表示收益率分母为 UTC 月初资金；null 表示用了当日 sod 回退。
+  final double? monthStartCash;
+  /// 策略能效 = 当日现金增量 USDT ÷ 价格波幅 |高−低| × 1e-7。
   final double? efficiencyRatio;
 
   StrategyDailyEfficiencyRow({
@@ -338,6 +342,7 @@ class StrategyDailyEfficiencyRow {
     this.eodCash,
     this.cashDeltaUsdt,
     this.cashDeltaPct,
+    this.monthStartCash,
     this.efficiencyRatio,
   });
 
@@ -354,6 +359,7 @@ class StrategyDailyEfficiencyRow {
       eodCash: (json['eod_cash'] as num?)?.toDouble(),
       cashDeltaUsdt: (json['cash_delta_usdt'] as num?)?.toDouble(),
       cashDeltaPct: (json['cash_delta_pct'] as num?)?.toDouble(),
+      monthStartCash: (json['month_start_cash'] as num?)?.toDouble(),
       efficiencyRatio: (json['efficiency_ratio'] as num?)?.toDouble(),
     );
   }

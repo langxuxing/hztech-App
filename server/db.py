@@ -262,6 +262,25 @@ _VALID_USER_ROLES = frozenset(
 )
 
 
+def user_count_with_role(role: str) -> int:
+    """统计指定 role 的用户数；表无 role 列时返回 0。"""
+    rr = str(role).strip().lower()
+    if rr not in _VALID_USER_ROLES:
+        return 0
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            "SELECT COUNT(*) FROM users WHERE LOWER(TRIM(COALESCE(role, ''))) = ?",
+            (rr,),
+        )
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
+    except sqlite3.OperationalError:
+        return 0
+    finally:
+        conn.close()
+
+
 def user_get_role(username: str) -> str:
     """返回 customer / trader / admin / strategy_analyst；未知或缺列时默认 trader。"""
     conn = get_conn()

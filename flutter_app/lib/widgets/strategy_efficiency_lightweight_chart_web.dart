@@ -11,10 +11,9 @@ import 'package:web/web.dart';
 import '../api/models.dart';
 
 /// Web：使用 TradingView [Lightweight Charts](https://www.tradingview.com/lightweight-charts/) 展示策略能效。
-/// 日波动% 柱：低于 6% 白、6%–10% 黄、高于 10% 红。
-/// 现金增量% 柱：&lt;0.5% 灰、0.5–1% 白、≥1% 绿。
-/// 现金增量% 折线（多段色）：&gt;0.5% 绿、&lt;0.2% 灰、其余黄。
-/// 能效比折线：右侧价轴。
+/// 每日波动率% 柱：低于 6% 白、6%–10% 黄、高于 10% 红。
+/// 现金收益率% 柱与折线共用阈值：&lt;0.5% 灰、0.5%–1% 白、≥1% 绿。
+/// 策略能效折线：右侧价轴。
 class StrategyEfficiencyLightweightChart extends StatefulWidget {
   const StrategyEfficiencyLightweightChart({
     super.key,
@@ -119,17 +118,17 @@ html,body{margin:0;padding:0;height:100%;background:#141419;overflow:hidden;}
     if (tp <= 10) return 'rgba(234, 179, 8, 0.75)';
     return 'rgba(239, 68, 68, 0.82)';
   }
-  function cashBarColor(cp) {
+  function cashYieldBarColor(cp) {
     if (cp == null || cp !== cp) return 'rgba(160, 160, 176, 0.4)';
     if (cp < 0.5) return 'rgba(107, 114, 128, 0.58)';
     if (cp < 1) return 'rgba(245, 245, 245, 0.52)';
     return 'rgba(34, 197, 94, 0.62)';
   }
-  function cashLineTierColor(cp) {
+  function cashYieldLineColor(cp) {
     if (cp == null || cp !== cp) return null;
-    if (cp > 0.5) return 'rgba(34, 197, 94, 0.98)';
-    if (cp < 0.2) return 'rgba(107, 114, 128, 0.98)';
-    return 'rgba(234, 179, 8, 0.98)';
+    if (cp < 0.5) return 'rgba(107, 114, 128, 0.98)';
+    if (cp < 1) return 'rgba(245, 245, 245, 0.98)';
+    return 'rgba(34, 197, 94, 0.98)';
   }
   var trH = chart.addHistogramSeries({
     priceScaleId: 'left',
@@ -157,7 +156,7 @@ html,body{margin:0;padding:0;height:100%;background:#141419;overflow:hidden;}
     cashArr.push({
       time: d.day,
       value: cp == null ? 0 : cp,
-      color: cashBarColor(cp),
+      color: cashYieldBarColor(cp),
     });
     trArr.push({
       time: d.day,
@@ -175,7 +174,7 @@ html,body{margin:0;padding:0;height:100%;background:#141419;overflow:hidden;}
     var row = DATA[j];
     if (!row || !row.day) continue;
     var cpn = n(row.cashPct);
-    var lc = cashLineTierColor(cpn);
+    var lc = cashYieldLineColor(cpn);
     if (lc == null) {
       if (curC != null && run.length) {
         var ser = chart.addLineSeries({

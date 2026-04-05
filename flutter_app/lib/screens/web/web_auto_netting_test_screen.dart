@@ -109,7 +109,7 @@ class _WebAutoNettingTestScreenState extends State<WebAutoNettingTestScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              '调用后端测试接口，写入日志表；未执行真实平仓。',
+              '「收网测试」仅调用后端测试接口并写入日志，不会真实平仓或撤单。',
               style: AppFinanceStyle.labelTextStyle(context).copyWith(
                     fontSize: 14,
                     height: 1.4,

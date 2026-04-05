@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-按 UTC 自然日汇总账户快照中的现金余额变化，并与 OKX 日线价格波动（|高−低|，非负）对齐。
+按 UTC 自然日汇总账户快照中的现金余额变化，并与 OKX 日线对齐。
+输出含：每日波动率%（|高−低|/收盘）、现金收益率%（日增量÷UTC 自然月月初资金×100，无月初则用当日 sod）、
+策略能效（日增量 USDT÷波幅×1e-7）。
 """
 from __future__ import annotations
 
@@ -86,11 +88,53 @@ def daily_cash_delta_by_utc_day(snapshots: list[dict[str, Any]]) -> dict[str, di
     return out
 
 
+def month_start_cash_by_month_from_snapshots(
+    snapshots: list[dict[str, Any]],
+) -> dict[str, float]:
+    """
+    每个 UTC 自然月 YYYY-MM 对应「月初」资金：
+    该月 1 日 00:00 UTC 之前最后一笔快照的 cash_balance；
+    若该月前无任何快照，则取该月内最早一条快照余额（新户首月）。
+    """
+    points: list[tuple[datetime, float]] = []
+    for r in snapshots:
+        ts = _parse_snapshot_ts(str(r.get("snapshot_at") or ""))
+        if ts is None:
+            continue
+        try:
+            cash = float(r.get("cash_balance") or 0.0)
+        except (TypeError, ValueError):
+            cash = 0.0
+        cash = max(0.0, cash)
+        points.append((ts, cash))
+    if not points:
+        return {}
+    points.sort(key=lambda x: x[0])
+    ym_set = {(ts.year, ts.month) for ts, _ in points}
+    out: dict[str, float] = {}
+    for y, m in sorted(ym_set):
+        boundary = datetime(y, m, 1, tzinfo=timezone.utc)
+        last_before: float | None = None
+        for ts, cash in points:
+            if ts < boundary:
+                last_before = cash
+        key = f"{y:04d}-{m:02d}"
+        if last_before is not None:
+            out[key] = max(0.0, float(last_before))
+        else:
+            for ts, cash in points:
+                if ts.year == y and ts.month == m:
+                    out[key] = max(0.0, float(cash))
+                    break
+    return out
+
+
 def merge_daily_efficiency_rows(
     market_bars: list[dict[str, Any]],
     cash_by_day: dict[str, dict[str, float]],
+    month_base_by_month: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
-    """合并 OKX 日线波动（|高−低|，非负）与现金日增量（非负），并计算 tr_pct、能效比。"""
+    """合并 OKX 日线波动（|高−低|，非负）与现金日增量（非负），并计算 tr_pct、现金收益率%、策略能效。"""
     rows: list[dict[str, Any]] = []
     for bar in market_bars:
         day = str(bar.get("day") or "")
@@ -102,10 +146,23 @@ def merge_daily_efficiency_rows(
         cash_info = cash_by_day.get(day)
         cash_delta = cash_info["cash_delta_usdt"] if cash_info else None
         sod_cash = cash_info["sod_cash"] if cash_info else None
+        # 现金收益率% = 当日合约侧现金增量(USDT) ÷ 当 UTC 自然月月初资金 × 100
+        month_key = day[:7] if len(day) >= 7 else ""
+        month_base: float | None = None
+        if month_base_by_month and month_key:
+            mb = month_base_by_month.get(month_key)
+            if mb is not None and float(mb) > 0:
+                month_base = float(mb)
+        yield_from_month_start = month_base is not None
+        if month_base is None and cash_info and sod_cash is not None and float(sod_cash) > 0:
+            month_base = float(sod_cash)
         cash_delta_pct = None
-        if cash_info and sod_cash is not None and float(sod_cash) > 0 and cash_delta is not None:
-            cash_delta_pct = float(cash_delta) / float(sod_cash) * 100.0
-        # 能效比值 = 每日现金增量(USDT) / 当日价格波动幅度 |高−低| × 1e-7
+        month_start_cash_out: float | None = None
+        if cash_delta is not None and month_base is not None and month_base > 0:
+            cash_delta_pct = float(cash_delta) / month_base * 100.0
+            if yield_from_month_start:
+                month_start_cash_out = month_base
+        # 策略能效 = 每日现金增量(USDT) / 当日价格波动幅度 |高−低| × 1e-7
         eff = None
         if cash_delta is not None and tr > 1e-18:
             eff = float(cash_delta) / float(tr) * 1e-7
@@ -122,6 +179,7 @@ def merge_daily_efficiency_rows(
                 "eod_cash": cash_info["eod_cash"] if cash_info else None,
                 "cash_delta_usdt": cash_delta,
                 "cash_delta_pct": cash_delta_pct,
+                "month_start_cash": month_start_cash_out,
                 "efficiency_ratio": eff,
             }
         )

@@ -134,7 +134,8 @@ class ApiClient {
         .toList();
   }
 
-  Future<ManagedUserRow?> patchUser(
+  /// 失败时抛出 [StateError]，[StateError.message] 为服务端文案（若有）。
+  Future<ManagedUserRow> patchUser(
     int userId, {
     String? role,
     List<String>? linkedAccountIds,
@@ -145,7 +146,7 @@ class ApiClient {
     if (linkedAccountIds != null) body['linked_account_ids'] = linkedAccountIds;
     final resp =
         await http.patch(uri, headers: _headers, body: jsonEncode(body)).timeout(_timeout);
-    return _parsePatchUser(resp);
+    return _parsePatchUserRequired(resp);
   }
 
   /// POST /api/users（仅管理员）
@@ -175,12 +176,14 @@ class ApiClient {
     return ManagedUserRow.fromJson(u);
   }
 
-  /// DELETE /api/users/:id（仅管理员）
-  Future<bool> deleteUser(int userId) async {
+  /// DELETE /api/users/:id（仅管理员）。失败时抛出 [StateError]。
+  Future<void> deleteUser(int userId) async {
     final uri = Uri.parse('${_normalizedBase}api/users/$userId');
     final resp = await http.delete(uri, headers: _headers).timeout(_timeout);
     final map = jsonDecode(resp.body) as Map<String, dynamic>;
-    return map['success'] == true;
+    if (map['success'] != true) {
+      throw StateError(map['message']?.toString() ?? '删除失败');
+    }
   }
 
   /// POST /api/strategy-analyst/auto-net-test（仅 strategy_analyst）
@@ -199,11 +202,13 @@ class ApiClient {
     return map['message']?.toString() ?? 'ok';
   }
 
-  ManagedUserRow? _parsePatchUser(http.Response resp) {
+  ManagedUserRow _parsePatchUserRequired(http.Response resp) {
     final map = jsonDecode(resp.body) as Map<String, dynamic>;
-    if (map['success'] != true) return null;
+    if (map['success'] != true) {
+      throw StateError(map['message']?.toString() ?? '保存失败');
+    }
     final u = map['user'] as Map<String, dynamic>?;
-    if (u == null) return null;
+    if (u == null) throw StateError('保存失败');
     return ManagedUserRow.fromJson(u);
   }
 

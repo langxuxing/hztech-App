@@ -156,7 +156,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           if (widget.appUserRole == AppUserRole.strategyAnalyst) ...[
                             const SizedBox(height: 12),
                             Text(
-                              'Web 侧栏「自动收网」为测试接口，仅记录请求；实盘收网逻辑可在后端对接。',
+                              'Web 侧栏「收网测试」仅调用测试接口并写日志，不会真实平仓。',
+                              style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 13, height: 1.4),
+                            ),
+                          ],
+                          if (kIsWeb &&
+                              widget.appUserRole != null &&
+                              !widget.appUserRole!.canManageUsers &&
+                              widget.appUserRole != AppUserRole.customer) ...[
+                            const SizedBox(height: 12),
+                            Text(
+                              '「用户管理」仅管理员账号在侧栏可见；若需调整角色，请联系现有管理员或在数据库中修改 users.role。',
                               style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 13, height: 1.4),
                             ),
                           ],

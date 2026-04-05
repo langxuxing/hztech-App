@@ -42,6 +42,36 @@ DateTime _defaultFocusedMonth(List<BotProfitSnapshot> sorted) {
   return DateTime(last.year, last.month);
 }
 
+/// 有快照的最后一个自然月；无数据则为当前月。
+DateTime focusedMonthFromProfitSnapshots(List<BotProfitSnapshot> raw) {
+  final sorted = _sortedSnapshotsWithDates(raw);
+  return _defaultFocusedMonth(sorted);
+}
+
+/// 将 [month] 限制在快照覆盖的首月～末月之间（按自然月）。
+DateTime clampMonthToSnapshots(List<BotProfitSnapshot> raw, DateTime month) {
+  final sorted = _sortedSnapshotsWithDates(raw);
+  if (sorted.isEmpty) return DateTime(month.year, month.month);
+  DateTime? first;
+  DateTime? last;
+  for (final s in sorted) {
+    final d = _parseSnapshotAt(s.snapshotAt);
+    if (d == null) continue;
+    final m = DateTime(d.year, d.month);
+    final prevFirst = first;
+    final prevLast = last;
+    first = prevFirst == null || m.isBefore(prevFirst) ? m : prevFirst;
+    last = prevLast == null || m.isAfter(prevLast) ? m : prevLast;
+  }
+  if (first == null || last == null) return DateTime(month.year, month.month);
+  final f = first;
+  final l = last;
+  final t = DateTime(month.year, month.month);
+  if (t.isBefore(f)) return f;
+  if (t.isAfter(l)) return l;
+  return t;
+}
+
 double _valueAtOrBefore(
   List<BotProfitSnapshot> sorted,
   DateTime instant,
@@ -235,6 +265,10 @@ class MonthEndValueBarPanel extends StatefulWidget {
     this.maxBars = 12,
     this.compact = false,
     this.barChartHeight,
+    /// 为 false 时由父级提供月份条（与 [selectedEndMonth]、[onSelectedEndMonthChanged] 配合）。
+    this.showMonthNavigator = true,
+    this.selectedEndMonth,
+    this.onSelectedEndMonthChanged,
   });
 
   final List<BotProfitSnapshot> snapshots;
@@ -246,19 +280,26 @@ class MonthEndValueBarPanel extends StatefulWidget {
   /// 三列栅格等：缩小标题与说明，柱图高度由 [barChartHeight] 或缺省值决定。
   final bool compact;
   final double? barChartHeight;
+  final bool showMonthNavigator;
+  /// 受控：柱状图截止月（与日历「当前月」对齐时使用同一 [DateTime]）。
+  final DateTime? selectedEndMonth;
+  final ValueChanged<DateTime>? onSelectedEndMonthChanged;
 
   @override
   State<MonthEndValueBarPanel> createState() => _MonthEndValueBarPanelState();
 }
 
 class _MonthEndValueBarPanelState extends State<MonthEndValueBarPanel> {
-  /// 用户选择的截止月；null 表示跟随数据最后一月。
+  /// 用户选择的截止月；null 表示跟随数据最后一月（仅非受控时）。
   DateTime? _endMonthManual;
+
+  bool get _controlled =>
+      widget.selectedEndMonth != null && widget.onSelectedEndMonthChanged != null;
 
   @override
   void didUpdateWidget(covariant MonthEndValueBarPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.snapshots, widget.snapshots)) {
+    if (!identical(oldWidget.snapshots, widget.snapshots) && !_controlled) {
       _endMonthManual = null;
     }
   }
@@ -268,6 +309,9 @@ class _MonthEndValueBarPanelState extends State<MonthEndValueBarPanel> {
       return DateTime(DateTime.now().year, DateTime.now().month);
     }
     final last = _monthStatAsDateTime(monthly.last);
+    if (_controlled) {
+      return _clampEndMonthToData(monthly, widget.selectedEndMonth!);
+    }
     if (_endMonthManual == null) return last;
     return _clampEndMonthToData(monthly, _endMonthManual!);
   }
@@ -320,65 +364,74 @@ class _MonthEndValueBarPanelState extends State<MonthEndValueBarPanel> {
             ),
           )
         else ...[
-          Row(
-            children: [
-              if (!widget.compact)
-                Text(
-                  '截止月份',
-                  style: AppFinanceStyle.labelTextStyle(context).copyWith(
-                    fontWeight: FontWeight.w600,
-                    fontSize: 13,
+          if (widget.showMonthNavigator) ...[
+            Row(
+              children: [
+                if (!widget.compact)
+                  Text(
+                    '截止月份',
+                    style: AppFinanceStyle.labelTextStyle(context).copyWith(
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
                   ),
-                ),
-              if (!widget.compact) const Spacer(),
-              IconButton(
-                tooltip: '上一月',
-                visualDensity: widget.compact ? VisualDensity.compact : null,
-                padding: widget.compact ? EdgeInsets.zero : null,
-                constraints: widget.compact
-                    ? const BoxConstraints(minWidth: 32, minHeight: 32)
-                    : null,
-                icon: const Icon(Icons.chevron_left, color: AppFinanceStyle.valueColor),
-                onPressed: () {
-                  setState(() {
+                if (!widget.compact) const Spacer(),
+                IconButton(
+                  tooltip: '上一月',
+                  visualDensity: widget.compact ? VisualDensity.compact : null,
+                  padding: widget.compact ? EdgeInsets.zero : null,
+                  constraints: widget.compact
+                      ? const BoxConstraints(minWidth: 32, minHeight: 32)
+                      : null,
+                  icon: const Icon(Icons.chevron_left, color: AppFinanceStyle.valueColor),
+                  onPressed: () {
                     final cur = _effectiveEndMonth(monthly);
-                    _endMonthManual = _clampEndMonthToData(
+                    final next = _clampEndMonthToData(
                       monthly,
                       DateTime(cur.year, cur.month - 1),
                     );
-                  });
-                },
-              ),
-              Text(
-                '${end.year}-${end.month.toString().padLeft(2, '0')}',
-                style: TextStyle(
-                  color: AppFinanceStyle.valueColor,
-                  fontWeight: FontWeight.w600,
-                  fontSize: widget.compact ? 12 : 14,
+                    if (_controlled) {
+                      widget.onSelectedEndMonthChanged!(next);
+                    } else {
+                      setState(() => _endMonthManual = next);
+                    }
+                  },
                 ),
-              ),
-              IconButton(
-                tooltip: '下一月',
-                visualDensity: widget.compact ? VisualDensity.compact : null,
-                padding: widget.compact ? EdgeInsets.zero : null,
-                constraints: widget.compact
-                    ? const BoxConstraints(minWidth: 32, minHeight: 32)
-                    : null,
-                icon: const Icon(Icons.chevron_right, color: AppFinanceStyle.valueColor),
-                onPressed: () {
-                  setState(() {
+                Text(
+                  '${end.year}-${end.month.toString().padLeft(2, '0')}',
+                  style: TextStyle(
+                    color: AppFinanceStyle.valueColor,
+                    fontWeight: FontWeight.w600,
+                    fontSize: widget.compact ? 12 : 14,
+                  ),
+                ),
+                IconButton(
+                  tooltip: '下一月',
+                  visualDensity: widget.compact ? VisualDensity.compact : null,
+                  padding: widget.compact ? EdgeInsets.zero : null,
+                  constraints: widget.compact
+                      ? const BoxConstraints(minWidth: 32, minHeight: 32)
+                      : null,
+                  icon: const Icon(Icons.chevron_right, color: AppFinanceStyle.valueColor),
+                  onPressed: () {
                     final cur = _effectiveEndMonth(monthly);
-                    _endMonthManual = _clampEndMonthToData(
+                    final next = _clampEndMonthToData(
                       monthly,
                       DateTime(cur.year, cur.month + 1),
                     );
-                  });
-                },
-              ),
-              if (widget.compact) const Spacer(),
-            ],
-          ),
-          SizedBox(height: widget.compact ? 4 : 8),
+                    if (_controlled) {
+                      widget.onSelectedEndMonthChanged!(next);
+                    } else {
+                      setState(() => _endMonthManual = next);
+                    }
+                  },
+                ),
+                if (widget.compact) const Spacer(),
+              ],
+            ),
+            SizedBox(height: widget.compact ? 4 : 8),
+          ] else
+            SizedBox(height: widget.compact ? 2 : 4),
           if (visible.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 24),
@@ -481,6 +534,11 @@ class MonthEndValueCalendarPanel extends StatefulWidget {
     required this.valueAt,
     required this.emptyMessage,
     this.compact = false,
+    this.showMonthNavigator = true,
+    this.focusedMonth,
+    this.onFocusedMonthChanged,
+    /// 限制日历网格最大高度时，按比例缩小单元格（与柱图/折线同卡无内滚动）。
+    this.gridMaxHeight,
   });
 
   final List<BotProfitSnapshot> snapshots;
@@ -489,6 +547,10 @@ class MonthEndValueCalendarPanel extends StatefulWidget {
   final MonthEndSnapshotValue valueAt;
   final String emptyMessage;
   final bool compact;
+  final bool showMonthNavigator;
+  final DateTime? focusedMonth;
+  final ValueChanged<DateTime>? onFocusedMonthChanged;
+  final double? gridMaxHeight;
 
   @override
   State<MonthEndValueCalendarPanel> createState() => _MonthEndValueCalendarPanelState();
@@ -496,6 +558,9 @@ class MonthEndValueCalendarPanel extends StatefulWidget {
 
 class _MonthEndValueCalendarPanelState extends State<MonthEndValueCalendarPanel> {
   late DateTime _focusedMonth;
+
+  bool get _controlled =>
+      widget.focusedMonth != null && widget.onFocusedMonthChanged != null;
 
   @override
   void initState() {
@@ -506,9 +571,28 @@ class _MonthEndValueCalendarPanelState extends State<MonthEndValueCalendarPanel>
   @override
   void didUpdateWidget(covariant MonthEndValueCalendarPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.snapshots.isEmpty && widget.snapshots.isNotEmpty) {
+    if (oldWidget.snapshots.isEmpty && widget.snapshots.isNotEmpty && !_controlled) {
       _focusedMonth = _defaultFocusedMonth(_sortedSnapshotsWithDates(widget.snapshots));
     }
+  }
+
+  DateTime _monthForBuild(List<BotProfitSnapshot> sorted) {
+    if (_controlled) {
+      return clampMonthToSnapshots(sorted, widget.focusedMonth!);
+    }
+    return _focusedMonth;
+  }
+
+  double _cellHeightForGrid() {
+    if (widget.gridMaxHeight == null) {
+      return widget.compact ? 30 : 44;
+    }
+    const headerH = 22.0;
+    const rowSpacing = 4.0;
+    const rows = 6;
+    final avail =
+        widget.gridMaxHeight! - headerH - rowSpacing - rows * rowSpacing;
+    return (avail / rows).clamp(22.0, 48.0);
   }
 
   @override
@@ -516,7 +600,8 @@ class _MonthEndValueCalendarPanelState extends State<MonthEndValueCalendarPanel>
     final sorted = _sortedSnapshotsWithDates(widget.snapshots);
     final fallback = sorted.isEmpty ? 0.0 : sorted.first.initialBalance;
     final monthly = _computeMonthlyStats(sorted, widget.valueAt, fallback);
-    final daily = _dailyDeltaForMonth(sorted, _focusedMonth, widget.valueAt, fallback);
+    final focus = _monthForBuild(sorted);
+    final daily = _dailyDeltaForMonth(sorted, focus, widget.valueAt, fallback);
     final titleStyle = widget.compact
         ? (Theme.of(context).textTheme.titleMedium ?? const TextStyle()).copyWith(
             color: AppFinanceStyle.labelColor,
@@ -550,53 +635,66 @@ class _MonthEndValueCalendarPanelState extends State<MonthEndValueCalendarPanel>
             ),
           )
         else ...[
-          Row(
-            children: [
-              const Spacer(),
-              IconButton(
-                visualDensity: widget.compact ? VisualDensity.compact : null,
-                padding: widget.compact ? EdgeInsets.zero : null,
-                constraints: widget.compact
-                    ? const BoxConstraints(minWidth: 32, minHeight: 32)
-                    : null,
-                icon: const Icon(Icons.chevron_left, color: AppFinanceStyle.valueColor),
-                onPressed: () {
-                  setState(() {
-                    _focusedMonth = DateTime(_focusedMonth.year, _focusedMonth.month - 1);
-                  });
-                },
-              ),
-              Text(
-                widget.compact
-                    ? '${_focusedMonth.year}-${_focusedMonth.month.toString().padLeft(2, '0')}'
-                    : '${_focusedMonth.year}年${_focusedMonth.month}月',
-                style: TextStyle(
-                  color: AppFinanceStyle.valueColor,
-                  fontWeight: FontWeight.w600,
-                  fontSize: widget.compact ? 12 : 14,
+          if (widget.showMonthNavigator) ...[
+            Row(
+              children: [
+                const Spacer(),
+                IconButton(
+                  visualDensity: widget.compact ? VisualDensity.compact : null,
+                  padding: widget.compact ? EdgeInsets.zero : null,
+                  constraints: widget.compact
+                      ? const BoxConstraints(minWidth: 32, minHeight: 32)
+                      : null,
+                  icon: const Icon(Icons.chevron_left, color: AppFinanceStyle.valueColor),
+                  onPressed: () {
+                    final next = DateTime(focus.year, focus.month - 1);
+                    if (_controlled) {
+                      widget.onFocusedMonthChanged!(
+                        clampMonthToSnapshots(sorted, next),
+                      );
+                    } else {
+                      setState(() => _focusedMonth = next);
+                    }
+                  },
                 ),
-              ),
-              IconButton(
-                visualDensity: widget.compact ? VisualDensity.compact : null,
-                padding: widget.compact ? EdgeInsets.zero : null,
-                constraints: widget.compact
-                    ? const BoxConstraints(minWidth: 32, minHeight: 32)
-                    : null,
-                icon: const Icon(Icons.chevron_right, color: AppFinanceStyle.valueColor),
-                onPressed: () {
-                  setState(() {
-                    _focusedMonth = DateTime(_focusedMonth.year, _focusedMonth.month + 1);
-                  });
-                },
-              ),
-            ],
-          ),
-          SizedBox(height: widget.compact ? 4 : 8),
+                Text(
+                  widget.compact
+                      ? '${focus.year}-${focus.month.toString().padLeft(2, '0')}'
+                      : '${focus.year}年${focus.month}月',
+                  style: TextStyle(
+                    color: AppFinanceStyle.valueColor,
+                    fontWeight: FontWeight.w600,
+                    fontSize: widget.compact ? 12 : 14,
+                  ),
+                ),
+                IconButton(
+                  visualDensity: widget.compact ? VisualDensity.compact : null,
+                  padding: widget.compact ? EdgeInsets.zero : null,
+                  constraints: widget.compact
+                      ? const BoxConstraints(minWidth: 32, minHeight: 32)
+                      : null,
+                  icon: const Icon(Icons.chevron_right, color: AppFinanceStyle.valueColor),
+                  onPressed: () {
+                    final next = DateTime(focus.year, focus.month + 1);
+                    if (_controlled) {
+                      widget.onFocusedMonthChanged!(
+                        clampMonthToSnapshots(sorted, next),
+                      );
+                    } else {
+                      setState(() => _focusedMonth = next);
+                    }
+                  },
+                ),
+              ],
+            ),
+            SizedBox(height: widget.compact ? 4 : 8),
+          ] else
+            SizedBox(height: widget.compact ? 2 : 4),
           _CalendarGrid(
-            year: _focusedMonth.year,
-            month: _focusedMonth.month,
+            year: focus.year,
+            month: focus.month,
             dailyPnL: daily,
-            cellHeight: widget.compact ? 30 : 44,
+            cellHeight: _cellHeightForGrid(),
             headerFontSize: widget.compact ? 10 : 12,
             dayFontSize: widget.compact ? 11 : 13,
             deltaFontSize: widget.compact ? 7 : 9,

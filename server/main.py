@@ -11,7 +11,7 @@ App 所需 API（与 QtraderApi.kt 一致）：
   GET  /api/tradingbots           交易账户列表（需 Bearer token）
   POST /api/tradingbots/{id}/start|stop|restart|season-start|season-stop（需 Bearer token；赛季操作需 script 支持 season-start/stop）
   GET  /api/tradingbots/{id}/pending-orders | /ticker  当前委托、行情（不入库；id 可为 Account_List 的 account_id）
-  GET  /api/tradingbots/{id}/strategy-daily-efficiency  OKX 日线 |高−低| 波动 + 现金日增量（?inst_id=&days=）
+  GET  /api/tradingbots/{id}/strategy-daily-efficiency  每日波动率/现金收益率%(较UTC月初)/策略能效（?inst_id=&days=）
   GET  /api/tradingbots/{id}/tradingbot-events  账户启停事件（需 Bearer token）
   GET  /api/logs                  日志查询（需 Bearer token，?limit=100&level=&source=）
   GET  /api/users                 用户列表（仅管理员，含 role、linked_account_ids）
@@ -594,12 +594,18 @@ def api_users_patch(user_id: int):
     denied = _require_admin()
     if denied:
         return denied
-    if _db.user_get_by_id(user_id) is None:
+    row = _db.user_get_by_id(user_id)
+    if row is None:
         return jsonify({"success": False, "message": "用户不存在"}), 404
     if request.method == "DELETE":
         my_id = _db.user_id_by_username(g.current_username)
         if my_id is not None and my_id == user_id:
             return jsonify({"success": False, "message": "不可删除当前登录用户"}), 400
+        if str(row.get("role") or "").strip().lower() == "admin":
+            if _db.user_count_with_role("admin") <= 1:
+                return jsonify(
+                    {"success": False, "message": "不可删除最后一位管理员"}
+                ), 400
         if not _db.user_delete(user_id):
             return jsonify({"success": False, "message": "删除失败"}), 400
         return jsonify({"success": True, "message": "已删除"})
@@ -614,13 +620,23 @@ def api_users_patch(user_id: int):
         if not isinstance(new_links, list):
             return jsonify({"success": False, "message": "linked_account_ids 须为数组"}), 400
         links_list = [str(x).strip() for x in new_links if str(x).strip()]
+    if new_role is not None and role_s is not None:
+        ex_role = str(row.get("role") or "").strip().lower()
+        if ex_role == "admin" and role_s != "admin":
+            if _db.user_count_with_role("admin") <= 1:
+                return jsonify(
+                    {
+                        "success": False,
+                        "message": "不可将最后一位管理员改为其他角色",
+                    }
+                ), 400
     ok = _db.user_update_profile(
         user_id, role=role_s, linked_account_ids=links_list
     )
     if not ok:
         return jsonify({"success": False, "message": "更新失败或数据未变"}), 400
-    row = _db.user_get_by_id(user_id)
-    return jsonify({"success": True, "user": row})
+    updated = _db.user_get_by_id(user_id)
+    return jsonify({"success": True, "user": updated})
 
 
 @app.route("/api/strategy-analyst/auto-net-test", methods=["POST"])
@@ -1002,7 +1018,8 @@ def api_bot_profit_history(bot_id):
 @require_auth
 def api_strategy_daily_efficiency(bot_id):
     """
-    策略效能：OKX 日线价格波动 |high−low|（公开 K 线，非负）与账户快照的每日现金余额增量（UTC 日，非负）。
+    策略效能：每日波动率（|高−低|/收盘%）、现金收益率%（日现金增量/UTC 自然月月初资金×100）、
+    策略能效（日增量 USDT÷波幅×1e-7）。数据来自 OKX 日线 + 账户快照。
     Query: inst_id=PEPE-USDT-SWAP&days=90
     """
     denied = _customer_bot_forbidden(bot_id)
@@ -1032,8 +1049,22 @@ def api_strategy_daily_efficiency(bot_id):
     }
     cash_by_day: dict = {}
     cash_basis = "none"
+    snaps: list = []
     if bot_id in account_ids:
         since_dt = datetime.now(timezone.utc) - timedelta(days=days + 3)
+        # 保证能取到 K 线最早月份「月初」前的快照，避免 days 很短时现金收益率分母失真
+        if bars:
+            try:
+                day_strs = [str(b.get("day") or "") for b in bars if b.get("day")]
+                if day_strs:
+                    earliest = min(day_strs)
+                    y, m, _dd = (int(x) for x in earliest.split("-")[:3])
+                    first_of_m = datetime(y, m, 1, tzinfo=timezone.utc)
+                    anchor = first_of_m - timedelta(days=40)
+                    if anchor < since_dt:
+                        since_dt = anchor
+            except (ValueError, TypeError, IndexError):
+                pass
         since = since_dt.strftime("%Y-%m-%dT00:00:00.000Z")
         snaps = _db.account_snapshot_query_by_account_since(
             bot_id, since_snapshot_at=since, max_rows=50000
@@ -1041,7 +1072,10 @@ def api_strategy_daily_efficiency(bot_id):
         cash_by_day = _strategy_efficiency.daily_cash_delta_by_utc_day(snaps)
         cash_basis = "account_snapshots_cash"
 
-    rows = _strategy_efficiency.merge_daily_efficiency_rows(bars, cash_by_day)
+    month_bases = _strategy_efficiency.month_start_cash_by_month_from_snapshots(snaps)
+    rows = _strategy_efficiency.merge_daily_efficiency_rows(
+        bars, cash_by_day, month_bases or None
+    )
     return jsonify(
         {
             "success": True,

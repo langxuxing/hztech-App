@@ -10,7 +10,7 @@ import '../../theme/finance_style.dart';
 import '../../widgets/strategy_efficiency_lightweight_chart.dart';
 import '../../widgets/water_background.dart';
 
-/// Web：全部交易账户的策略日线能效（OKX 日波动 |高−低| 与现金余额非负日增量比值），同页对比。
+/// Web：策略效能——每日波动率、现金收益率%（较 UTC 月初）、策略能效，全账户同页对比。
 class WebStrategyPerformanceScreen extends StatefulWidget {
   const WebStrategyPerformanceScreen({super.key, this.sharedBots = const []});
 
@@ -524,7 +524,7 @@ class _WebStrategyPerformanceScreenState
                           plottedBundles[bar].bot.tradingbotName ??
                               plottedBundles[bar].bot.tradingbotId;
                       return LineTooltipItem(
-                        '$name · $day\n能效 ${_fmtAxisEfficiency(s.y)}',
+                        '$name · $day\n策略能效 ${_fmtAxisEfficiency(s.y)}',
                         TextStyle(
                           color: AppFinanceStyle.valueColor,
                           fontSize: 12,
@@ -618,7 +618,7 @@ class _WebStrategyPerformanceScreenState
           row([
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              child: Text('波动%', style: labStyle),
+              child: Text('每日波动率%', style: labStyle),
             ),
             ...rows.map(
               (e) => Padding(
@@ -634,7 +634,7 @@ class _WebStrategyPerformanceScreenState
           row([
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              child: Text('现金增量 USDT', style: labStyle),
+              child: Text('当日现金增量 USDT', style: labStyle),
             ),
             ...rows.map(
               (e) => Padding(
@@ -654,7 +654,25 @@ class _WebStrategyPerformanceScreenState
           row([
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              child: Text('现金增量%', style: labStyle),
+              child: Text('UTC 月初基准 USDT', style: labStyle),
+            ),
+            ...rows.map(
+              (e) => Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                child: Text(
+                  e.monthStartCash != null
+                      ? _fmtOpt(e.monthStartCash)
+                      : '—',
+                  style: valStyle,
+                  textAlign: TextAlign.right,
+                ),
+              ),
+            ),
+          ]),
+          row([
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              child: Text('现金收益率%', style: labStyle),
             ),
             ...rows.map(
               (e) => Padding(
@@ -670,7 +688,7 @@ class _WebStrategyPerformanceScreenState
           row([
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              child: Text('能效比', style: labStyle),
+              child: Text('策略能效', style: labStyle),
             ),
             ...rows.map(
               (e) => Padding(
@@ -817,7 +835,9 @@ class _WebStrategyPerformanceScreenState
           ),
           const SizedBox(height: 6),
           Text(
-            '${eff.instId} 日波动幅度 = |最高−最低|（OKX 日线）；能效比 = 当日现金增量 USDT ÷ 该波幅 × 1e-7。'
+            '${eff.instId}：每日波动率% = |最高−最低|÷收盘×100；'
+            '现金收益率% = 当日现金增量 USDT ÷ 当 UTC 自然月月初资金×100（无月初快照时用当日日初 sod）；'
+            '策略能效 = 当日现金增量 USDT ÷ 价格波幅 ×1e-7。'
             '$cashNote',
             style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 12),
           ),
@@ -855,23 +875,23 @@ class _WebStrategyPerformanceScreenState
                               _chartLegendRow(
                                 context,
                                 const Color.fromRGBO(245, 245, 245, 0.9),
-                                '日波动%（柱，白/黄/红）',
+                                '每日波动率%（柱：白/黄/红）',
                               ),
                               _chartLegendRow(
                                 context,
                                 const Color.fromRGBO(126, 200, 80, 0.88),
-                                '现金增量%（柱，灰/白/绿）',
+                                '现金收益率%（柱：<0.5%灰 0.5–1%白 ≥1%绿）',
                               ),
                               _chartLegendRow(
                                 context,
                                 const Color.fromRGBO(234, 179, 8, 0.95),
-                                '现金增量%（线，灰/黄/绿）',
+                                '现金收益率%（线，阈值同柱）',
                                 isLine: true,
                               ),
                               _chartLegendRow(
                                 context,
-                                const Color(0xFFEAB308),
-                                '能效比',
+                                const Color(0xFFFBBF24),
+                                '策略能效',
                                 isLine: true,
                               ),
                             ],
@@ -889,7 +909,7 @@ class _WebStrategyPerformanceScreenState
                         padding: const EdgeInsets.only(top: 12),
                         children: [
                           Text(
-                            '日明细（列为日期；波动列为 tr×1e9 整数；现金增量% 一位小数）',
+                            '日明细（日期为列；现金收益率% 一位小数；「UTC 月初基准」有值表示收益率按月初资金计算）',
                             style: Theme.of(context).textTheme.titleSmall?.copyWith(
                                   color: AppFinanceStyle.valueColor,
                                   fontWeight: FontWeight.w600,
@@ -1005,7 +1025,7 @@ class _WebStrategyPerformanceScreenState
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              '按时间对比各账户「能效比」（现金日增量 USDT ÷ 当日价格波幅 × 1e-7），'
+                              '按时间对比各账户「策略能效」（当日现金增量 USDT ÷ 当日价格波幅 × 1e-7）。'
                               '折线持续走弱或长期垫底可优先人工干预。账户卡片上的绿/黄/灰仍表示相对排名。',
                               style: AppFinanceStyle.labelTextStyle(context)
                                   .copyWith(fontSize: 12),

@@ -32,7 +32,7 @@ class _NavItem {
 /// 浏览器端主导航：侧栏 / 抽屉 + 多 Tab，与移动端 [MainScreen] 分流。
 /// 侧栏使用可滚动列表，避免条目过多时在矮视口下看不到「用户管理」等项。
 /// 顺序：主页 → 仪表盘 → 账户收益 → 策略能效 → 策略启停（交易员/管理员）
-/// → 自动收网测试（策略分析师）→ 用户管理（管理员）→ 下载 → 设置。
+/// → 收网测试（策略分析师）→ 用户管理（管理员）→ 下载 → 设置。
 class WebMainShell extends StatefulWidget {
   const WebMainShell({super.key, this.onLogout});
 
@@ -71,10 +71,7 @@ class _WebMainShellState extends State<WebMainShell> {
           title: '账户收益',
           icon: Icons.insights_outlined,
           selectedIcon: Icons.insights,
-          page: WebAccountProfitScreen(
-            sharedBots: bots,
-            embedInShell: true,
-          ),
+          page: WebAccountProfitScreen(sharedBots: bots, embedInShell: true),
         ),
       if (_role.canViewStrategyStart)
         _NavItem(
@@ -92,13 +89,10 @@ class _WebMainShellState extends State<WebMainShell> {
         ),
       if (_role.canViewAutoNettingTest)
         _NavItem(
-          title: '自动收网',
+          title: '收网测试',
           icon: Icons.science_outlined,
           selectedIcon: Icons.science,
-          page: WebAutoNettingTestScreen(
-            sharedBots: bots,
-            embedInShell: true,
-          ),
+          page: WebAutoNettingTestScreen(sharedBots: bots, embedInShell: true),
         ),
       if (_role.canManageUsers)
         _NavItem(
@@ -142,7 +136,10 @@ class _WebMainShellState extends State<WebMainShell> {
               borderRadius: BorderRadius.circular(10),
               onTap: () => setState(() => _index = i),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 6,
+                  vertical: 10,
+                ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -164,8 +161,9 @@ class _WebMainShellState extends State<WebMainShell> {
                             ? AppFinanceStyle.valueColor
                             : AppFinanceStyle.labelColor,
                         fontSize: 11,
-                        fontWeight:
-                            selected ? FontWeight.w600 : FontWeight.w400,
+                        fontWeight: selected
+                            ? FontWeight.w600
+                            : FontWeight.w400,
                         height: 1.15,
                       ),
                     ),
@@ -250,10 +248,7 @@ class _WebMainShellState extends State<WebMainShell> {
         ),
         body: Row(
           children: [
-            SizedBox(
-              width: 104,
-              child: _buildScrollableSideNav(items),
-            ),
+            SizedBox(width: 104, child: _buildScrollableSideNav(items)),
             const VerticalDivider(width: 1, thickness: 1),
             Expanded(child: body),
           ],

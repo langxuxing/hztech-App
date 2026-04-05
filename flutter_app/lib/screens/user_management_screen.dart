@@ -6,6 +6,29 @@ import '../auth/app_user_role.dart';
 import '../secure/prefs.dart';
 import '../theme/finance_style.dart';
 
+String _userFacingError(Object e) {
+  if (e is StateError) {
+    final m = e.message;
+    if (m.isNotEmpty) return m;
+  }
+  final s = e.toString();
+  if (s.startsWith('StateError: ')) {
+    return s.substring('StateError: '.length).trim();
+  }
+  if (s.startsWith('Exception: ')) {
+    return s.substring('Exception: '.length).trim();
+  }
+  if (s.contains('SocketException') ||
+      s.contains('ClientException') ||
+      s.contains('Connection refused')) {
+    return '网络异常，请检查网络与后端地址';
+  }
+  if (s.contains('TimeoutException')) {
+    return '请求超时，请稍后重试';
+  }
+  return '操作失败，请稍后重试';
+}
+
 /// 管理员：维护用户角色与客户可见账户（绑定 tradingbot_id / account_id）。
 class UserManagementScreen extends StatefulWidget {
   const UserManagementScreen({super.key, this.embedInShell = false});
@@ -50,7 +73,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = e.toString();
+        _error = _userFacingError(e);
         _loading = false;
       });
     }
@@ -60,6 +83,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     var role = AppUserRole.trader;
     final userCtrl = TextEditingController();
     final passCtrl = TextEditingController();
+    final pass2Ctrl = TextEditingController();
     var selected = <String>{};
     final ok = await showDialog<bool>(
       context: context,
@@ -89,7 +113,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    Text('密码', style: AppFinanceStyle.labelTextStyle(context)),
+                    Text('密码（至少 6 位）', style: AppFinanceStyle.labelTextStyle(context)),
                     const SizedBox(height: 6),
                     TextField(
                       controller: passCtrl,
@@ -101,8 +125,30 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                       ),
                     ),
+                    const SizedBox(height: 12),
+                    Text('确认密码', style: AppFinanceStyle.labelTextStyle(context)),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: pass2Ctrl,
+                      obscureText: true,
+                      style: const TextStyle(color: AppFinanceStyle.valueColor),
+                      decoration: InputDecoration(
+                        filled: true,
+                        fillColor: Colors.white.withValues(alpha: 0.06),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
                     const SizedBox(height: 16),
-                    Text('角色 / 权限', style: AppFinanceStyle.labelTextStyle(context)),
+                    Text('角色', style: AppFinanceStyle.labelTextStyle(context)),
+                    const SizedBox(height: 4),
+                    Text(
+                      '客户需勾选下方可见账户；其他角色不按账户过滤。',
+                      style: TextStyle(
+                        color: AppFinanceStyle.labelColor.withValues(alpha: 0.85),
+                        fontSize: 12,
+                        height: 1.35,
+                      ),
+                    ),
                     const SizedBox(height: 8),
                     DropdownMenu<AppUserRole>(
                       key: ValueKey<AppUserRole>(role),
@@ -187,14 +233,28 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     );
     final newUsername = userCtrl.text.trim();
     final newPassword = passCtrl.text;
+    final newPassword2 = pass2Ctrl.text;
     userCtrl.dispose();
     passCtrl.dispose();
+    pass2Ctrl.dispose();
     if (ok != true || !mounted) return;
     final u = newUsername;
     final p = newPassword;
     if (u.isEmpty || p.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('请输入用户名和密码')),
+      );
+      return;
+    }
+    if (p.length < 6) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('密码至少 6 位')),
+      );
+      return;
+    }
+    if (p != newPassword2) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('两次输入的密码不一致')),
       );
       return;
     }
@@ -219,7 +279,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('创建失败: $e')),
+        SnackBar(content: Text(_userFacingError(e))),
       );
     }
   }
@@ -255,14 +315,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       final base = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
       final api = ApiClient(base, token: token);
-      final deleted = await api.deleteUser(row.id);
+      await api.deleteUser(row.id);
       if (!mounted) return;
-      if (!deleted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('删除失败')),
-        );
-        return;
-      }
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('已删除')),
       );
@@ -270,7 +324,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('删除异常: $e')),
+        SnackBar(content: Text(_userFacingError(e))),
       );
     }
   }
@@ -295,6 +349,15 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text('角色', style: AppFinanceStyle.labelTextStyle(context)),
+                    const SizedBox(height: 4),
+                    Text(
+                      '改为非管理员时，若该用户是最后一位管理员，将无法保存。',
+                      style: TextStyle(
+                        color: AppFinanceStyle.labelColor.withValues(alpha: 0.85),
+                        fontSize: 12,
+                        height: 1.35,
+                      ),
+                    ),
                     const SizedBox(height: 8),
                     DropdownMenu<AppUserRole>(
                       key: ValueKey<AppUserRole>(role),
@@ -383,18 +446,12 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       final token = await _prefs.authToken;
       final api = ApiClient(base, token: token);
       final links = role == AppUserRole.customer ? selected.toList() : <String>[];
-      final updated = await api.patchUser(
+      await api.patchUser(
         row.id,
         role: role.apiValue,
         linkedAccountIds: role == AppUserRole.customer ? links : [],
       );
       if (!mounted) return;
-      if (updated == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('保存失败')),
-        );
-        return;
-      }
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('已保存')),
       );
@@ -402,9 +459,71 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('保存异常: $e')),
+        SnackBar(content: Text(_userFacingError(e))),
       );
     }
+  }
+
+  Widget _embedHintBanner() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: Material(
+        color: const Color(0xFF1e1e2a),
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Text(
+            '在此维护登录账号、角色与客户可见账户。请勿删除全部管理员；至少保留一名可登录的管理员账号。',
+            style: TextStyle(
+              color: AppFinanceStyle.labelColor.withValues(alpha: 0.95),
+              fontSize: 13,
+              height: 1.45,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _emptyState() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 48, 24, 24),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Icons.group_add_outlined,
+            size: 56,
+            color: AppFinanceStyle.labelColor.withValues(alpha: 0.5),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            '暂无用户',
+            style: AppFinanceStyle.labelTextStyle(context).copyWith(
+                  color: AppFinanceStyle.valueColor,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w600,
+                ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '点击右下角「新增用户」创建第一个账号',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: AppFinanceStyle.labelColor.withValues(alpha: 0.9),
+              fontSize: 14,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 24),
+          FilledButton.icon(
+            onPressed: _addUser,
+            icon: const Icon(Icons.person_add_outlined),
+            label: const Text('新增用户'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -429,60 +548,75 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                   ),
                 ),
               )
-            : RefreshIndicator(
-                onRefresh: _reload,
-                child: ListView.separated(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
-                  itemCount: _users.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 8),
-                  itemBuilder: (ctx, i) {
-                    final u = _users[i];
-                    return Material(
-                      color: const Color(0xFF16161f),
-                      borderRadius: BorderRadius.circular(12),
-                      child: ListTile(
-                        title: Text(
-                          u.username,
-                          style: const TextStyle(
-                            color: AppFinanceStyle.valueColor,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        subtitle: Text(
-                          '${AppUserRole.label(AppUserRole.fromApi(u.role))}'
-                          '${u.linkedAccountIds.isNotEmpty ? ' · ${u.linkedAccountIds.length} 个绑定账户' : ''}',
-                          style: TextStyle(
-                            color: AppFinanceStyle.labelColor.withValues(alpha: 0.95),
-                            fontSize: 13,
-                          ),
-                        ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              tooltip: '编辑权限',
-                              icon: const Icon(Icons.edit_outlined,
-                                  color: AppFinanceStyle.labelColor),
-                              onPressed: () => _editUser(u),
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (widget.embedInShell) _embedHintBanner(),
+                  Expanded(
+                    child: RefreshIndicator(
+                      onRefresh: _reload,
+                      child: _users.isEmpty
+                          ? ListView(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              padding: const EdgeInsets.only(bottom: 88),
+                              children: [_emptyState()],
+                            )
+                          : ListView.separated(
+                              physics: const AlwaysScrollableScrollPhysics(),
+                              padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
+                              itemCount: _users.length,
+                              separatorBuilder: (_, __) => const SizedBox(height: 8),
+                              itemBuilder: (ctx, i) {
+                                final u = _users[i];
+                                return Material(
+                                  color: const Color(0xFF16161f),
+                                  borderRadius: BorderRadius.circular(12),
+                                  child: ListTile(
+                                    title: Text(
+                                      u.username,
+                                      style: const TextStyle(
+                                        color: AppFinanceStyle.valueColor,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    subtitle: Text(
+                                      '${AppUserRole.label(AppUserRole.fromApi(u.role))}'
+                                      '${u.linkedAccountIds.isNotEmpty ? ' · ${u.linkedAccountIds.length} 个绑定账户' : ''}',
+                                      style: TextStyle(
+                                        color: AppFinanceStyle.labelColor.withValues(alpha: 0.95),
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                    trailing: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        IconButton(
+                                          tooltip: '编辑角色与可见账户',
+                                          icon: const Icon(Icons.edit_outlined,
+                                              color: AppFinanceStyle.labelColor),
+                                          onPressed: () => _editUser(u),
+                                        ),
+                                        IconButton(
+                                          tooltip: '删除用户',
+                                          icon: Icon(Icons.delete_outline,
+                                              color: Colors.red.shade300),
+                                          onPressed: () => _deleteUser(u),
+                                        ),
+                                      ],
+                                    ),
+                                    onTap: () => _editUser(u),
+                                  ),
+                                );
+                              },
                             ),
-                            IconButton(
-                              tooltip: '删除',
-                              icon: Icon(Icons.delete_outline,
-                                  color: Colors.red.shade300),
-                              onPressed: () => _deleteUser(u),
-                            ),
-                          ],
-                        ),
-                        onTap: () => _editUser(u),
-                      ),
-                    );
-                  },
-                ),
+                    ),
+                  ),
+                ],
               );
 
     return Scaffold(
       backgroundColor: AppFinanceStyle.backgroundDark,
-      floatingActionButton: _loading || _error != null
+      floatingActionButton: _loading || _error != null || _users.isEmpty
           ? null
           : FloatingActionButton.extended(
               onPressed: _addUser,
