@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 import '../api/models.dart';
 import '../theme/finance_style.dart';
 
+/// 深色背景上 X 轴日期刻度（与日历无数据格同档可读性）。
+const _kChartAxisDateLabel = Color(0xFFC8C8C8);
+
 DateTime? _parseSnapshotAt(String raw) {
   if (raw.isEmpty) return null;
   final s = raw.length >= 19 ? raw.substring(0, 19) : raw;
@@ -18,6 +21,19 @@ List<BotProfitSnapshot> _sortedByTime(List<BotProfitSnapshot> raw) {
   }
   withDates.sort((a, b) => a.d.compareTo(b.d));
   return withDates.map((e) => e.s).toList();
+}
+
+/// X 轴刻度：点很多时只标若干处，避免重叠。
+Set<int> _lineChartXLabelIndices(int n) {
+  if (n <= 0) return {};
+  if (n <= 8) return Set<int>.from(List<int>.generate(n, (i) => i));
+  const cap = 6;
+  final s = <int>{0, n - 1};
+  final step = (n - 1) / (cap - 1);
+  for (var k = 1; k < cap - 1; k++) {
+    s.add((k * step).round().clamp(1, n - 2));
+  }
+  return s;
 }
 
 /// 单序列：相对首条快照 `initial_balance` 的收益率（%）。
@@ -112,6 +128,8 @@ class SnapshotPercentLineChart extends StatelessWidget {
         ? AppFinanceStyle.profitGreenEnd
         : _cashLineColor;
 
+    final xLabelIdx = _lineChartXLabelIndices(sorted.length);
+
     final chart = LineChart(
       LineChartData(
         minX: 0,
@@ -119,7 +137,43 @@ class SnapshotPercentLineChart extends StatelessWidget {
         minY: minY - pad,
         maxY: maxY + pad,
         gridData: const FlGridData(show: false),
-        titlesData: const FlTitlesData(show: false),
+        titlesData: FlTitlesData(
+          show: true,
+          topTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+          rightTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+          leftTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+          bottomTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              reservedSize: compact ? 18 : 24,
+              interval: 1,
+              getTitlesWidget: (v, meta) {
+                final nPts = sorted.length;
+                if (nPts == 0) return const SizedBox.shrink();
+                final i = v.round().clamp(0, nPts - 1);
+                if (!xLabelIdx.contains(i)) return const SizedBox.shrink();
+                final d = _parseSnapshotAt(sorted[i].snapshotAt);
+                final t = d == null ? '' : '${d.month}/${d.day}';
+                return Padding(
+                  padding: EdgeInsets.only(top: compact ? 2 : 4),
+                  child: Text(
+                    t,
+                    style: TextStyle(
+                      color: _kChartAxisDateLabel,
+                      fontSize: compact ? 8 : 10,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
         borderData: FlBorderData(show: false),
         lineBarsData: [
           LineChartBarData(
@@ -137,7 +191,7 @@ class SnapshotPercentLineChart extends StatelessWidget {
     );
 
     if (compact) {
-      return chart;
+      return SizedBox.expand(child: chart);
     }
 
     return Column(

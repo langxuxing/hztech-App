@@ -15,7 +15,11 @@ DateTime? _parseSnapshotAt(String raw) {
 typedef MonthEndSnapshotValue = double Function(BotProfitSnapshot snapshot);
 
 class _MonthStat {
-  _MonthStat({required this.year, required this.month, required this.monthlyPnL});
+  _MonthStat({
+    required this.year,
+    required this.month,
+    required this.monthlyPnL,
+  });
 
   final int year;
   final int month;
@@ -37,7 +41,8 @@ List<BotProfitSnapshot> _sortedSnapshotsWithDates(List<BotProfitSnapshot> raw) {
 }
 
 DateTime _defaultFocusedMonth(List<BotProfitSnapshot> sorted) {
-  if (sorted.isEmpty) return DateTime(DateTime.now().year, DateTime.now().month);
+  if (sorted.isEmpty)
+    return DateTime(DateTime.now().year, DateTime.now().month);
   final last = _parseSnapshotAt(sorted.last.snapshotAt);
   if (last == null) return DateTime(DateTime.now().year, DateTime.now().month);
   return DateTime(last.year, last.month);
@@ -245,6 +250,50 @@ double _barMinY(List<_MonthStat> monthly) {
   return minV - pad;
 }
 
+double _barMaxYFromPnls(List<double> pnls) {
+  if (pnls.isEmpty) return 1;
+  var maxV = pnls.first;
+  var minV = pnls.first;
+  for (final e in pnls) {
+    if (e > maxV) maxV = e;
+    if (e < minV) minV = e;
+  }
+  if (maxV <= 0) return 1.0;
+  final pad = (maxV - minV).abs() * 0.12 + 1;
+  return maxV + pad;
+}
+
+double _barMinYFromPnls(List<double> pnls) {
+  if (pnls.isEmpty) return -1;
+  var maxV = pnls.first;
+  var minV = pnls.first;
+  for (final e in pnls) {
+    if (e > maxV) maxV = e;
+    if (e < minV) minV = e;
+  }
+  if (minV >= 0) return 0.0;
+  final pad = (maxV - minV).abs() * 0.12 + 1;
+  return minV - pad;
+}
+
+bool _hasSnapshotInMonth(
+  List<BotProfitSnapshot> sorted,
+  int year,
+  int month,
+) {
+  for (final s in sorted) {
+    final d = _parseSnapshotAt(s.snapshotAt);
+    if (d != null && d.year == year && d.month == month) return true;
+  }
+  return false;
+}
+
+bool _showDayOnBarAxis(int day, int lastDay) {
+  if (lastDay <= 12) return true;
+  if (day == 1 || day == lastDay) return true;
+  return day % 5 == 0;
+}
+
 /// 截止 [endMonth]（含）之前最多 [maxBars] 个自然月的柱数据。
 List<_MonthStat> _visibleMonthlyBars(
   List<_MonthStat> all,
@@ -281,15 +330,27 @@ double calendarGridPixelHeightForCap(
   const headerH = 22.0;
   const rows = 6;
   final rowSpacing = compact ? 4.0 : 6.0;
-  final avail =
-      gridMaxHeight - headerH - rowSpacing - rows * rowSpacing;
+  final avail = gridMaxHeight - headerH - rowSpacing - rows * rowSpacing;
   final cellHeight = (avail / rows).clamp(28.0, 58.0);
   return headerH + rowSpacing + rows * (cellHeight + rowSpacing);
 }
 
+/// 与 [_CalendarGrid] 占位行数一致：某月日历主体占用的行数（含首尾空白格）。
+int calendarGridRowCountForMonth(int year, int month) {
+  final firstWeekday = DateTime(year, month, 1).weekday;
+  final leading = firstWeekday - 1;
+  final daysInMonth = DateTime(year, month + 1, 0).day;
+  var cells = leading + daysInMonth;
+  while (cells % 7 != 0) {
+    cells++;
+  }
+  return cells ~/ 7;
+}
+
 // --- 柱状图卡片 ---
 
-/// 月度时点余额差分：柱状图（自然月汇总），可选截止月份，最多展示 12 个月。
+/// 时点余额差分柱状图：默认按**自然月**汇总（可选截止月、最多 [maxBars] 根柱）；
+/// [useDailyBarsForEndMonth] 为 true 时改为展示截止月当月的**按日**差分（与日历一致）。
 class MonthEndValueBarPanel extends StatefulWidget {
   const MonthEndValueBarPanel({
     super.key,
@@ -301,10 +362,17 @@ class MonthEndValueBarPanel extends StatefulWidget {
     this.maxBars = 12,
     this.compact = false,
     this.barChartHeight,
+
     /// 为 false 时由父级提供月份条（与 [selectedEndMonth]、[onSelectedEndMonthChanged] 配合）。
     this.showMonthNavigator = true,
     this.selectedEndMonth,
     this.onSelectedEndMonthChanged,
+
+    /// 为 true 时柱图在父级有限高度内 [Expanded] 铺满，与折线/日历三列对齐。
+    this.expandChartArea = false,
+
+    /// 为 true 时展示 [selectedEndMonth]（或内部截止月）当月的**按日**余额差分柱（与 [MonthEndValueCalendarPanel] 口径一致），不再展示多月汇总柱。
+    this.useDailyBarsForEndMonth = false,
   });
 
   final List<BotProfitSnapshot> snapshots;
@@ -313,13 +381,18 @@ class MonthEndValueBarPanel extends StatefulWidget {
   final MonthEndSnapshotValue valueAt;
   final String emptyMessage;
   final int maxBars;
+
   /// 三列栅格等：缩小标题与说明，柱图高度由 [barChartHeight] 或缺省值决定。
   final bool compact;
   final double? barChartHeight;
+  final bool expandChartArea;
   final bool showMonthNavigator;
+
   /// 受控：柱状图截止月（与日历「当前月」对齐时使用同一 [DateTime]）。
   final DateTime? selectedEndMonth;
   final ValueChanged<DateTime>? onSelectedEndMonthChanged;
+
+  final bool useDailyBarsForEndMonth;
 
   @override
   State<MonthEndValueBarPanel> createState() => _MonthEndValueBarPanelState();
@@ -330,7 +403,8 @@ class _MonthEndValueBarPanelState extends State<MonthEndValueBarPanel> {
   DateTime? _endMonthManual;
 
   bool get _controlled =>
-      widget.selectedEndMonth != null && widget.onSelectedEndMonthChanged != null;
+      widget.selectedEndMonth != null &&
+      widget.onSelectedEndMonthChanged != null;
 
   @override
   void didUpdateWidget(covariant MonthEndValueBarPanel oldWidget) {
@@ -361,33 +435,234 @@ class _MonthEndValueBarPanelState extends State<MonthEndValueBarPanel> {
     final visible = _visibleMonthlyBars(monthly, end, widget.maxBars);
     final barH = widget.barChartHeight ?? (widget.compact ? 140.0 : 200.0);
     final titleStyle = widget.compact
-        ? (Theme.of(context).textTheme.titleMedium ?? const TextStyle()).copyWith(
-            color: AppFinanceStyle.labelColor,
-            fontWeight: FontWeight.w700,
-            fontSize: 15,
-          )
-        : (Theme.of(context).textTheme.titleLarge ?? const TextStyle()).copyWith(
-            color: AppFinanceStyle.labelColor,
-            fontSize: (Theme.of(context).textTheme.titleLarge?.fontSize ?? 22) + 4,
-          );
+        ? (Theme.of(context).textTheme.titleMedium ?? const TextStyle())
+              .copyWith(
+                color: AppFinanceStyle.labelColor,
+                fontWeight: FontWeight.w700,
+                fontSize: 15,
+              )
+        : (Theme.of(context).textTheme.titleLarge ?? const TextStyle())
+              .copyWith(
+                color: AppFinanceStyle.labelColor,
+                fontSize:
+                    (Theme.of(context).textTheme.titleLarge?.fontSize ?? 22) +
+                    4,
+              );
+
+    Widget barChartSized(double height) {
+      return SizedBox(
+        height: height,
+        child: BarChart(
+          BarChartData(
+            alignment: BarChartAlignment.spaceAround,
+            maxY: _barMaxY(visible),
+            minY: _barMinY(visible),
+            gridData: FlGridData(
+              show: true,
+              drawVerticalLine: false,
+              getDrawingHorizontalLine: (v) => FlLine(
+                color: Colors.white.withValues(alpha: 0.06),
+                strokeWidth: 1,
+              ),
+            ),
+            borderData: FlBorderData(show: false),
+            titlesData: FlTitlesData(
+              show: true,
+              topTitles: const AxisTitles(
+                sideTitles: SideTitles(showTitles: false),
+              ),
+              rightTitles: const AxisTitles(
+                sideTitles: SideTitles(showTitles: false),
+              ),
+              leftTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: true,
+                  reservedSize: widget.compact ? 32 : 40,
+                  getTitlesWidget: (v, m) => Text(
+                    v.toStringAsFixed(0),
+                    style: TextStyle(
+                      color: AppFinanceStyle.labelColor.withValues(alpha: 0.85),
+                      fontSize: widget.compact ? 8 : 10,
+                    ),
+                  ),
+                ),
+              ),
+              bottomTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: true,
+                  reservedSize: widget.compact ? 22 : 28,
+                  getTitlesWidget: (v, m) {
+                    final i = v.round();
+                    if (i < 0 || i >= visible.length)
+                      return const SizedBox.shrink();
+                    final label = visible[i].label;
+                    final short = label.length >= 7
+                        ? label.substring(2)
+                        : label;
+                    return Padding(
+                      padding: EdgeInsets.only(top: widget.compact ? 2 : 6),
+                      child: Text(
+                        short,
+                        style: TextStyle(
+                          color: AppFinanceStyle.labelColor.withValues(
+                            alpha: 0.9,
+                          ),
+                          fontSize: widget.compact ? 7 : 9,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+            barGroups: [
+              for (var i = 0; i < visible.length; i++)
+                BarChartGroupData(
+                  x: i,
+                  barRods: [
+                    BarChartRodData(
+                      toY: visible[i].monthlyPnL,
+                      width: 14,
+                      borderRadius: const BorderRadius.vertical(
+                        top: Radius.circular(4),
+                      ),
+                      color: visible[i].monthlyPnL >= 0
+                          ? AppFinanceStyle.profitGreenEnd
+                          : Colors.red.withValues(alpha: 0.85),
+                    ),
+                  ],
+                ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    Widget dailyBarChartSized(double height) {
+      final lastDay = DateTime(end.year, end.month + 1, 0).day;
+      final daily = _dailyDeltaForMonth(sorted, end, widget.valueAt, fallback);
+      final pnls = <double>[
+        for (var d = 1; d <= lastDay; d++) daily[d] ?? 0.0,
+      ];
+      return SizedBox(
+        height: height,
+        child: LayoutBuilder(
+          builder: (context, cons) {
+            final rodW = (cons.maxWidth / lastDay * 0.42).clamp(2.5, 7.5);
+            return BarChart(
+              BarChartData(
+                alignment: BarChartAlignment.spaceBetween,
+                maxY: _barMaxYFromPnls(pnls),
+                minY: _barMinYFromPnls(pnls),
+                gridData: FlGridData(
+                  show: true,
+                  drawVerticalLine: false,
+                  getDrawingHorizontalLine: (v) => FlLine(
+                    color: Colors.white.withValues(alpha: 0.06),
+                    strokeWidth: 1,
+                  ),
+                ),
+                borderData: FlBorderData(show: false),
+                titlesData: FlTitlesData(
+                  show: true,
+                  topTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  rightTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  leftTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: widget.compact ? 32 : 40,
+                      getTitlesWidget: (v, m) => Text(
+                        v.toStringAsFixed(0),
+                        style: TextStyle(
+                          color: AppFinanceStyle.labelColor.withValues(
+                            alpha: 0.85,
+                          ),
+                          fontSize: widget.compact ? 8 : 10,
+                        ),
+                      ),
+                    ),
+                  ),
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: widget.compact ? 20 : 26,
+                      getTitlesWidget: (v, m) {
+                        final i = v.round();
+                        final day = i + 1;
+                        if (i < 0 || day > lastDay) {
+                          return const SizedBox.shrink();
+                        }
+                        if (!_showDayOnBarAxis(day, lastDay)) {
+                          return const SizedBox.shrink();
+                        }
+                        return Padding(
+                          padding: EdgeInsets.only(top: widget.compact ? 2 : 4),
+                          child: Text(
+                            '$day',
+                            style: TextStyle(
+                              color: AppFinanceStyle.labelColor.withValues(
+                                alpha: 0.9,
+                              ),
+                              fontSize: widget.compact ? 7 : 9,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                barGroups: [
+                  for (var i = 0; i < lastDay; i++)
+                    BarChartGroupData(
+                      x: i,
+                      barRods: [
+                        BarChartRodData(
+                          toY: pnls[i],
+                          width: rodW,
+                          borderRadius: const BorderRadius.vertical(
+                            top: Radius.circular(3),
+                          ),
+                          color: pnls[i] >= 0
+                              ? AppFinanceStyle.profitGreenEnd
+                              : Colors.red.withValues(alpha: 0.85),
+                        ),
+                      ],
+                    ),
+                ],
+              ),
+            );
+          },
+        ),
+      );
+    }
 
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: widget.expandChartArea
+          ? MainAxisSize.max
+          : MainAxisSize.min,
       children: [
         Text(widget.title, style: titleStyle),
         if (!widget.compact) ...[
           const SizedBox(height: 8),
           Text(
             widget.description,
-            style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 12),
+            style: AppFinanceStyle.labelTextStyle(
+              context,
+            ).copyWith(fontSize: 12),
           ),
         ],
-        if (monthly.isNotEmpty && !widget.compact) ...[
+        if (monthly.isNotEmpty && !widget.compact && !widget.useDailyBarsForEndMonth) ...[
           const SizedBox(height: 8),
           Text(
             '使用左右箭头选择截止月份；柱状图展示此前最多 ${widget.maxBars} 个自然月（有快照的月份）。',
-            style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 11),
+            style: AppFinanceStyle.labelTextStyle(
+              context,
+            ).copyWith(fontSize: 11),
           ),
         ],
         SizedBox(height: widget.compact ? 6 : 12),
@@ -406,10 +681,9 @@ class _MonthEndValueBarPanelState extends State<MonthEndValueBarPanel> {
                 if (!widget.compact)
                   Text(
                     '截止月份',
-                    style: AppFinanceStyle.labelTextStyle(context).copyWith(
-                      fontWeight: FontWeight.w600,
-                      fontSize: 13,
-                    ),
+                    style: AppFinanceStyle.labelTextStyle(
+                      context,
+                    ).copyWith(fontWeight: FontWeight.w600, fontSize: 13),
                   ),
                 if (!widget.compact) const Spacer(),
                 IconButton(
@@ -419,7 +693,10 @@ class _MonthEndValueBarPanelState extends State<MonthEndValueBarPanel> {
                   constraints: widget.compact
                       ? const BoxConstraints(minWidth: 32, minHeight: 32)
                       : null,
-                  icon: const Icon(Icons.chevron_left, color: AppFinanceStyle.valueColor),
+                  icon: const Icon(
+                    Icons.chevron_left,
+                    color: AppFinanceStyle.valueColor,
+                  ),
                   onPressed: () {
                     final cur = _effectiveEndMonth(monthly);
                     final next = _clampEndMonthToData(
@@ -448,7 +725,10 @@ class _MonthEndValueBarPanelState extends State<MonthEndValueBarPanel> {
                   constraints: widget.compact
                       ? const BoxConstraints(minWidth: 32, minHeight: 32)
                       : null,
-                  icon: const Icon(Icons.chevron_right, color: AppFinanceStyle.valueColor),
+                  icon: const Icon(
+                    Icons.chevron_right,
+                    color: AppFinanceStyle.valueColor,
+                  ),
                   onPressed: () {
                     final cur = _effectiveEndMonth(monthly);
                     final next = _clampEndMonthToData(
@@ -468,90 +748,49 @@ class _MonthEndValueBarPanelState extends State<MonthEndValueBarPanel> {
             SizedBox(height: widget.compact ? 4 : 8),
           ] else
             SizedBox(height: widget.compact ? 2 : 4),
-          if (visible.isEmpty)
+          if (widget.useDailyBarsForEndMonth) ...[
+            if (!_hasSnapshotInMonth(sorted, end.year, end.month))
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                child: Text(
+                  '该月无快照',
+                  style: TextStyle(
+                    color: AppFinanceStyle.labelColor,
+                    fontSize: 13,
+                  ),
+                ),
+              )
+            else if (widget.expandChartArea)
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (context, cons) {
+                    return dailyBarChartSized(cons.maxHeight);
+                  },
+                ),
+              )
+            else
+              dailyBarChartSized(barH),
+          ] else if (visible.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 24),
               child: Text(
                 '当前截止月份之前无可用月份数据',
-                style: TextStyle(color: AppFinanceStyle.labelColor, fontSize: 13),
+                style: TextStyle(
+                  color: AppFinanceStyle.labelColor,
+                  fontSize: 13,
+                ),
+              ),
+            )
+          else if (widget.expandChartArea)
+            Expanded(
+              child: LayoutBuilder(
+                builder: (context, cons) {
+                  return barChartSized(cons.maxHeight);
+                },
               ),
             )
           else
-            SizedBox(
-              height: barH,
-              child: BarChart(
-                BarChartData(
-                  alignment: BarChartAlignment.spaceAround,
-                  maxY: _barMaxY(visible),
-                  minY: _barMinY(visible),
-                  gridData: FlGridData(
-                    show: true,
-                    drawVerticalLine: false,
-                    getDrawingHorizontalLine: (v) => FlLine(
-                      color: Colors.white.withValues(alpha: 0.06),
-                      strokeWidth: 1,
-                    ),
-                  ),
-                  borderData: FlBorderData(show: false),
-                  titlesData: FlTitlesData(
-                    show: true,
-                    topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                    rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                    leftTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                        reservedSize: widget.compact ? 32 : 40,
-                        getTitlesWidget: (v, m) => Text(
-                          v.toStringAsFixed(0),
-                          style: TextStyle(
-                            color: AppFinanceStyle.labelColor.withValues(alpha: 0.85),
-                            fontSize: widget.compact ? 8 : 10,
-                          ),
-                        ),
-                      ),
-                    ),
-                    bottomTitles: AxisTitles(
-                      sideTitles: SideTitles(
-                        showTitles: true,
-                      reservedSize: widget.compact ? 22 : 28,
-                      getTitlesWidget: (v, m) {
-                        final i = v.round();
-                        if (i < 0 || i >= visible.length) return const SizedBox.shrink();
-                        final label = visible[i].label;
-                        final short = label.length >= 7 ? label.substring(2) : label;
-                        return Padding(
-                          padding: EdgeInsets.only(top: widget.compact ? 2 : 6),
-                          child: Text(
-                            short,
-                            style: TextStyle(
-                              color: AppFinanceStyle.labelColor.withValues(alpha: 0.9),
-                              fontSize: widget.compact ? 7 : 9,
-                            ),
-                          ),
-                        );
-                      },
-                      ),
-                    ),
-                  ),
-                  barGroups: [
-                    for (var i = 0; i < visible.length; i++)
-                      BarChartGroupData(
-                        x: i,
-                        barRods: [
-                          BarChartRodData(
-                            toY: visible[i].monthlyPnL,
-                            width: 14,
-                            borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
-                            color: visible[i].monthlyPnL >= 0
-                                ? AppFinanceStyle.profitGreenEnd
-                                : Colors.red.withValues(alpha: 0.85),
-                          ),
-                        ],
-                      ),
-                  ],
-                ),
-              ),
-            ),
+            barChartSized(barH),
         ],
       ],
     );
@@ -573,10 +812,15 @@ class MonthEndValueCalendarPanel extends StatefulWidget {
     this.showMonthNavigator = true,
     this.focusedMonth,
     this.onFocusedMonthChanged,
+
     /// 限制日历网格最大高度时，按比例缩小单元格（与柱图/折线同卡无内滚动）。
     this.gridMaxHeight,
+
     /// 按「日」索引的平仓笔数（与后端 UTC 日一致）；与 [snapshots] 日损益并列展示。
     this.dailyCloseCounts,
+
+    /// 为 true 时日历网格在父级有限高度内 [Expanded] 铺满，与折线/柱图三列对齐。
+    this.expandGridArea = false,
   });
 
   final List<BotProfitSnapshot> snapshots;
@@ -590,12 +834,15 @@ class MonthEndValueCalendarPanel extends StatefulWidget {
   final ValueChanged<DateTime>? onFocusedMonthChanged;
   final double? gridMaxHeight;
   final Map<int, int>? dailyCloseCounts;
+  final bool expandGridArea;
 
   @override
-  State<MonthEndValueCalendarPanel> createState() => _MonthEndValueCalendarPanelState();
+  State<MonthEndValueCalendarPanel> createState() =>
+      _MonthEndValueCalendarPanelState();
 }
 
-class _MonthEndValueCalendarPanelState extends State<MonthEndValueCalendarPanel> {
+class _MonthEndValueCalendarPanelState
+    extends State<MonthEndValueCalendarPanel> {
   late DateTime _focusedMonth;
 
   bool get _controlled =>
@@ -604,14 +851,20 @@ class _MonthEndValueCalendarPanelState extends State<MonthEndValueCalendarPanel>
   @override
   void initState() {
     super.initState();
-    _focusedMonth = _defaultFocusedMonth(_sortedSnapshotsWithDates(widget.snapshots));
+    _focusedMonth = _defaultFocusedMonth(
+      _sortedSnapshotsWithDates(widget.snapshots),
+    );
   }
 
   @override
   void didUpdateWidget(covariant MonthEndValueCalendarPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.snapshots.isEmpty && widget.snapshots.isNotEmpty && !_controlled) {
-      _focusedMonth = _defaultFocusedMonth(_sortedSnapshotsWithDates(widget.snapshots));
+    if (oldWidget.snapshots.isEmpty &&
+        widget.snapshots.isNotEmpty &&
+        !_controlled) {
+      _focusedMonth = _defaultFocusedMonth(
+        _sortedSnapshotsWithDates(widget.snapshots),
+      );
     }
   }
 
@@ -642,26 +895,32 @@ class _MonthEndValueCalendarPanelState extends State<MonthEndValueCalendarPanel>
     final focus = _monthForBuild(sorted);
     final daily = _dailyDeltaForMonth(sorted, focus, widget.valueAt, fallback);
     final titleStyle = widget.compact
-        ? (Theme.of(context).textTheme.titleMedium ?? const TextStyle()).copyWith(
-            color: AppFinanceStyle.labelColor,
-            fontWeight: FontWeight.w700,
-            fontSize: 15,
-          )
-        : (Theme.of(context).textTheme.titleLarge ?? const TextStyle()).copyWith(
-            color: AppFinanceStyle.labelColor,
-            fontSize: (Theme.of(context).textTheme.titleLarge?.fontSize ?? 22) + 4,
-          );
+        ? (Theme.of(context).textTheme.titleMedium ?? const TextStyle())
+              .copyWith(
+                color: AppFinanceStyle.labelColor,
+                fontWeight: FontWeight.w700,
+                fontSize: 15,
+              )
+        : (Theme.of(context).textTheme.titleLarge ?? const TextStyle())
+              .copyWith(
+                color: AppFinanceStyle.labelColor,
+                fontSize:
+                    (Theme.of(context).textTheme.titleLarge?.fontSize ?? 22) +
+                    4,
+              );
 
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: widget.expandGridArea ? MainAxisSize.max : MainAxisSize.min,
       children: [
         Text(widget.title, style: titleStyle),
         if (!widget.compact) ...[
           const SizedBox(height: 8),
           Text(
             widget.description,
-            style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 12),
+            style: AppFinanceStyle.labelTextStyle(
+              context,
+            ).copyWith(fontSize: 12),
           ),
         ],
         SizedBox(height: widget.compact ? 6 : 16),
@@ -684,7 +943,10 @@ class _MonthEndValueCalendarPanelState extends State<MonthEndValueCalendarPanel>
                   constraints: widget.compact
                       ? const BoxConstraints(minWidth: 32, minHeight: 32)
                       : null,
-                  icon: const Icon(Icons.chevron_left, color: AppFinanceStyle.valueColor),
+                  icon: const Icon(
+                    Icons.chevron_left,
+                    color: AppFinanceStyle.valueColor,
+                  ),
                   onPressed: () {
                     final next = DateTime(focus.year, focus.month - 1);
                     if (_controlled) {
@@ -712,7 +974,10 @@ class _MonthEndValueCalendarPanelState extends State<MonthEndValueCalendarPanel>
                   constraints: widget.compact
                       ? const BoxConstraints(minWidth: 32, minHeight: 32)
                       : null,
-                  icon: const Icon(Icons.chevron_right, color: AppFinanceStyle.valueColor),
+                  icon: const Icon(
+                    Icons.chevron_right,
+                    color: AppFinanceStyle.valueColor,
+                  ),
                   onPressed: () {
                     final next = DateTime(focus.year, focus.month + 1);
                     if (_controlled) {
@@ -729,21 +994,51 @@ class _MonthEndValueCalendarPanelState extends State<MonthEndValueCalendarPanel>
             SizedBox(height: widget.compact ? 4 : 8),
           ] else
             SizedBox(height: widget.compact ? 2 : 4),
-          _CalendarGrid(
-            year: focus.year,
-            month: focus.month,
-            dailyPnL: daily,
-            dailyCloseCounts: widget.dailyCloseCounts,
-            cellHeight: _cellHeightForGrid(),
-            compact: widget.compact,
-            headerFontSize: widget.compact ? 10 : 12,
-            rowSpacing: widget.compact ? 4 : 6,
-          ),
+          if (widget.expandGridArea)
+            Expanded(
+              child: LayoutBuilder(
+                builder: (context, cons) {
+                  final nRows = calendarGridRowCountForMonth(
+                    focus.year,
+                    focus.month,
+                  );
+                  final rs = widget.compact ? 4.0 : 6.0;
+                  const headerH = 22.0;
+                  final raw =
+                      (cons.maxHeight - headerH - rs - nRows * rs) / nRows;
+                  final ch = raw.clamp(24.0, 80.0);
+                  return _CalendarGrid(
+                    year: focus.year,
+                    month: focus.month,
+                    dailyPnL: daily,
+                    dailyCloseCounts: widget.dailyCloseCounts,
+                    cellHeight: ch,
+                    compact: widget.compact,
+                    headerFontSize: widget.compact ? 10 : 12,
+                    rowSpacing: rs,
+                  );
+                },
+              ),
+            )
+          else
+            _CalendarGrid(
+              year: focus.year,
+              month: focus.month,
+              dailyPnL: daily,
+              dailyCloseCounts: widget.dailyCloseCounts,
+              cellHeight: _cellHeightForGrid(),
+              compact: widget.compact,
+              headerFontSize: widget.compact ? 10 : 12,
+              rowSpacing: widget.compact ? 4 : 6,
+            ),
         ],
       ],
     );
   }
 }
+
+/// 深色底上日历「星期 / 无数据日期」前景色（用户指定 RGB 200,200,200）。
+const _kCalendarGridMutedText = Color(0xFFC8C8C8);
 
 class _CalendarGrid extends StatelessWidget {
   const _CalendarGrid({
@@ -794,7 +1089,7 @@ class _CalendarGrid extends StatelessWidget {
                   child: Text(
                     h,
                     style: TextStyle(
-                      color: AppFinanceStyle.labelColor.withValues(alpha: 0.75),
+                      color: _kCalendarGridMutedText,
                       fontSize: headerFontSize,
                       fontWeight: FontWeight.w600,
                     ),
@@ -826,14 +1121,21 @@ class _CalendarGrid extends StatelessWidget {
     final borderColor = !has
         ? Colors.white.withValues(alpha: 0.06)
         : (pnl >= 0 ? AppFinanceStyle.profitGreenEnd : Colors.redAccent);
-    final profitColor =
-        !has ? AppFinanceStyle.labelColor : (pnl >= 0 ? AppFinanceStyle.profitGreenEnd : Colors.redAccent);
-    final profitFontSize =
-        (cellHeight * 0.36).clamp(compact ? 14.0 : 16.0, compact ? 19.0 : 23.0);
-    final dayFontSize =
-        (cellHeight * 0.26).clamp(compact ? 10.0 : 11.0, compact ? 12.0 : 14.0);
-    final closeFontSize =
-        (profitFontSize * 0.5).clamp(compact ? 7.5 : 8.0, compact ? 9.5 : 11.0);
+    final profitColor = !has
+        ? AppFinanceStyle.labelColor
+        : (pnl >= 0 ? AppFinanceStyle.profitGreenEnd : Colors.redAccent);
+    final profitFontSize = (cellHeight * 0.44).clamp(
+      compact ? 16.0 : 18.0,
+      compact ? 22.0 : 26.0,
+    );
+    final dayFontSize = (cellHeight * 0.26).clamp(
+      compact ? 10.0 : 11.0,
+      compact ? 12.0 : 14.0,
+    );
+    final closeFontSize = (profitFontSize * 0.38).clamp(
+      compact ? 6.0 : 6.5,
+      compact ? 8.0 : 9.0,
+    );
     final closes = dailyCloseCounts?[day];
 
     if (!has) {
@@ -850,7 +1152,7 @@ class _CalendarGrid extends StatelessWidget {
         child: Text(
           '$day',
           style: TextStyle(
-            color: AppFinanceStyle.labelColor.withValues(alpha: 0.45),
+            color: _kCalendarGridMutedText,
             fontSize: dayFontSize,
             fontWeight: FontWeight.w600,
           ),
@@ -890,7 +1192,7 @@ class _CalendarGrid extends StatelessWidget {
                 child: FittedBox(
                   fit: BoxFit.scaleDown,
                   child: Text(
-                    '${formatUiSignedUsdt2(pnl)} USDT',
+                    formatUiSignedInteger(pnl),
                     textAlign: TextAlign.center,
                     maxLines: 1,
                     style: TextStyle(

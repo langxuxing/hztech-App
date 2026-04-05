@@ -132,7 +132,7 @@ html,body{margin:0;padding:0;height:100%;background:#141419;overflow:hidden;}
   }
   var trH = chart.addHistogramSeries({
     priceScaleId: 'left',
-    priceFormat: { type: 'price', precision: 1, minMove: 0.1 },
+    priceFormat: { type: 'price', precision: 0, minMove: 1 },
   });
   var cashH = chart.addHistogramSeries({
     priceScaleId: 'left',
@@ -152,7 +152,7 @@ html,body{margin:0;padding:0;height:100%;background:#141419;overflow:hidden;}
     });
     trArr.push({
       time: d.day,
-      value: tp == null ? 0 : Math.round(tp * 10) / 10,
+      value: tp == null ? 0 : Math.round(tp),
       color: trBarColor(tp),
     });
   }

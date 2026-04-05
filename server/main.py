@@ -11,7 +11,7 @@ App 所需 API（与 QtraderApi.kt 一致）：
   GET  /api/tradingbots           交易账户列表（需 Bearer token）
   POST /api/tradingbots/{id}/start|stop|restart|season-start|season-stop（需 Bearer token；赛季操作需 script 支持 season-start/stop）
   GET  /api/tradingbots/{id}/pending-orders | /ticker  当前委托、行情（不入库；id 可为 Account_List 的 account_id）
-  GET  /api/tradingbots/{id}/strategy-daily-efficiency  每日波动率/现金收益率%(较UTC月初)/策略能效（?inst_id=&days=；日线波动全站缓存 market_daily_bars）
+  GET  /api/tradingbots/{id}/strategy-daily-efficiency  策略效能：account_snapshots 或 bot_profit_snapshots 日权益→现金收益率%/能效（?inst_id=&days=）
   GET  /kline/<file>.json  PEPE 等 1m 标记价格 K 线 JSON（写入 flutter_app/web/kline；夜间定时补历史）
   GET  /api/tradingbots/{id}/tradingbot-events  账户启停事件（需 Bearer token）
   GET  /api/logs                  日志查询（需 Bearer token，?limit=100&level=&source=）
@@ -25,6 +25,8 @@ App 所需 API（与 QtraderApi.kt 一致）：
   GET  /api/status                同步状态与周期说明（需登录）
   GET  /api/tradingbots/{id}/position-history  历史仓位分页（入库数据，需登录）
   POST /api/tradingbots/{id}/position-history/sync  手动拉取该账户 OKX 历史仓位（仅管理员）
+  POST /api/tradingbots/{id}/balance-snapshot/sync  立即拉取 OKX 余额写入库（account_snapshots / bot_profit；仅管理员）
+  POST /api/admin/balance-snapshots/sync  全量余额快照同步（与定时任务相同；仅管理员）
   GET|POST|PUT|DELETE /api/admin/accounts  Account_List.json + account_meta 库表同步（仅管理员）
   POST /api/admin/accounts/{id}/test-connection  测连 OKX + 检查 SWAP/双向持仓/50x 杠杆（仅管理员）
   GET  /api/me/customer-accounts  客户已绑定账户列表与密钥文件是否存在（仅客户）
@@ -553,7 +555,7 @@ def _job_fetch_account_and_save_snapshots() -> None:
         )
 
     try:
-        _account_mgr._fetch_and_save_tradingbot_snapshots(_db, app.logger)
+        _account_mgr.fetch_and_save_tradingbot_snapshots(_db, app.logger)
         _sync_record_step("tradingbot_snapshots", True, None)
     except Exception as e:
         _sync_record_step("tradingbot_snapshots", False, str(e))
@@ -1209,7 +1211,10 @@ def api_bot_profit_history(bot_id):
 def api_strategy_daily_efficiency(bot_id):
     """
     策略效能：每日波动率（|高−低|/收盘%）、现金收益率%（日现金增量/UTC 自然月月初资金×100）、
-    策略能效（日增量 USDT÷(波幅×1e9)）。日线 OHLC/TR 来自 market_daily_bars 全站缓存（与账户快照合并）。
+    策略能效（日增量 USDT÷(波幅×1e9)）。日线 OHLC/TR 来自 market_daily_bars 全站缓存。
+    现金：Account_List 账户读 account_snapshots（cash_basis=account_snapshots_cash）；
+    其余 bot 读 bot_profit_snapshots 的 equity_usdt 作日权益变动（cash_basis=bot_profit_equity）；
+    无任何快照时按 K 线日期补 sod=eod=0、增量 0（cash_basis=none），仍合并计算能效（增量为 0 则能效为 0）。
     Query: inst_id=PEPE-USDT-SWAP&days=90
     """
     denied = _customer_bot_forbidden(bot_id)
@@ -1239,30 +1244,42 @@ def api_strategy_daily_efficiency(bot_id):
     account_ids = {
         x["account_id"] for x in _account_mgr.list_account_basics(enabled_only=False)
     }
-    cash_by_day: dict = {}
-    cash_basis = "none"
+    since_dt = datetime.now(timezone.utc) - timedelta(days=days + 3)
+    if bars:
+        try:
+            day_strs = [str(b.get("day") or "") for b in bars if b.get("day")]
+            if day_strs:
+                earliest = min(day_strs)
+                y, m, _dd = (int(x) for x in earliest.split("-")[:3])
+                first_of_m = datetime(y, m, 1, tzinfo=timezone.utc)
+                anchor = first_of_m - timedelta(days=40)
+                if anchor < since_dt:
+                    since_dt = anchor
+        except (ValueError, TypeError, IndexError):
+            pass
+    since = since_dt.strftime("%Y-%m-%dT00:00:00.000Z")
+
     snaps: list = []
+    cash_basis = "none"
     if bot_id in account_ids:
-        since_dt = datetime.now(timezone.utc) - timedelta(days=days + 3)
-        # 保证能取到 K 线最早月份「月初」前的快照，避免 days 很短时现金收益率分母失真
-        if bars:
-            try:
-                day_strs = [str(b.get("day") or "") for b in bars if b.get("day")]
-                if day_strs:
-                    earliest = min(day_strs)
-                    y, m, _dd = (int(x) for x in earliest.split("-")[:3])
-                    first_of_m = datetime(y, m, 1, tzinfo=timezone.utc)
-                    anchor = first_of_m - timedelta(days=40)
-                    if anchor < since_dt:
-                        since_dt = anchor
-            except (ValueError, TypeError, IndexError):
-                pass
-        since = since_dt.strftime("%Y-%m-%dT00:00:00.000Z")
         snaps = _db.account_snapshot_query_by_account_since(
             bot_id, since_snapshot_at=since, max_rows=50000
         )
-        cash_by_day = _strategy_efficiency.daily_cash_delta_by_utc_day(snaps)
         cash_basis = "account_snapshots_cash"
+    else:
+        raw_bot = _db.bot_profit_query_by_bot_since(
+            bot_id, since_snapshot_at=since, max_rows=50000
+        )
+        snaps = _strategy_efficiency.normalize_bot_profit_snapshots_for_efficiency(
+            raw_bot
+        )
+        if snaps:
+            cash_basis = "bot_profit_equity"
+
+    cash_by_day = _strategy_efficiency.daily_cash_delta_by_utc_day(snaps)
+    cash_by_day = _strategy_efficiency.fill_cash_by_day_for_market_bars(
+        bars, cash_by_day
+    )
 
     month_bases = _strategy_efficiency.month_start_cash_by_month_from_snapshots(snaps)
     rows = _strategy_efficiency.merge_daily_efficiency_rows(
@@ -1465,6 +1482,69 @@ def api_bot_position_history_sync(bot_id):
     ok, msg = _account_mgr.refresh_positions_history_one(_db, bid, app.logger)
     code = 200 if ok else 400
     return jsonify({"success": ok, "bot_id": bid, "message": msg}), code
+
+
+@app.route("/api/tradingbots/<bot_id>/balance-snapshot/sync", methods=["POST"])
+@require_auth
+def api_bot_balance_snapshot_sync(bot_id):
+    """
+    仅管理员：从 OKX 拉取现金(availEq)/权益并入库。
+    Account_List 账户 → account_snapshots；仅 tradingbots.json 的 bot → bot_profit_snapshots。
+    策略效能接口按 UTC 日汇总这些快照计算日现金增量、现金收益率%、策略能效。
+    """
+    denied = _require_admin()
+    if denied:
+        return denied
+    bid = (bot_id or "").strip()
+    path = _resolve_okx_config_path(bid)
+    if not path or not path.is_file():
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "bot_id": bid,
+                    "message": "未找到 OKX 配置",
+                }
+            ),
+            400,
+        )
+    account_ids = {
+        x["account_id"] for x in _account_mgr.list_account_basics(enabled_only=False)
+    }
+    if bid in account_ids:
+        ok, msg = _account_mgr.refresh_balance_snapshot_one(_db, bid, app.logger)
+    else:
+        ok, msg = _account_mgr.refresh_tradingbot_balance_snapshot_one(
+            _db, bid, path, app.logger
+        )
+    code = 200 if ok else 400
+    return jsonify({"success": ok, "bot_id": bid, "message": msg}), code
+
+
+@app.route("/api/admin/balance-snapshots/sync", methods=["POST"])
+@require_auth
+def api_admin_balance_snapshots_sync():
+    """仅管理员：对所有启用账户与 tradingbots.json 机器人执行一轮余额快照写入（与定时同步任务一致）。"""
+    denied = _require_admin()
+    if denied:
+        return denied
+    errors: list[str] = []
+    try:
+        _account_mgr.refresh_all_balance_snapshots(_db, app.logger)
+    except Exception as e:
+        errors.append(f"account_snapshots: {e}")
+    try:
+        _account_mgr.fetch_and_save_tradingbot_snapshots(_db, app.logger)
+    except Exception as e:
+        errors.append(f"bot_profit_snapshots: {e}")
+    ok = len(errors) == 0
+    return jsonify(
+        {
+            "success": ok,
+            "message": "已完成" if ok else "; ".join(errors),
+            "errors": errors,
+        }
+    ), (200 if ok else 500)
 
 
 @app.route("/api/tradingbots/<bot_id>/pending-orders", methods=["GET"])

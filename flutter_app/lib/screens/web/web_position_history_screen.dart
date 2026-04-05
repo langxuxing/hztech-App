@@ -14,11 +14,15 @@ class WebPositionHistoryScreen extends StatefulWidget {
     this.sharedBots = const [],
     this.embedInShell = false,
     this.appUserRole,
+    this.accountIdFromParent,
   });
 
   final List<UnifiedTradingBot> sharedBots;
   final bool embedInShell;
   final AppUserRole? appUserRole;
+
+  /// 非空时由上层（如赛季/历史仓位 Hub）统一选账户，本页不显示账户下拉。
+  final String? accountIdFromParent;
 
   @override
   State<WebPositionHistoryScreen> createState() =>
@@ -38,21 +42,53 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
 
   List<UnifiedTradingBot> get _bots => widget.sharedBots;
 
+  String? get _effectiveBotId => widget.accountIdFromParent ?? _botId;
+
+  /// 价格列：原始价 × 1e9，一位小数。
+  static String? _fmtPxTimes1e9(String? s) {
+    if (s == null || s.isEmpty) return null;
+    final v = double.tryParse(s.trim());
+
+    if (v == null || !v.isFinite) return null;
+    return (v * 1e9).toInt().toString();
+  }
+
+  /// 盈亏 / 手续费 / 资金费：一位小数。
+  static String? _fmtOneDecimal(String? s) {
+    if (s == null || s.isEmpty) return null;
+    final v = double.tryParse(s.trim());
+    if (v == null || !v.isFinite) return null;
+    return v.toStringAsFixed(1);
+  }
+
+  /// 盈亏%：百分数一位小数（OKX 多为小数比率，|v|≤1 时按比率×100）。
+  static String? _fmtPnlPercent(String? s) {
+    if (s == null || s.isEmpty) return null;
+    final v = double.tryParse(s.trim());
+    if (v == null || !v.isFinite) return null;
+    final pct = v.abs() <= 1.0 ? v * 100 : v;
+    return '${pct.toStringAsFixed(1)}%';
+  }
+
+  static String? _fmtLeverInt(String? s) {
+    if (s == null || s.isEmpty) return null;
+    final v = double.tryParse(s.trim());
+    if (v == null || !v.isFinite) return null;
+    return v.round().toString();
+  }
+
   static const Color _tableHeaderFg = Color(0xFFF2F2F8);
   static const Color _tableCellFg = Color(0xFFE8E8F0);
   static const Color _tableBorder = Color(0x44FFFFFF);
 
   TextStyle get _headerStyle => const TextStyle(
-        color: _tableHeaderFg,
-        fontWeight: FontWeight.w700,
-        fontSize: 13,
-      );
+    color: _tableHeaderFg,
+    fontWeight: FontWeight.w700,
+    fontSize: 13,
+  );
 
-  TextStyle get _cellStyle => const TextStyle(
-        color: _tableCellFg,
-        fontSize: 13,
-        height: 1.25,
-      );
+  TextStyle get _cellStyle =>
+      const TextStyle(color: _tableCellFg, fontSize: 13, height: 1.25);
 
   String _formatUtcMs(String? ms) {
     if (ms == null || ms.isEmpty) return '—';
@@ -119,7 +155,7 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
   }
 
   Future<void> _load({bool append = false}) async {
-    final bid = _botId;
+    final bid = _effectiveBotId;
     if (bid == null || bid.isEmpty) return;
     setState(() {
       _loading = true;
@@ -162,7 +198,7 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
   }
 
   Future<void> _syncNow() async {
-    final bid = _botId;
+    final bid = _effectiveBotId;
     if (bid == null || !_isAdmin) return;
     setState(() => _syncing = true);
     try {
@@ -177,9 +213,9 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
       if (r.success) await _load(append: false);
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString())),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.toString())));
     } finally {
       if (mounted) setState(() => _syncing = false);
     }
@@ -189,8 +225,19 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
   void initState() {
     super.initState();
     if (_bots.isNotEmpty) {
-      _botId = _bots.first.tradingbotId;
+      _botId = widget.accountIdFromParent ?? _bots.first.tradingbotId;
       WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    }
+  }
+
+  @override
+  void didUpdateWidget(WebPositionHistoryScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.accountIdFromParent != null &&
+        widget.accountIdFromParent != oldWidget.accountIdFromParent) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _load(append: false);
+      });
     }
   }
 
@@ -200,61 +247,69 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: DropdownButtonFormField<String>(
-                    value: _botId != null &&
-                            _bots.any((b) => b.tradingbotId == _botId)
-                        ? _botId
-                        : null,
-                    decoration: InputDecoration(
-                      labelText: '账户',
-                      labelStyle: AppFinanceStyle.labelTextStyle(context),
-                      filled: true,
-                      fillColor: Colors.white.withValues(alpha: 0.06),
+          if (widget.accountIdFromParent == null || _isAdmin)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+              child: Row(
+                children: [
+                  if (widget.accountIdFromParent == null)
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        value:
+                            _botId != null &&
+                                _bots.any((b) => b.tradingbotId == _botId)
+                            ? _botId
+                            : null,
+                        decoration: InputDecoration(
+                          labelText: '账户',
+                          labelStyle: AppFinanceStyle.labelTextStyle(context),
+                          filled: true,
+                          fillColor: Colors.white.withValues(alpha: 0.06),
+                        ),
+                        dropdownColor: const Color(0xFF1a1a24),
+                        style: TextStyle(color: AppFinanceStyle.valueColor),
+                        items: _bots
+                            .map(
+                              (b) => DropdownMenuItem(
+                                value: b.tradingbotId,
+                                child: Text(
+                                  (b.tradingbotName != null &&
+                                          b.tradingbotName!.isNotEmpty)
+                                      ? b.tradingbotName!
+                                      : b.tradingbotId,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: (v) {
+                          setState(() => _botId = v);
+                          _load();
+                        },
+                      ),
+                    )
+                  else
+                    const Spacer(),
+                  if (_isAdmin) ...[
+                    if (widget.accountIdFromParent == null)
+                      const SizedBox(width: 8),
+                    IconButton.filledTonal(
+                      onPressed: _syncing ? null : _syncNow,
+                      icon: _syncing
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.cloud_download_outlined),
+                      tooltip: '从 OKX 同步历史仓位',
                     ),
-                    dropdownColor: const Color(0xFF1a1a24),
-                    style: TextStyle(color: AppFinanceStyle.valueColor),
-                    items: _bots
-                        .map(
-                          (b) => DropdownMenuItem(
-                            value: b.tradingbotId,
-                            child: Text(
-                              (b.tradingbotName != null &&
-                                      b.tradingbotName!.isNotEmpty)
-                                  ? b.tradingbotName!
-                                  : b.tradingbotId,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (v) {
-                      setState(() => _botId = v);
-                      _load();
-                    },
-                  ),
-                ),
-                if (_isAdmin) ...[
-                  const SizedBox(width: 8),
-                  IconButton.filledTonal(
-                    onPressed: _syncing ? null : _syncNow,
-                    icon: _syncing
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.cloud_download_outlined),
-                    tooltip: '从 OKX 同步历史仓位',
-                  ),
+                  ],
                 ],
-              ],
-            ),
-          ),
+              ),
+            )
+          else
+            const SizedBox(height: 8),
           if (_error != null)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -272,104 +327,99 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
                     ),
                   )
                 : _loading && _rows.isEmpty
-                    ? const Center(
-                        child: CircularProgressIndicator(
-                          color: AppFinanceStyle.profitGreenEnd,
-                        ),
-                      )
-                    : Scrollbar(
-                        child: SingleChildScrollView(
-                          scrollDirection: Axis.horizontal,
-                          child: SingleChildScrollView(
-                            child: Theme(
-                              data: Theme.of(context).copyWith(
-                                dividerColor: _tableBorder,
-                                dataTableTheme: DataTableThemeData(
-                                  headingTextStyle: _headerStyle,
-                                  dataTextStyle: _cellStyle,
-                                  dividerThickness: 1,
-                                  horizontalMargin: 12,
-                                  columnSpacing: 16,
-                                ),
-                              ),
-                              child: DataTable(
-                                headingRowColor: WidgetStateProperty.all(
-                                  const Color(0xFF252532),
-                                ),
-                                dataRowColor: WidgetStateProperty.resolveWith(
-                                  (states) => states.contains(WidgetState.hovered)
-                                      ? const Color(0xFF1A1A22)
-                                      : const Color(0xFF12121a),
-                                ),
-                                border: TableBorder.symmetric(
-                                  inside: BorderSide(
-                                    color: _tableBorder,
-                                    width: 0.5,
-                                  ),
-                                ),
-                                columns: [
-                                  DataColumn(label: _headerCell('标的')),
-                                  DataColumn(label: _headerCell('合约')),
-                                  DataColumn(label: _headerCell('方向')),
-                                  DataColumn(label: _headerCell('保证金')),
-                                  DataColumn(label: _headerCell('杠杆(x)')),
-                                  DataColumn(label: _headerCell('开仓均价')),
-                                  DataColumn(label: _headerCell('平仓均价')),
-                                  DataColumn(label: _headerCell('最大持仓量')),
-                                  DataColumn(label: _headerCell('平仓量')),
-                                  DataColumn(label: _headerCell('已实现盈亏')),
-                                  DataColumn(label: _headerCell('盈亏%')),
-                                  DataColumn(label: _headerCell('手续费')),
-                                  DataColumn(label: _headerCell('资金费')),
-                                  DataColumn(label: _headerCell('开仓时间(UTC)')),
-                                  DataColumn(label: _headerCell('更新时间(UTC)')),
-                                  DataColumn(label: _headerCell('平仓类型')),
-                                ],
-                                rows: _rows.map((r) {
-                                  final pnlShow =
-                                      r.realizedPnl ?? r.pnl;
-                                  final pnlC = _pnlColor(pnlShow);
-                                  return DataRow(
-                                    cells: [
-                                      DataCell(_cell(r.instId)),
-                                      DataCell(_cell(r.instType)),
-                                      DataCell(_sideCell(r.posSide)),
-                                      DataCell(_cell(_mgnLabel(r.mgnMode))),
-                                      DataCell(_cell(r.lever)),
-                                      DataCell(_cell(r.openAvgPx)),
-                                      DataCell(_cell(r.closeAvgPx)),
-                                      DataCell(_cell(r.openMaxPos)),
-                                      DataCell(_cell(r.closeTotalPos)),
-                                      DataCell(
-                                        _cell(
-                                          pnlShow,
-                                          color: pnlC,
-                                        ),
-                                      ),
-                                      DataCell(_cell(r.pnlRatio)),
-                                      DataCell(
-                                        _cell(
-                                          r.fee,
-                                          color: _pnlColor(r.fee),
-                                        ),
-                                      ),
-                                      DataCell(
-                                        _cell(
-                                          r.fundingFee,
-                                          color: _pnlColor(r.fundingFee),
-                                        ),
-                                      ),
-                                      DataCell(_cell(_formatUtcMs(r.cTimeMs))),
-                                      DataCell(_cell(_formatUtcMs(r.uTimeMs))),
-                                      DataCell(_cell(r.closeType)),
-                                    ],
-                                  );
-                                }).toList(),
+                ? const Center(
+                    child: CircularProgressIndicator(
+                      color: AppFinanceStyle.profitGreenEnd,
+                    ),
+                  )
+                : Scrollbar(
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: SingleChildScrollView(
+                        child: Theme(
+                          data: Theme.of(context).copyWith(
+                            dividerColor: _tableBorder,
+                            dataTableTheme: DataTableThemeData(
+                              headingTextStyle: _headerStyle,
+                              dataTextStyle: _cellStyle,
+                              dividerThickness: 1,
+                              horizontalMargin: 12,
+                              columnSpacing: 16,
+                            ),
+                          ),
+                          child: DataTable(
+                            headingRowColor: WidgetStateProperty.all(
+                              const Color(0xFF252532),
+                            ),
+                            dataRowColor: WidgetStateProperty.resolveWith(
+                              (states) => states.contains(WidgetState.hovered)
+                                  ? const Color(0xFF1A1A22)
+                                  : const Color(0xFF12121a),
+                            ),
+                            border: TableBorder.symmetric(
+                              inside: BorderSide(
+                                color: _tableBorder,
+                                width: 0.5,
                               ),
                             ),
+                            columns: [
+                              DataColumn(label: _headerCell('标的')),
+                              DataColumn(label: _headerCell('合约')),
+                              DataColumn(label: _headerCell('方向')),
+                              DataColumn(label: _headerCell('保证金')),
+                              DataColumn(label: _headerCell('杠杆(x)')),
+                              DataColumn(label: _headerCell('开仓价×1e9')),
+                              DataColumn(label: _headerCell('平仓价×1e9')),
+                              DataColumn(label: _headerCell('持仓量')),
+                              DataColumn(label: _headerCell('平仓量')),
+                              DataColumn(label: _headerCell('实现盈亏')),
+                              DataColumn(label: _headerCell('盈亏%')),
+                              DataColumn(label: _headerCell('手续费')),
+                              DataColumn(label: _headerCell('资金费')),
+                              DataColumn(label: _headerCell('开仓时间(UTC)')),
+                              DataColumn(label: _headerCell('更新时间(UTC)')),
+                              DataColumn(label: _headerCell('平仓类型')),
+                            ],
+                            rows: _rows.map((r) {
+                              final pnlRaw = r.realizedPnl ?? r.pnl;
+                              final pnlC = _pnlColor(pnlRaw);
+                              final pnlShow = _fmtOneDecimal(pnlRaw);
+                              return DataRow(
+                                cells: [
+                                  DataCell(_cell(r.instId)),
+                                  DataCell(_cell(r.instType)),
+                                  DataCell(_sideCell(r.posSide)),
+                                  DataCell(_cell(_mgnLabel(r.mgnMode))),
+                                  DataCell(_cell(_fmtLeverInt(r.lever))),
+                                  DataCell(_cell(_fmtPxTimes1e9(r.openAvgPx))),
+                                  DataCell(_cell(_fmtPxTimes1e9(r.closeAvgPx))),
+                                  DataCell(_cell(r.openMaxPos)),
+                                  DataCell(_cell(r.closeTotalPos)),
+                                  DataCell(_cell(pnlShow, color: pnlC)),
+                                  DataCell(_cell(_fmtPnlPercent(r.pnlRatio))),
+                                  DataCell(
+                                    _cell(
+                                      _fmtOneDecimal(r.fee),
+                                      color: _pnlColor(r.fee),
+                                    ),
+                                  ),
+                                  DataCell(
+                                    _cell(
+                                      _fmtOneDecimal(r.fundingFee),
+                                      color: _pnlColor(r.fundingFee),
+                                    ),
+                                  ),
+                                  DataCell(_cell(_formatUtcMs(r.cTimeMs))),
+                                  DataCell(_cell(_formatUtcMs(r.uTimeMs))),
+                                  DataCell(_cell(r.closeType)),
+                                ],
+                              );
+                            }).toList(),
                           ),
                         ),
                       ),
+                    ),
+                  ),
           ),
           if (_nextBefore != null && _rows.isNotEmpty)
             Padding(
@@ -391,10 +441,9 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
       appBar: AppBar(
         title: Text(
           '历史仓位',
-          style: AppFinanceStyle.labelTextStyle(context).copyWith(
-                color: AppFinanceStyle.valueColor,
-                fontSize: 18,
-              ),
+          style: AppFinanceStyle.labelTextStyle(
+            context,
+          ).copyWith(color: AppFinanceStyle.valueColor, fontSize: 18),
         ),
         backgroundColor: AppFinanceStyle.backgroundDark,
         foregroundColor: AppFinanceStyle.valueColor,

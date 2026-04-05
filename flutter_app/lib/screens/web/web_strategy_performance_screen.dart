@@ -23,18 +23,10 @@ class WebStrategyPerformanceScreen extends StatefulWidget {
 }
 
 /// 策略能效分档（按账户均能效绝对阈值）：小于 0.25 灰、0.25–0.5 绿、≥0.5 深绿。
-enum _EffBand {
-  gray,
-  green,
-  darkGreen,
-}
+enum _EffBand { gray, green, darkGreen }
 
 class _BotEfficiencyBundle {
-  _BotEfficiencyBundle({
-    required this.bot,
-    this.response,
-    this.fetchError,
-  });
+  _BotEfficiencyBundle({required this.bot, this.response, this.fetchError});
 
   final UnifiedTradingBot bot;
   final StrategyDailyEfficiencyResponse? response;
@@ -44,9 +36,7 @@ class _BotEfficiencyBundle {
 
   bool get fetchOk => fetchError == null;
   bool get hasEfficiencyData =>
-      response != null &&
-      response!.success &&
-      response!.rows.isNotEmpty;
+      response != null && response!.success && response!.rows.isNotEmpty;
 
   static double? _averageRatio(StrategyDailyEfficiencyResponse eff) {
     final ratios = eff.rows
@@ -210,16 +200,22 @@ class _WebStrategyPerformanceScreenState
     return v.round().toString();
   }
 
-  /// 百分数：一位小数。
-  static String _fmtPctOne(double? v) {
-    if (v == null || !v.isFinite) return '—';
-    return v.toStringAsFixed(1);
-  }
-
-  /// 波动 |高−低| 数值细，表内用 ×1e9 取整展示。
+  /// 价格波幅 |高−低|：×1e9 后取整展示。
   static String _fmtTrNano(double? v) {
     if (v == null || !v.isFinite) return '—';
     return (v * 1e9).round().toString();
+  }
+
+  /// 每日波动率%：取整 + `%`。
+  static String _fmtVolatilityPctInt(double? v) {
+    if (v == null || !v.isFinite) return '—';
+    return '${v.round()}%';
+  }
+
+  /// 百分数类指标：一位小数 + `%`（与盈亏% 展示习惯一致）。
+  static String _fmtPctOneLabel(double? v) {
+    if (v == null || !v.isFinite) return '—';
+    return '${v.toStringAsFixed(1)}%';
   }
 
   /// 策略能效：界面与其它数值一致，四舍五入为整数。
@@ -316,7 +312,9 @@ class _WebStrategyPerformanceScreenState
 
   /// 全账户：按日期对齐的能效比值折线，便于发现长期走弱、需人工关注的账户。
   Widget _buildComparisonChart(BuildContext context) {
-    final forChart = _bundles.where((b) => b.fetchOk && b.hasEfficiencyData).toList();
+    final forChart = _bundles
+        .where((b) => b.fetchOk && b.hasEfficiencyData)
+        .toList();
     if (forChart.isEmpty) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 12),
@@ -412,34 +410,42 @@ class _WebStrategyPerformanceScreenState
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Wrap(
-          spacing: 14,
-          runSpacing: 6,
-          children: [
-            for (var bi = 0; bi < plottedBundles.length; bi++)
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 14,
-                    height: 3,
-                    decoration: BoxDecoration(
-                      color: _comparisonLineColors[bi % _comparisonLineColors.length],
-                      borderRadius: BorderRadius.circular(2),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Wrap(
+            spacing: 14,
+            runSpacing: 6,
+            children: [
+              for (var bi = 0; bi < plottedBundles.length; bi++)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 14,
+                      height: 3,
+                      decoration: BoxDecoration(
+                        color:
+                            _comparisonLineColors[bi %
+                                _comparisonLineColors.length],
+                        borderRadius: BorderRadius.circular(2),
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    plottedBundles[bi].bot.tradingbotName ??
-                        plottedBundles[bi].bot.tradingbotId,
-                    style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 11),
-                  ),
-                ],
-              ),
-          ],
+                    const SizedBox(width: 6),
+                    Text(
+                      plottedBundles[bi].bot.tradingbotName ??
+                          plottedBundles[bi].bot.tradingbotId,
+                      style: AppFinanceStyle.labelTextStyle(
+                        context,
+                      ).copyWith(fontSize: 11),
+                    ),
+                  ],
+                ),
+            ],
+          ),
         ),
         const SizedBox(height: 10),
         SizedBox(
+          width: double.infinity,
           height: 280,
           child: LineChart(
             LineChartData(
@@ -458,8 +464,12 @@ class _WebStrategyPerformanceScreenState
               borderData: FlBorderData(show: false),
               titlesData: FlTitlesData(
                 show: true,
-                topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                topTitles: const AxisTitles(
+                  sideTitles: SideTitles(showTitles: false),
+                ),
+                rightTitles: const AxisTitles(
+                  sideTitles: SideTitles(showTitles: false),
+                ),
                 leftTitles: AxisTitles(
                   sideTitles: SideTitles(
                     showTitles: true,
@@ -467,7 +477,9 @@ class _WebStrategyPerformanceScreenState
                     getTitlesWidget: (v, m) => Text(
                       _fmtAxisEfficiency(v),
                       style: TextStyle(
-                        color: AppFinanceStyle.labelColor.withValues(alpha: 0.85),
+                        color: AppFinanceStyle.labelColor.withValues(
+                          alpha: 0.85,
+                        ),
                         fontSize: 9,
                       ),
                     ),
@@ -490,7 +502,9 @@ class _WebStrategyPerformanceScreenState
                         child: Text(
                           short,
                           style: TextStyle(
-                            color: AppFinanceStyle.labelColor.withValues(alpha: 0.85),
+                            color: AppFinanceStyle.labelColor.withValues(
+                              alpha: 0.85,
+                            ),
                             fontSize: 9,
                           ),
                         ),
@@ -506,25 +520,28 @@ class _WebStrategyPerformanceScreenState
                       AppFinanceStyle.cardBackground.withValues(alpha: 0.95),
                   tooltipPadding: const EdgeInsets.all(10),
                   getTooltipItems: (touchedSpots) {
-                    return touchedSpots.map((s) {
-                      final bar = s.barIndex;
-                      if (bar < 0 || bar >= plottedBundles.length) {
-                        return null;
-                      }
-                      final xi = s.x.round().clamp(0, allDays.length - 1);
-                      final day = allDays[xi];
-                      final name =
-                          plottedBundles[bar].bot.tradingbotName ??
+                    return touchedSpots
+                        .map((s) {
+                          final bar = s.barIndex;
+                          if (bar < 0 || bar >= plottedBundles.length) {
+                            return null;
+                          }
+                          final xi = s.x.round().clamp(0, allDays.length - 1);
+                          final day = allDays[xi];
+                          final name =
+                              plottedBundles[bar].bot.tradingbotName ??
                               plottedBundles[bar].bot.tradingbotId;
-                      return LineTooltipItem(
-                        '$name · $day\n策略能效 ${_fmtAxisEfficiency(s.y)}',
-                        TextStyle(
-                          color: AppFinanceStyle.valueColor,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      );
-                    }).whereType<LineTooltipItem>().toList();
+                          return LineTooltipItem(
+                            '$name · $day\n策略能效 ${_fmtAxisEfficiency(s.y)}',
+                            TextStyle(
+                              color: AppFinanceStyle.valueColor,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          );
+                        })
+                        .whereType<LineTooltipItem>()
+                        .toList();
                   },
                 ),
               ),
@@ -541,29 +558,24 @@ class _WebStrategyPerformanceScreenState
     List<StrategyDailyEfficiencyRow> rows,
   ) {
     if (rows.isEmpty) {
-      return Text(
-        '无日明细',
-        style: AppFinanceStyle.labelTextStyle(context),
-      );
+      return Text('无日明细', style: AppFinanceStyle.labelTextStyle(context));
     }
     const labelW = 100.0;
     const cellW = 88.0;
     final columnWidths = <int, TableColumnWidth>{
       0: const FixedColumnWidth(labelW),
-      for (var i = 0; i < rows.length; i++) i + 1: const FixedColumnWidth(cellW),
+      for (var i = 0; i < rows.length; i++)
+        i + 1: const FixedColumnWidth(cellW),
     };
     final hdrStyle = TextStyle(
       color: AppFinanceStyle.valueColor,
       fontSize: 11,
       fontWeight: FontWeight.w600,
     );
-    final labStyle = AppFinanceStyle.labelTextStyle(context).copyWith(
-      fontSize: 11,
-    );
-    final valStyle = TextStyle(
-      color: AppFinanceStyle.valueColor,
-      fontSize: 11,
-    );
+    final labStyle = AppFinanceStyle.labelTextStyle(
+      context,
+    ).copyWith(fontSize: 11);
+    final valStyle = TextStyle(color: AppFinanceStyle.valueColor, fontSize: 11);
 
     TableRow row(List<Widget> cells) => TableRow(children: cells);
 
@@ -583,7 +595,10 @@ class _WebStrategyPerformanceScreenState
             ),
             ...rows.map(
               (e) => Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 6,
+                  vertical: 10,
+                ),
                 child: Text(
                   e.day,
                   style: hdrStyle,
@@ -617,7 +632,7 @@ class _WebStrategyPerformanceScreenState
               (e) => Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
                 child: Text(
-                  _fmtPctOne(e.trPct),
+                  _fmtVolatilityPctInt(e.trPct),
                   style: valStyle,
                   textAlign: TextAlign.right,
                 ),
@@ -627,7 +642,7 @@ class _WebStrategyPerformanceScreenState
           row([
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              child: Text('当日现金增量 USDT', style: labStyle),
+              child: Text('当日现金增量', style: labStyle),
             ),
             ...rows.map(
               (e) => Padding(
@@ -647,7 +662,7 @@ class _WebStrategyPerformanceScreenState
           row([
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              child: Text('UTC 月初基准 USDT', style: labStyle),
+              child: Text('月初资金', style: labStyle),
             ),
             ...rows.map(
               (e) => Padding(
@@ -671,7 +686,7 @@ class _WebStrategyPerformanceScreenState
               (e) => Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
                 child: Text(
-                  _fmtPctOne(e.cashDeltaPct),
+                  _fmtPctOneLabel(e.cashDeltaPct),
                   style: valStyle,
                   textAlign: TextAlign.right,
                 ),
@@ -701,7 +716,10 @@ class _WebStrategyPerformanceScreenState
     );
   }
 
-  Widget _buildOneAccountCard(BuildContext context, _BotEfficiencyBundle bundle) {
+  Widget _buildOneAccountCard(
+    BuildContext context,
+    _BotEfficiencyBundle bundle,
+  ) {
     final title = bundle.bot.tradingbotName ?? bundle.bot.tradingbotId;
     if (!bundle.fetchOk) {
       return FinanceCard(
@@ -724,9 +742,9 @@ class _WebStrategyPerformanceScreenState
                   child: Text(
                     title,
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          color: AppFinanceStyle.valueColor,
-                          fontWeight: FontWeight.w600,
-                        ),
+                      color: AppFinanceStyle.valueColor,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
               ],
@@ -762,9 +780,9 @@ class _WebStrategyPerformanceScreenState
                   child: Text(
                     title,
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          color: AppFinanceStyle.valueColor,
-                          fontWeight: FontWeight.w600,
-                        ),
+                      color: AppFinanceStyle.valueColor,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ),
                 Text(
@@ -787,9 +805,11 @@ class _WebStrategyPerformanceScreenState
       );
     }
     final rows = eff.rows.take(90).toList();
-    final cashNote = eff.cashBasis == 'account_snapshots_cash'
-        ? '现金变动来自 account_snapshots（availEq），按 UTC 自然日汇总。'
-        : '非 Account_List 账户无现金快照列；仍显示 OKX 日线波动。';
+    final cashNote = switch (eff.cashBasis) {
+      'account_snapshots_cash' => '现金变动来自（availEq），按自然日汇总。',
+      'bot_profit_equity' => '日权益变动来自（equity），与收益曲线同源；按自然日汇总。',
+      _ => '无历史快照：按 K 线日期补零增量，现金收益率% 与策略能效在无分母处为「—」或 0。',
+    };
 
     return FinanceCard(
       padding: const EdgeInsets.all(20),
@@ -813,9 +833,9 @@ class _WebStrategyPerformanceScreenState
                 child: Text(
                   title,
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: AppFinanceStyle.valueColor,
-                        fontWeight: FontWeight.w600,
-                      ),
+                    color: AppFinanceStyle.valueColor,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
               Text(
@@ -830,11 +850,13 @@ class _WebStrategyPerformanceScreenState
           ),
           const SizedBox(height: 6),
           Text(
-            '${eff.instId}：每日波动率% = |最高−最低|÷收盘×100；'
-            '现金收益率% = 当日现金增量 USDT ÷ 当 UTC 自然月月初资金×100（无月初快照时用当日日初 sod）；'
-            '策略能效 = 当日现金增量 USDT ÷ (价格波幅|高−低|×1e9)；日线波动全站共用 DB 缓存。'
+            '${eff.instId}：每日波动率% = |最高−最低|÷收盘 × 100%；'
+            '现金收益率% = 当日现金增量 ÷ 月初资金 × 100%；'
+            '策略能效 = 当日现金增量÷ (每日波动 |最高−最低| × 1e9)；'
             '$cashNote',
-            style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 12),
+            style: AppFinanceStyle.labelTextStyle(
+              context,
+            ).copyWith(fontSize: 12),
           ),
           const SizedBox(height: 12),
           DefaultTabController(
@@ -844,8 +866,9 @@ class _WebStrategyPerformanceScreenState
               children: [
                 TabBar(
                   labelColor: AppFinanceStyle.valueColor,
-                  unselectedLabelColor:
-                      AppFinanceStyle.labelColor.withValues(alpha: 0.65),
+                  unselectedLabelColor: AppFinanceStyle.labelColor.withValues(
+                    alpha: 0.65,
+                  ),
                   indicatorColor: AppFinanceStyle.profitGreenEnd,
                   indicatorSize: TabBarIndicatorSize.label,
                   tabs: const [
@@ -870,27 +893,31 @@ class _WebStrategyPerformanceScreenState
                               _chartLegendRow(
                                 context,
                                 const Color.fromRGBO(245, 245, 245, 0.9),
-                                '每日波动率%（柱：白/黄/红）',
+                                '每日波动率%（白/黄/红：<6% / 6–10% / >10%）',
                               ),
                               _chartLegendRow(
                                 context,
                                 const Color.fromRGBO(126, 200, 80, 0.88),
-                                '现金收益率%（柱：<0.5%灰 0.5–1%白 ≥1%绿）',
+                                '现金收益率%（<0.5%灰 / 0.5–1%白 / ≥1%绿）',
                               ),
                               _chartLegendRow(
                                 context,
                                 const Color(0xFF6B7280),
-                                '策略能效折线（灰/绿/深绿：<0.25 / 0.25–0.5 / ≥0.5）',
+                                '策略能效（灰/绿/深绿：<0.25 / 0.25–0.5 / ≥0.5）',
                                 isLine: true,
                               ),
                             ],
                           ),
                           const SizedBox(height: 8),
-                          StrategyEfficiencyLightweightChart(rows: rows, height: 360),
+                          StrategyEfficiencyLightweightChart(
+                            rows: rows,
+                            height: 360,
+                          ),
                           Text(
                             '图表：TradingView Lightweight Charts',
-                            style: AppFinanceStyle.labelTextStyle(context)
-                                .copyWith(fontSize: 11),
+                            style: AppFinanceStyle.labelTextStyle(
+                              context,
+                            ).copyWith(fontSize: 11),
                           ),
                         ],
                       ),
@@ -898,10 +925,16 @@ class _WebStrategyPerformanceScreenState
                         padding: const EdgeInsets.only(top: 12),
                         children: [
                           Text(
-                            '日明细（金额取整；百分数一位小数；「UTC 月初基准」有值表示收益率按月初资金计算）',
-                            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                                  color: AppFinanceStyle.valueColor,
-                                  fontWeight: FontWeight.w600,
+                            '波动×1e9',
+                            style: Theme.of(context).textTheme.titleSmall
+                                ?.copyWith(
+                                  color: const Color.fromARGB(
+                                    255,
+                                    208,
+                                    208,
+                                    216,
+                                  ),
+                                  fontWeight: FontWeight.w400,
                                 ),
                           ),
                           const SizedBox(height: 8),
@@ -995,42 +1028,56 @@ class _WebStrategyPerformanceScreenState
                     ),
                   ),
                 )
-              else
+              else ...[
                 SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(24, 16, 24, 48),
-                  sliver: SliverList(
-                    delegate: SliverChildListDelegate([
-                      FinanceCard(
-                        padding: const EdgeInsets.all(20),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
+                  padding: const EdgeInsets.only(top: 16),
+                  sliver: SliverToBoxAdapter(
+                    child: FinanceCard(
+                      padding: EdgeInsets.zero,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(20, 20, 20, 6),
+                            child: Text(
                               '全账户策略能效对比',
-                              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                              style: Theme.of(context).textTheme.titleMedium
+                                  ?.copyWith(
                                     color: AppFinanceStyle.labelColor,
                                     fontWeight: FontWeight.w600,
                                   ),
                             ),
-                            const SizedBox(height: 6),
-                            Text(
-                              '按时间对比各账户「策略能效」（当日现金增量 USDT ÷ (价格波幅×1e9)）。'
-                              '折线持续走弱可优先人工干预。卡片颜色按能效绝对阈值：灰/绿/深绿。',
-                              style: AppFinanceStyle.labelTextStyle(context)
-                                  .copyWith(fontSize: 12),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+                            child: Text(
+                              '按时间对比各账户「策略能效」（当日现金增量 ÷ (价格波幅×1e9)）。'
+                              '折线持续走弱，需要交易员人工干预。',
+                              style: AppFinanceStyle.labelTextStyle(
+                                context,
+                              ).copyWith(fontSize: 12),
                             ),
-                            const SizedBox(height: 12),
-                            _buildBandLegend(context),
-                            const SizedBox(height: 16),
-                            _buildComparisonChart(context),
-                          ],
-                        ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+                            child: _buildBandLegend(context),
+                          ),
+                          _buildComparisonChart(context),
+                          const SizedBox(height: 20),
+                        ],
                       ),
-                      const SizedBox(height: 20),
-                      ..._accountCardsWithSpacing(context),
-                    ]),
+                    ),
                   ),
                 ),
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(24, 20, 24, 48),
+                  sliver: SliverList(
+                    delegate: SliverChildListDelegate(
+                      _accountCardsWithSpacing(context).toList(),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),

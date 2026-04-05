@@ -6,10 +6,10 @@
 与 server/main.py 集成：/api/account-profit、/api/tradingbots、按 account_id 的
 positions / profit-history / ticker / pending-orders 等通过本模块解析密钥与账户元数据。
 
-定时任务由 main 每 5 分钟调用 refresh_all_snapshots / refresh_all_positions_history，写入 SQLite：
-- 现金余额（avail_eq）、权益（total_eq）→ account_snapshots
-- OKX 历史仓位（/api/v5/account/positions-history）→ account_positions_history
-- 各账户初始资金（来自 JSON Initial_capital）、每月月初权益（自然月首次快照）
+定时任务由 main 每 5 分钟调用，写入 SQLite：
+- 现金余额（avail_eq）、权益（total_eq）→ account_snapshots（Account_List）；tradingbots.json → bot_profit_snapshots
+- 多时点快照经 strategy_efficiency.daily_cash_delta_by_utc_day 汇总为 UTC 自然日现金增量，再算现金收益率%、策略能效
+- OKX 历史仓位 → account_positions_history；各账户初始资金（Initial_capital）、当月 account_month_open
 """
 from __future__ import annotations
 
@@ -227,44 +227,173 @@ def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None 
             int(round(cash)),
         )
 
-def _fetch_and_save_tradingbot_snapshots() -> None:
-        """读取 tradingbots.json 中的 OKX 机器人余额，写入 bot_profit_snapshots 表。"""
-        bots = _load_tradingbots_config()
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        for b in bots:
-            bot_id = (b.get("tradingbot_id") or "").strip()
-            if not bot_id:
+
+def refresh_balance_snapshot_one(
+    db_module: Any, account_id: str, logger: logging.Logger | None = None
+) -> tuple[bool, str]:
+    """
+    从 OKX 拉取单账户余额，写入 account_snapshots（现金 availEq、权益），并维护当月 account_month_open。
+    供管理员手动同步；策略效能日现金增量依赖此表多时点快照。
+    """
+    log = logger or logging.getLogger(__name__)
+    import exchange.okx as okx_mod
+
+    aid = str(account_id or "").strip()
+    if not aid:
+        return False, "缺少 account_id"
+    path = resolve_okx_config_path(aid)
+    if not path or not path.is_file():
+        return False, "未找到密钥配置"
+
+    meta = db_module.account_meta_get(aid)
+    initial = float(meta["initial_capital"]) if meta else 0.0
+    if initial <= 0:
+        for row in iter_okx_accounts(enabled_only=False):
+            if str(row.get("account_id") or "").strip() == aid:
+                initial = _initial_capital(row)
+                break
+
+    sync_account_meta_from_json(db_module)
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    ym = datetime.now(timezone.utc).strftime("%Y-%m")
+
+    live = okx_mod.okx_fetch_balance(config_path=path)
+    if not live:
+        return False, "OKX 余额拉取失败"
+
+    total_eq = float(live.get("equity_usdt") or live.get("total_eq") or 0.0)
+    cash = float(live.get("cash_balance") or live.get("avail_eq") or 0.0)
+    profit_amount = total_eq - initial
+    profit_percent = (profit_amount / initial * 100.0) if initial else 0.0
+
+    db_module.account_snapshot_insert(
+        account_id=aid,
+        snapshot_at=ts,
+        cash_balance=cash,
+        equity_usdt=total_eq,
+        initial_capital=initial,
+        profit_amount=profit_amount,
+        profit_percent=profit_percent,
+    )
+    if db_module.account_month_open_get(aid, ym) is None:
+        db_module.account_month_open_insert_if_absent(aid, ym, total_eq, ts)
+
+    log.info(
+        "balance_snapshot_one_ok: %s equity=%s cash=%s",
+        _fmt_log_account_id(aid),
+        int(round(total_eq)),
+        int(round(cash)),
+    )
+    return True, "已写入 account_snapshots"
+
+
+def _load_tradingbots_json_bots() -> list[dict]:
+    """Accounts/tradingbots.json 中的 bot 列表（无文件则空列表）。"""
+    import json
+
+    path = ACCOUNTS_DIR / "tradingbots.json"
+    if not path.is_file():
+        return []
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def fetch_and_save_tradingbot_snapshots(
+    db_module: Any, logger: logging.Logger | None = None
+) -> None:
+    """读取 tradingbots.json 中有 account_api_file 的 OKX 机器人余额，写入 bot_profit_snapshots。"""
+    log = logger or logging.getLogger(__name__)
+    import exchange.okx as okx_mod
+
+    bots = _load_tradingbots_json_bots()
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    for b in bots:
+        bot_id = (b.get("tradingbot_id") or "").strip()
+        if not bot_id:
+            continue
+        api_file = (b.get("account_api_file") or "").strip()
+        if not api_file:
+            continue
+        config_path = ACCOUNTS_DIR / api_file
+        if not config_path.is_file():
+            continue
+        try:
+            balance = okx_mod.okx_fetch_balance(config_path=config_path)
+            if balance is None:
                 continue
-            config_path = _bot_okx_config_path(bot_id)
-            if not config_path:
-                continue
-            try:
-                balance = _okx.okx_fetch_balance(config_path=config_path)
-                if balance is None:
-                    continue
-                total_eq = float(balance.get("equity_usdt") or balance.get("total_eq") or 0.0)
-                prev = _db.bot_profit_latest_by_bot(bot_id)
-                initial = float(prev["initial_balance"]) if prev else total_eq
-                if prev is None and total_eq > 0:
-                    initial = total_eq
-                profit_amount = total_eq - initial
-                profit_percent = (profit_amount / initial * 100.0) if initial else 0.0
-                _db.bot_profit_insert(
-                    bot_id=bot_id,
-                    snapshot_at=ts,
-                    initial_balance=initial,
-                    current_balance=total_eq,
-                    equity_usdt=total_eq,
-                    profit_amount=profit_amount,
-                    profit_percent=profit_percent,
-                )
-            except Exception as e:
-                _db.log_insert(
-                    "WARN",
-                    "account_snapshot_failed",
-                    source="timer",
-                    extra={"bot_id": bot_id, "error": str(e)},
-                )
+            total_eq = float(balance.get("equity_usdt") or balance.get("total_eq") or 0.0)
+            prev = db_module.bot_profit_latest_by_bot(bot_id)
+            initial = float(prev["initial_balance"]) if prev else total_eq
+            if prev is None and total_eq > 0:
+                initial = total_eq
+            profit_amount = total_eq - initial
+            profit_percent = (profit_amount / initial * 100.0) if initial else 0.0
+            db_module.bot_profit_insert(
+                bot_id=bot_id,
+                snapshot_at=ts,
+                initial_balance=initial,
+                current_balance=total_eq,
+                equity_usdt=total_eq,
+                profit_amount=profit_amount,
+                profit_percent=profit_percent,
+            )
+            log.debug(
+                "bot_profit_snapshot: %s equity=%s",
+                bot_id[:_LOG_ACCOUNT_COL_WIDTH].ljust(_LOG_ACCOUNT_COL_WIDTH),
+                int(round(total_eq)),
+            )
+        except Exception as e:
+            db_module.log_insert(
+                "WARN",
+                "bot_profit_snapshot_failed",
+                source="account_mgr",
+                extra={"bot_id": bot_id, "error": str(e)},
+            )
+
+
+def refresh_tradingbot_balance_snapshot_one(
+    db_module: Any,
+    bot_id: str,
+    config_path: Path,
+    logger: logging.Logger | None = None,
+) -> tuple[bool, str]:
+    """对仅存在于 tradingbots.json 的 bot：拉 OKX 余额写入 bot_profit_snapshots。"""
+    log = logger or logging.getLogger(__name__)
+    import exchange.okx as okx_mod
+
+    bid = (bot_id or "").strip()
+    if not bid:
+        return False, "缺少 bot_id"
+    if not config_path.is_file():
+        return False, "密钥文件不存在"
+
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    balance = okx_mod.okx_fetch_balance(config_path=config_path)
+    if balance is None:
+        return False, "OKX 余额拉取失败"
+    total_eq = float(balance.get("equity_usdt") or balance.get("total_eq") or 0.0)
+    prev = db_module.bot_profit_latest_by_bot(bid)
+    initial = float(prev["initial_balance"]) if prev else total_eq
+    if prev is None and total_eq > 0:
+        initial = total_eq
+    profit_amount = total_eq - initial
+    profit_percent = (profit_amount / initial * 100.0) if initial else 0.0
+    db_module.bot_profit_insert(
+        bot_id=bid,
+        snapshot_at=ts,
+        initial_balance=initial,
+        current_balance=total_eq,
+        equity_usdt=total_eq,
+        profit_amount=profit_amount,
+        profit_percent=profit_percent,
+    )
+    log.info("bot_profit_snapshot_one_ok: %s equity=%s", bid, int(round(total_eq)))
+    return True, "已写入 bot_profit_snapshots"
+
 
 def refresh_all_positions_history(
     db_module: Any, logger: logging.Logger | None = None

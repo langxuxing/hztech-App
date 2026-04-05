@@ -1,5 +1,5 @@
 [
-  {"username": "admin", "password_hash": "4f1e136e8913a8d4748d82e6c401edb30b9dd88e1fac0d63140b23ea259ddf94"},
-  {"username": "linsong", "password_hash": "4f1e136e8913a8d4748d82e6c401edb30b9dd88e1fac0d63140b23ea259ddf94"},
-  {"username": "lhg", "password_hash": "4f1e136e8913a8d4748d82e6c401edb30b9dd88e1fac0d63140b23ea259ddf94"}
+  {"username": "admin", "password_hash": "a320480f534776bddb5cdb54b1e93d210a3c7d199e80a23c1b2178497b184c76"},
+  {"username": "linsong", "password_hash": "a320480f534776bddb5cdb54b1e93d210a3c7d199e80a23c1b2178497b184c76"},
+  {"username": "lhg", "password_hash": "a320480f534776bddb5cdb54b1e93d210a3c7d199e80a23c1b2178497b184c76"}
 ]

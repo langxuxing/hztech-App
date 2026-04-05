@@ -34,9 +34,9 @@ class _NavItem {
 }
 
 /// 浏览器端主导航：侧栏 / 抽屉 + 多 Tab，与移动端 [MainScreen] 分流。
-/// 侧栏使用可滚动列表，避免条目过多时在矮视口下看不到「用户管理」等项。
-/// 顺序：主页 → 仪表盘 → 账户收益 → 策略启停 → 策略能效 → 赛季与历史仓位
-/// → 收网测试（交易员/管理员/策略分析师）→ 账号配置（客户 OKX JSON）→ 账号管理 / 用户管理（管理员）→ 下载 → 设置。
+/// 客户（customer）：仅「账号详情」全宽单页，无侧栏；更多菜单含 OKX 账号配置与退出登录。
+/// 其他角色侧栏顺序：主页 → 仪表盘 → 账户收益 → 策略启停 → 策略能效 → 赛季与历史仓位
+/// → 收网测试（交易员/管理员/策略分析师）→ 账号配置（客户 OKX JSON，仅非 Web 客户壳）→ 账号管理 / 用户管理（管理员）→ 下载 → 设置。
 class WebMainShell extends StatefulWidget {
   const WebMainShell({super.key, this.onLogout});
 
@@ -244,6 +244,100 @@ class _WebMainShellState extends State<WebMainShell> {
     if (i >= 0) setState(() => _index = i);
   }
 
+  Future<void> _customerLogout(BuildContext context) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('退出登录'),
+        content: const Text('确定要退出登录吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    await _prefs.clearOnLogout();
+    if (!mounted) return;
+    widget.onLogout?.call();
+  }
+
+  void _openCustomerOkxSetup(BuildContext context) {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (ctx) => Scaffold(
+          backgroundColor: AppFinanceStyle.backgroundDark,
+          appBar: AppBar(
+            title: Text(
+              '账号配置',
+              style: AppFinanceStyle.labelTextStyle(ctx).copyWith(
+                color: AppFinanceStyle.valueColor,
+                fontSize: 18,
+              ),
+            ),
+            backgroundColor: AppFinanceStyle.backgroundDark,
+            foregroundColor: AppFinanceStyle.valueColor,
+            surfaceTintColor: Colors.transparent,
+          ),
+          body: const CustomerAccountSetupScreen(embedInShell: false),
+        ),
+      ),
+    );
+  }
+
+  /// Web 客户：仅账号详情 + 顶栏菜单（无侧栏）。
+  Widget _buildCustomerShell(BuildContext context) {
+    final titleStyle = AppFinanceStyle.labelTextStyle(context).copyWith(
+      color: AppFinanceStyle.valueColor,
+      fontSize: 18,
+      fontWeight: FontWeight.w600,
+    );
+    return Scaffold(
+      backgroundColor: AppFinanceStyle.backgroundDark,
+      appBar: AppBar(
+        title: Text('账号详情', style: titleStyle),
+        backgroundColor: AppFinanceStyle.backgroundDark,
+        foregroundColor: AppFinanceStyle.valueColor,
+        surfaceTintColor: Colors.transparent,
+        automaticallyImplyLeading: false,
+        actions: [
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert),
+            color: const Color(0xFF1e1e28),
+            onSelected: (v) {
+              if (v == 'okx') {
+                _openCustomerOkxSetup(context);
+              } else if (v == 'logout') {
+                _customerLogout(context);
+              }
+            },
+            itemBuilder: (ctx) => const [
+              PopupMenuItem(
+                value: 'okx',
+                child: Text('账号配置（OKX）'),
+              ),
+              PopupMenuItem(
+                value: 'logout',
+                child: Text('退出登录'),
+              ),
+            ],
+          ),
+        ],
+      ),
+      body: WebAccountProfitScreen(
+        sharedBots: _sharedBots,
+        embedInShell: true,
+        periodicRefreshActive: true,
+      ),
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -257,6 +351,9 @@ class _WebMainShellState extends State<WebMainShell> {
 
   @override
   Widget build(BuildContext context) {
+    if (_role == AppUserRole.customer) {
+      return _buildCustomerShell(context);
+    }
     final items = _itemsForRole();
     _clampIndex(items.length);
     final idx = _index.clamp(0, items.length - 1);

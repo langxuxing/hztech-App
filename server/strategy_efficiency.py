@@ -3,11 +3,39 @@
 按 UTC 自然日汇总账户快照中的现金余额变化，并与 OKX 日线对齐。
 输出含：每日波动率%（|高−低|/收盘）、现金收益率%（日增量÷UTC 自然月月初资金×100，无月初则用当日 sod）、
 策略能效（日增量 USDT÷(波幅×1e9)）。日线波动数据由 market_daily_bars 全站缓存，各账户共用。
+
+现金日明细优先来自 account_snapshots；旧版 tradingbots.json 机器人用 bot_profit_snapshots（权益 equity_usdt
+经 normalize_bot_profit_snapshots_for_efficiency 映射为 cash_balance）。对 K 线有、但当日无快照的日期，
+由 fill_cash_by_day_for_market_bars 补齐为「当日无增量」（sod=eod=上一日末现金）；若全程无快照则占位为 0，
+以便仍返回结构化行并由 merge 计算现金收益率%与策略能效（增量为 0 时能效为 0）。
 """
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
+
+def normalize_bot_profit_snapshots_for_efficiency(
+    bot_profit_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """
+    将 bot_profit_snapshots 行转为与 account_snapshots 相同的「按日现金」汇总输入：
+    仅保留 snapshot_at + cash_balance（取 equity_usdt，缺省用 current_balance），非负。
+    """
+    out: list[dict[str, Any]] = []
+    for r in bot_profit_rows:
+        ts = str(r.get("snapshot_at") or "").strip()
+        if not ts:
+            continue
+        try:
+            eq = r.get("equity_usdt")
+            if eq is None:
+                eq = r.get("current_balance")
+            cash = float(eq if eq is not None else 0.0)
+        except (TypeError, ValueError):
+            cash = 0.0
+        out.append({"snapshot_at": ts, "cash_balance": max(0.0, cash)})
+    return out
 
 
 def _parse_snapshot_ts(raw: str) -> datetime | None:
@@ -84,6 +112,60 @@ def daily_cash_delta_by_utc_day(snapshots: list[dict[str, Any]]) -> dict[str, di
             "sod_cash": sod,
             "eod_cash": eod,
             "cash_delta_usdt": cash_delta,
+        }
+    return out
+
+
+def fill_cash_by_day_for_market_bars(
+    market_bars: list[dict[str, Any]],
+    cash_by_day: dict[str, dict[str, float]],
+) -> dict[str, dict[str, float]]:
+    """
+    以 K 线 `day` 集合为基准补齐 `cash_by_day`。
+
+    - 已有快照汇总的日期保留原值。
+    - 早于首条有快照日的 K 线日：sod=eod=首快照日的 sod，增量 0。
+    - 首快照日之后、中间缺日：sod=eod=上一日末余额（由最近一条真实日 eod 传递），增量 0。
+    - 无任何快照数据时：全日 sod=eod=0、增量 0（占位）。
+    """
+    days = sorted({str(b.get("day") or "") for b in market_bars if b.get("day")})
+    if not days:
+        return {k: dict(v) for k, v in cash_by_day.items()}
+    out: dict[str, dict[str, float]] = {k: dict(v) for k, v in cash_by_day.items()}
+    if not out:
+        z = 0.0
+        for d in days:
+            out[d] = {"sod_cash": z, "eod_cash": z, "cash_delta_usdt": z}
+        return out
+
+    first_snap = min(out.keys())
+    anchor_pre = float(out[first_snap]["sod_cash"])
+
+    prior_to_window = [x for x in out if x < days[0]]
+    if prior_to_window:
+        carry = float(out[max(prior_to_window)]["eod_cash"])
+    elif days[0] > first_snap:
+        carry = float(out[first_snap]["eod_cash"])
+        for dd in sorted(x for x in out if first_snap < x < days[0]):
+            carry = float(out[dd]["eod_cash"])
+    else:
+        carry = anchor_pre
+
+    for d in days:
+        if d < first_snap:
+            out[d] = {
+                "sod_cash": anchor_pre,
+                "eod_cash": anchor_pre,
+                "cash_delta_usdt": 0.0,
+            }
+            continue
+        if d in out:
+            carry = float(out[d]["eod_cash"])
+            continue
+        out[d] = {
+            "sod_cash": carry,
+            "eod_cash": carry,
+            "cash_delta_usdt": 0.0,
         }
     return out
 

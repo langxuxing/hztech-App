@@ -31,12 +31,6 @@ class _WebTradingBotControlScreenState
   String? _seasonLoadingBotId;
   bool _bulkBusy = false;
 
-  static const _dashPlaceholder = '—';
-
-  /// 无赛季/进程时长时用 00:00:00 占位，便于对齐。
-  static String _durationOrPlaceholder(String s) =>
-      s == _dashPlaceholder ? '00:00:00' : s;
-
   static bool _hasOpenSeason(List<BotSeason> seasons) {
     for (final s in seasons) {
       final st = s.stoppedAt;
@@ -433,9 +427,7 @@ class _WebTradingBotControlScreenState
   bool _isBotError(UnifiedTradingBot? b) {
     if (b == null) return false;
     final s = b.status.toLowerCase();
-    return s.contains('error') ||
-        s == 'failed' ||
-        s.contains('exception');
+    return s.contains('error') || s == 'failed' || s.contains('exception');
   }
 
   ({int total, int running, int stopped, int error}) _aggregateStats() {
@@ -450,7 +442,12 @@ class _WebTradingBotControlScreenState
         stopped++;
       }
     }
-    return (total: _accounts.length, running: running, stopped: stopped, error: err);
+    return (
+      total: _accounts.length,
+      running: running,
+      stopped: stopped,
+      error: err,
+    );
   }
 
   List<UnifiedTradingBot> _controllableBots() => _accounts
@@ -461,13 +458,14 @@ class _WebTradingBotControlScreenState
 
   Future<void> _bulkStartAll() async {
     if (_bulkBusy) return;
-    final targets =
-        _controllableBots().where((b) => !_isBotRunning(b)).toList();
+    final targets = _controllableBots()
+        .where((b) => !_isBotRunning(b))
+        .toList();
     if (targets.isEmpty) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('没有处于停止状态且可管控的账户')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('没有处于停止状态且可管控的账户')));
       }
       return;
     }
@@ -515,9 +513,9 @@ class _WebTradingBotControlScreenState
     final targets = _controllableBots().where(_isBotRunning).toList();
     if (targets.isEmpty) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('当前没有运行中的可管控账户')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('当前没有运行中的可管控账户')));
       }
       return;
     }
@@ -628,31 +626,16 @@ class _WebTradingBotControlScreenState
                       physics: const AlwaysScrollableScrollPhysics(),
                       slivers: [
                         SliverPadding(
-                          padding: const EdgeInsets.fromLTRB(24, 24, 24, 12),
+                          padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
                           sliver: SliverToBoxAdapter(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  '策略启停',
-                                  style: Theme.of(context).textTheme.titleLarge
-                                      ?.copyWith(
-                                        color: AppFinanceStyle.valueColor,
-                                        fontWeight: FontWeight.w900,
-                                        letterSpacing: 0.5,
-                                      ),
-                                ),
-                                const SizedBox(height: 14),
-                                _GlobalBotStatsBar(
-                                  total: stats.total,
-                                  running: stats.running,
-                                  stopped: stats.stopped,
-                                  errorCount: stats.error,
-                                  bulkBusy: _bulkBusy,
-                                  onBulkStart: _bulkStartAll,
-                                  onBulkStop: _bulkStopAll,
-                                ),
-                              ],
+                            child: _GlobalBotStatsBar(
+                              total: stats.total,
+                              running: stats.running,
+                              stopped: stats.stopped,
+                              errorCount: stats.error,
+                              bulkBusy: _bulkBusy,
+                              onBulkStart: _bulkStartAll,
+                              onBulkStop: _bulkStopAll,
                             ),
                           ),
                         ),
@@ -663,7 +646,9 @@ class _WebTradingBotControlScreenState
                               child: Center(
                                 child: Text(
                                   '暂无账户数据',
-                                  style: AppFinanceStyle.labelTextStyle(context),
+                                  style: AppFinanceStyle.labelTextStyle(
+                                    context,
+                                  ),
                                 ),
                               ),
                             ),
@@ -704,22 +689,15 @@ class _WebTradingBotControlScreenState
                                     seasons,
                                     running,
                                   );
-                                  final robot = _robotRuntime(
-                                    events,
-                                    running,
-                                  );
+                                  final robot = _robotRuntime(events, running);
                                   final openSeason = _hasOpenSeason(seasons);
                                   return _AccountGlassCard(
                                     account: a,
                                     bot: bot,
                                     seasonStart: season.seasonStart,
-                                    seasonDuration: _durationOrPlaceholder(
-                                      season.seasonDuration,
-                                    ),
+                                    seasonDuration: season.seasonDuration,
                                     robotStart: robot.robotStart,
-                                    robotDuration: _durationOrPlaceholder(
-                                      robot.robotDuration,
-                                    ),
+                                    robotDuration: robot.robotDuration,
                                     hasOpenSeason: openSeason,
                                     robotLoadingBotId: _loadingBotId,
                                     seasonLoadingBotId: _seasonLoadingBotId,
@@ -783,7 +761,7 @@ class _WebTradingBotControlScreenState
   }
 }
 
-/// 顶部全局统计与一键启停。
+/// 顶部全局统计与一键启停；统计区与 [WebDashboardScreen] 账号总览条一致（标题 + FinanceCard + 汇总列）。
 class _GlobalBotStatsBar extends StatelessWidget {
   const _GlobalBotStatsBar({
     required this.total,
@@ -803,139 +781,162 @@ class _GlobalBotStatsBar extends StatelessWidget {
   final VoidCallback onBulkStart;
   final VoidCallback onBulkStop;
 
-  static const _cyan = Color(0xFF2EE6D6);
-
   @override
   Widget build(BuildContext context) {
-    final label = Theme.of(context).textTheme.bodySmall?.copyWith(
-          color: AppFinanceStyle.labelColor.withValues(alpha: 0.85),
-          fontWeight: FontWeight.w500,
-          letterSpacing: 0.2,
-        );
-    final chipText = Theme.of(context).textTheme.titleSmall?.copyWith(
-          color: AppFinanceStyle.valueColor,
-          fontWeight: FontWeight.w800,
-        );
+    TextStyle v(double fs) =>
+        AppFinanceStyle.valueTextStyle(context, fontSize: fs);
+    final stoppedStyle = v(24).copyWith(color: AppFinanceStyle.labelColor);
+    final errorStyle = v(24).copyWith(
+      color: errorCount > 0 ? Colors.redAccent : AppFinanceStyle.labelColor,
+    );
 
-    Widget chip(String title, String value, Color accent) {
-      return Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: accent.withValues(alpha: 0.35),
+    final bulkActions = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        FilledButton.tonalIcon(
+          onPressed: bulkBusy ? null : onBulkStart,
+          style: FilledButton.styleFrom(
+            foregroundColor: const Color(0xFF3DFF9C),
+            backgroundColor: const Color(0xFF3DFF9C).withValues(alpha: 0.14),
           ),
-          gradient: LinearGradient(
-            colors: [
-              accent.withValues(alpha: 0.12),
-              Colors.white.withValues(alpha: 0.04),
-            ],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
+          icon: const Icon(Icons.play_circle_outline, size: 20),
+          label: const Text('全部启动'),
+        ),
+        const SizedBox(width: 10),
+        FilledButton.tonalIcon(
+          onPressed: bulkBusy ? null : onBulkStop,
+          style: FilledButton.styleFrom(
+            foregroundColor: const Color(0xFFFF8A80),
+            backgroundColor: const Color(0xFFFF8A80).withValues(alpha: 0.12),
           ),
-          boxShadow: [
-            BoxShadow(
-              color: accent.withValues(alpha: 0.08),
-              blurRadius: 12,
-              offset: const Offset(0, 2),
-            ),
-          ],
+          icon: const Icon(Icons.stop_circle_outlined, size: 20),
+          label: const Text('全部停止'),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(title, style: label),
-            const SizedBox(height: 2),
-            Text(value, style: chipText?.copyWith(color: accent)),
-          ],
-        ),
-      );
-    }
+      ],
+    );
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(16),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          border: Border.all(
-            color: Colors.white.withValues(alpha: 0.08),
-          ),
-          gradient: LinearGradient(
-            colors: [
-              const Color(0xFF151B2E).withValues(alpha: 0.92),
-              const Color(0xFF101520).withValues(alpha: 0.88),
-            ],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '运行概览',
+          style: Theme.of(context).textTheme.titleLarge?.copyWith(
+            color: AppFinanceStyle.valueColor,
+            fontWeight: FontWeight.w900,
           ),
         ),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        const SizedBox(height: 16),
+        FinanceCard(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
           child: LayoutBuilder(
             builder: (context, c) {
-              final narrow = c.maxWidth < 720;
-              final statsRow = Wrap(
-                spacing: 12,
-                runSpacing: 10,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                children: [
-                  chip('总计', '$total', _cyan),
-                  chip('运行中', '$running', const Color(0xFF3DFF9C)),
-                  chip('已停止', '$stopped', const Color(0xFF8B94A8)),
-                  if (errorCount > 0)
-                    chip('异常', '$errorCount', const Color(0xFFFFA726)),
-                ],
-              );
-              final actions = Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  FilledButton.tonalIcon(
-                    onPressed: bulkBusy ? null : onBulkStart,
-                    style: FilledButton.styleFrom(
-                      foregroundColor: const Color(0xFF3DFF9C),
-                      backgroundColor: const Color(0xFF3DFF9C).withValues(
-                        alpha: 0.14,
-                      ),
-                    ),
-                    icon: const Icon(Icons.play_circle_outline, size: 20),
-                    label: const Text('全部启动'),
+              final narrow = c.maxWidth < 520;
+              final cells = [
+                _BotControlSummaryCell(
+                  label: '总计',
+                  value: '$total',
+                  valueStyle: v(24),
+                  trailingLabel: !narrow,
+                ),
+                _BotControlSummaryCell(
+                  label: '运行中',
+                  value: '$running',
+                  valueStyle: v(24).copyWith(
+                    color: AppFinanceStyle.profitGreenEnd,
                   ),
-                  const SizedBox(width: 10),
-                  FilledButton.tonalIcon(
-                    onPressed: bulkBusy ? null : onBulkStop,
-                    style: FilledButton.styleFrom(
-                      foregroundColor: const Color(0xFFFF8A80),
-                      backgroundColor: const Color(0xFFFF8A80).withValues(
-                        alpha: 0.12,
-                      ),
-                    ),
-                    icon: const Icon(Icons.stop_circle_outlined, size: 20),
-                    label: const Text('全部停止'),
-                  ),
-                ],
-              );
-
+                  trailingLabel: !narrow,
+                ),
+                _BotControlSummaryCell(
+                  label: '已停止',
+                  value: '$stopped',
+                  valueStyle: stoppedStyle,
+                  trailingLabel: !narrow,
+                ),
+                _BotControlSummaryCell(
+                  label: '异常',
+                  value: '$errorCount',
+                  valueStyle: errorStyle,
+                  trailingLabel: !narrow,
+                ),
+              ];
               if (narrow) {
                 return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    statsRow,
-                    const SizedBox(height: 12),
-                    actions,
+                    for (var i = 0; i < cells.length; i++) ...[
+                      if (i > 0) const SizedBox(height: 12),
+                      cells[i],
+                    ],
                   ],
                 );
               }
               return Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  Expanded(child: statsRow),
-                  actions,
+                  for (var i = 0; i < cells.length; i++) ...[
+                    if (i > 0) const SizedBox(width: 16),
+                    Expanded(child: cells[i]),
+                  ],
                 ],
               );
             },
           ),
         ),
-      ),
+        const SizedBox(height: 12),
+        LayoutBuilder(
+          builder: (context, c) {
+            final narrow = c.maxWidth < 520;
+            if (narrow) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  bulkActions,
+                ],
+              );
+            }
+            return Align(alignment: Alignment.centerRight, child: bulkActions);
+          },
+        ),
+      ],
+    );
+  }
+}
+
+/// 与 dashboard `_SummaryCell` 相同的标签+数值排版。
+class _BotControlSummaryCell extends StatelessWidget {
+  const _BotControlSummaryCell({
+    required this.label,
+    required this.value,
+    required this.valueStyle,
+    required this.trailingLabel,
+  });
+
+  final String label;
+  final String value;
+  final TextStyle valueStyle;
+  final bool trailingLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final baseLabel = AppFinanceStyle.labelTextStyle(context);
+    final labelStyle = baseLabel.copyWith(
+      fontSize: (baseLabel.fontSize ?? 14) - 2,
+    );
+    final ta = trailingLabel ? TextAlign.end : TextAlign.start;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Text(label, style: labelStyle, textAlign: ta),
+        const SizedBox(width: 6),
+        Text(
+          value,
+          style: valueStyle,
+          textAlign: ta,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ],
     );
   }
 }
@@ -1031,9 +1032,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
     final b = widget.bot;
     if (b == null) return false;
     final s = b.status.toLowerCase();
-    return s.contains('error') ||
-        s == 'failed' ||
-        s.contains('exception');
+    return s.contains('error') || s == 'failed' || s.contains('exception');
   }
 
   Color get _statusAccent {
@@ -1047,6 +1046,16 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
     if (_errored) return '异常';
     if (_running) return '运行中';
     return '已停止';
+  }
+
+  /// 无启动时间、无有效时长或占位 00:00:00 时不展示该行。
+  static bool _showKickoffRuntime(String start, String duration) {
+    const dash = '—';
+    if (start.isEmpty || start == dash) return false;
+    if (duration.isEmpty || duration == dash || duration == '00:00:00') {
+      return false;
+    }
+    return true;
   }
 
   @override
@@ -1064,47 +1073,49 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
     final titleStyle =
         (Theme.of(context).textTheme.titleMedium ?? const TextStyle()).copyWith(
           fontWeight: FontWeight.w800,
-          fontSize: (Theme.of(context).textTheme.titleMedium?.fontSize ?? 20) + 1,
+          fontSize:
+              (Theme.of(context).textTheme.titleMedium?.fontSize ?? 20) + 1,
           color: AppFinanceStyle.valueColor,
           letterSpacing: 0.2,
         );
 
     final labelStyle = Theme.of(context).textTheme.labelMedium?.copyWith(
-          color: _labelMuted.withValues(alpha: 0.62),
-          fontWeight: FontWeight.w600,
-          letterSpacing: 0.4,
-          fontSize: 11.5,
-        );
+      color: _labelMuted.withValues(alpha: 0.62),
+      fontWeight: FontWeight.w600,
+      letterSpacing: 0.4,
+      fontSize: 11.5,
+    );
 
     final kickoffLabelStyle = labelStyle?.copyWith(
-          fontSize: 11,
-          fontWeight: FontWeight.w500,
-          color: _labelMuted.withValues(alpha: 0.48),
-          letterSpacing: 0.2,
-        );
+      fontSize: 11,
+      fontWeight: FontWeight.w500,
+      color: _labelMuted.withValues(alpha: 0.48),
+      letterSpacing: 0.2,
+    );
 
-    final metaStyle = AppFinanceStyle.valueTextStyle(context, fontSize: 13).copyWith(
+    final metaStyle = AppFinanceStyle.valueTextStyle(context, fontSize: 13)
+        .copyWith(
           color: _labelMuted.withValues(alpha: 0.88),
           fontWeight: FontWeight.w600,
         );
 
-    final durationStyle = AppFinanceStyle.valueTextStyle(context, fontSize: 22).copyWith(
-          fontWeight: FontWeight.w800,
+    final durationStyle = AppFinanceStyle.valueTextStyle(context, fontSize: 22)
+        .copyWith(
+          fontWeight: FontWeight.w600,
+          fontSize: 16,
           color: _cyanAccent,
           letterSpacing: 0.5,
           fontFeatures: const [FontFeature.tabularFigures()],
         );
 
     final glowT = _running ? _pulse.value : 0.0;
-
-    final cardSurface = LinearGradient(
-      begin: Alignment.topLeft,
-      end: Alignment.bottomRight,
-      colors: [
-        const Color(0xFF242830).withValues(alpha: 0.72),
-        const Color(0xFF181C24).withValues(alpha: 0.58),
-        const Color(0xFF141820).withValues(alpha: 0.52),
-      ],
+    final showSeasonKickoff = _showKickoffRuntime(
+      widget.seasonStart,
+      widget.seasonDuration,
+    );
+    final showRobotKickoff = _showKickoffRuntime(
+      widget.robotStart,
+      widget.robotDuration,
     );
 
     return AnimatedBuilder(
@@ -1114,7 +1125,6 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
           statusAccent: _statusAccent,
           accentGlowT: _running ? glowT : 0,
-          surfaceGradient: cardSurface,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.max,
@@ -1146,18 +1156,18 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                                 decoration: BoxDecoration(
                                   borderRadius: BorderRadius.circular(8),
                                   border: Border.all(
-                                    color: const Color(0xFFFFB74D).withValues(
-                                      alpha: 0.55,
-                                    ),
+                                    color: const Color(
+                                      0xFFFFB74D,
+                                    ).withValues(alpha: 0.55),
                                   ),
-                                  color: const Color(0xFFFFB74D).withValues(
-                                    alpha: 0.12,
-                                  ),
+                                  color: const Color(
+                                    0xFFFFB74D,
+                                  ).withValues(alpha: 0.12),
                                   boxShadow: [
                                     BoxShadow(
-                                      color: const Color(0xFFFFB74D).withValues(
-                                        alpha: 0.22,
-                                      ),
+                                      color: const Color(
+                                        0xFFFFB74D,
+                                      ).withValues(alpha: 0.22),
                                       blurRadius: 10,
                                       spreadRadius: -2,
                                     ),
@@ -1182,9 +1192,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                             '未配置 Accounts 目录下的启停脚本（script_file）',
                             style: Theme.of(context).textTheme.bodySmall
                                 ?.copyWith(
-                                  color: Theme.of(
-                                    context,
-                                  ).colorScheme.outline,
+                                  color: Theme.of(context).colorScheme.outline,
                                 ),
                           ),
                         ],
@@ -1256,41 +1264,38 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
               const SizedBox(height: 14),
 
               Text('赛季控制', style: labelStyle),
-              const SizedBox(height: 6),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.baseline,
-                textBaseline: TextBaseline.alphabetic,
-                children: [
-                  Expanded(
-                    child: Row(
-                      children: [
-                        Text('启动 ', style: kickoffLabelStyle),
-                        Expanded(
-                          child: Text(
-                            widget.seasonStart == '—'
-                                ? '未记录'
-                                : widget.seasonStart,
-                            style: metaStyle,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+              if (showSeasonKickoff) ...[
+                const SizedBox(height: 6),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.baseline,
+                  textBaseline: TextBaseline.alphabetic,
+                  children: [
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Text('启动 ', style: kickoffLabelStyle),
+                          Expanded(
+                            child: Text(
+                              widget.seasonStart,
+                              style: metaStyle,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(widget.seasonDuration, style: durationStyle),
-                ],
-              ),
+                    const SizedBox(width: 8),
+                    Text(widget.seasonDuration, style: durationStyle),
+                  ],
+                ),
+              ],
               const SizedBox(height: 12),
 
               DecoratedBox(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(14),
                   color: Colors.white.withValues(alpha: 0.04),
-                  border: Border.all(
-                    color: _cyanAccent.withValues(alpha: 0.18),
-                  ),
                 ),
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
@@ -1298,8 +1303,9 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '盈利赛季',
-                        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        '赛季控制',
+                        style: Theme.of(context).textTheme.labelMedium
+                            ?.copyWith(
                               color: _cyanAccent.withValues(alpha: 0.9),
                               fontWeight: FontWeight.w700,
                               letterSpacing: 0.35,
@@ -1349,44 +1355,39 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
               ),
               const SizedBox(height: 12),
 
-              Text('机器人启动', style: labelStyle),
-              const SizedBox(height: 6),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.baseline,
-                textBaseline: TextBaseline.alphabetic,
-                children: [
-                  Expanded(
-                    child: Row(
-                      children: [
-                        Text('启动 ', style: kickoffLabelStyle),
-                        Expanded(
-                          child: Text(
-                            widget.robotStart == '—'
-                                ? '未记录'
-                                : widget.robotStart,
-                            style: metaStyle,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+              Text('策略状态', style: labelStyle),
+              if (showRobotKickoff) ...[
+                const SizedBox(height: 6),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.baseline,
+                  textBaseline: TextBaseline.alphabetic,
+                  children: [
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Text('启动 ', style: kickoffLabelStyle),
+                          Expanded(
+                            child: Text(
+                              widget.robotStart,
+                              style: metaStyle,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(widget.robotDuration, style: durationStyle),
-                ],
-              ),
+                    const SizedBox(width: 8),
+                    Text(widget.robotDuration, style: durationStyle),
+                  ],
+                ),
+              ],
 
               const SizedBox(height: 12),
               DecoratedBox(
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(14),
                   color: const Color(0xFF3DFF9C).withValues(alpha: 0.05),
-                  border: Border.all(
-                    color: AppFinanceStyle.profitGreenEnd.withValues(
-                      alpha: 0.22,
-                    ),
-                  ),
                 ),
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
@@ -1394,8 +1395,9 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '策略 · 进程控制',
-                        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        '策略控制',
+                        style: Theme.of(context).textTheme.labelMedium
+                            ?.copyWith(
                               color: AppFinanceStyle.profitGreenEnd.withValues(
                                 alpha: 0.95,
                               ),
@@ -1504,12 +1506,8 @@ class _CyberCircleIconButtonState extends State<_CyberCircleIconButton> {
     final canPress =
         widget.enabled && !widget.isLoading && widget.onTap != null;
     final a = widget.accent;
-    final borderA = canPress
-        ? (_pressed ? 0.95 : (_hover ? 0.75 : 0.4))
-        : 0.15;
-    final fillA = canPress
-        ? (_pressed ? 0.22 : (_hover ? 0.14 : 0.08))
-        : 0.04;
+    final borderA = canPress ? (_pressed ? 0.95 : (_hover ? 0.75 : 0.4)) : 0.15;
+    final fillA = canPress ? (_pressed ? 0.22 : (_hover ? 0.14 : 0.08)) : 0.04;
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
@@ -1551,9 +1549,7 @@ class _CyberCircleIconButtonState extends State<_CyberCircleIconButton> {
               : Icon(
                   widget.icon,
                   size: widget.iconSize,
-                  color: canPress
-                      ? a
-                      : a.withValues(alpha: 0.28),
+                  color: canPress ? a : a.withValues(alpha: 0.28),
                 ),
         ),
       ),

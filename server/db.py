@@ -653,6 +653,40 @@ def bot_profit_latest_by_bot(bot_id: str) -> dict | None:
         conn.close()
 
 
+def bot_profit_query_by_bot_since(
+    bot_id: str, *, since_snapshot_at: str, max_rows: int = 40000
+) -> list[dict]:
+    """自 since_snapshot_at（含）起按 snapshot_at 升序，供策略能效与 account_snapshots 口径对齐。"""
+    cap = max(100, min(100000, int(max_rows)))
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """SELECT id, bot_id, snapshot_at, initial_balance, current_balance, equity_usdt,
+                      profit_amount, profit_percent, created_at
+               FROM bot_profit_snapshots
+               WHERE bot_id = ? AND snapshot_at >= ?
+               ORDER BY snapshot_at ASC
+               LIMIT ?""",
+            ((bot_id or "").strip(), (since_snapshot_at or "").strip(), cap),
+        )
+        return [
+            {
+                "id": r[0],
+                "bot_id": r[1],
+                "snapshot_at": r[2],
+                "initial_balance": r[3],
+                "current_balance": r[4],
+                "equity_usdt": r[5],
+                "profit_amount": r[6],
+                "profit_percent": r[7],
+                "created_at": r[8],
+            }
+            for r in cur.fetchall()
+        ]
+    finally:
+        conn.close()
+
+
 # ---------- 策略启停事件（手动/自动、时间、类型） ----------
 def strategy_event_insert(
     bot_id: str,

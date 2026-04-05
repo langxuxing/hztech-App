@@ -161,14 +161,49 @@ class _CustomerAccountSetupScreenState extends State<CustomerAccountSetupScreen>
         buf.write(
           '标的: ${m['inst_id_checked'] ?? ''}，目标杠杆: ${m['target_leverage'] ?? 50}x\n',
         );
-        buf.write('余额摘要: ${m['balance_summary']}\n');
-        buf.write('checks: ${m['checks']}\n');
-        buf.write('account_config: ${m['account_config']}');
+        buf.write('余额摘要: ${m['balance_summary']}');
+        final checks = m['checks'];
+        buf.write('\n\n【检查项】');
+        if (checks != null) {
+          try {
+            buf.write('\n${const JsonEncoder.withIndent('  ').convert(checks)}');
+          } catch (_) {
+            buf.write('\n$checks');
+          }
+        } else {
+          buf.write('\n（无）');
+        }
+        final ac = m['account_config'];
+        buf.write('\n\n【账户配置】（OKX GET /api/v5/account/config）');
+        if (ac is Map && ac.isNotEmpty) {
+          try {
+            buf.write('\n${const JsonEncoder.withIndent('  ').convert(ac)}');
+          } catch (_) {
+            buf.write('\n$ac');
+          }
+          final uid = ac['uid'];
+          if (uid != null && '$uid'.trim().isNotEmpty) {
+            buf.write('\n【用户标识】OKX uid: $uid');
+          }
+        } else {
+          buf.write('\n（无数据：账户配置接口未返回有效内容，请查看下方警告）');
+        }
+        final lev = m['leverage_info'];
+        buf.write('\n\n【杠杆信息】');
+        if (lev != null) {
+          try {
+            buf.write('\n${const JsonEncoder.withIndent('  ').convert(lev)}');
+          } catch (_) {
+            buf.write('\n$lev');
+          }
+        } else {
+          buf.write('\n（无）');
+        }
       } else {
         buf.write(m['message']?.toString() ?? '失败');
       }
       if (warns is List && warns.isNotEmpty) {
-        buf.write('\n——\n');
+        buf.write('\n\n【警告与说明】\n');
         buf.writeAll(warns.map((e) => e.toString()), '\n');
       }
       await showDialog<void>(

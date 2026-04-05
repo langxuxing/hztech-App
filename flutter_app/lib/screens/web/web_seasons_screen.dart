@@ -13,10 +13,14 @@ class WebSeasonsScreen extends StatefulWidget {
     super.key,
     this.sharedBots = const [],
     this.embedInShell = false,
+    this.accountIdFromParent,
   });
 
   final List<UnifiedTradingBot> sharedBots;
   final bool embedInShell;
+
+  /// 非空时由上层（如赛季/历史仓位 Hub）统一选账户，本页不显示账户下拉。
+  final String? accountIdFromParent;
 
   @override
   State<WebSeasonsScreen> createState() => _WebSeasonsScreenState();
@@ -32,8 +36,11 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
 
   List<UnifiedTradingBot> get _bots => widget.sharedBots;
 
+  String? get _effectiveBotId =>
+      widget.accountIdFromParent ?? _botId;
+
   Future<void> _load() async {
-    final bid = _botId;
+    final bid = _effectiveBotId;
     if (bid == null || bid.isEmpty) return;
     setState(() {
       _loading = true;
@@ -70,8 +77,19 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
   void initState() {
     super.initState();
     if (_bots.isNotEmpty) {
-      _botId = _bots.first.tradingbotId;
+      _botId = widget.accountIdFromParent ?? _bots.first.tradingbotId;
       WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    }
+  }
+
+  @override
+  void didUpdateWidget(WebSeasonsScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.accountIdFromParent != null &&
+        widget.accountIdFromParent != oldWidget.accountIdFromParent) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _load();
+      });
     }
   }
 
@@ -81,41 +99,44 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: DropdownButtonFormField<String>(
-              value: _botId != null &&
-                      _bots.any((b) => b.tradingbotId == _botId)
-                  ? _botId
-                  : null,
-              decoration: InputDecoration(
-                labelText: '账户',
-                labelStyle: AppFinanceStyle.labelTextStyle(context),
-                filled: true,
-                fillColor: Colors.white.withValues(alpha: 0.06),
-              ),
-              dropdownColor: const Color(0xFF1a1a24),
-              style: TextStyle(color: AppFinanceStyle.valueColor),
-              items: _bots
-                  .map(
-                    (b) => DropdownMenuItem(
-                      value: b.tradingbotId,
-                      child: Text(
-                        (b.tradingbotName != null &&
-                                b.tradingbotName!.isNotEmpty)
-                            ? b.tradingbotName!
-                            : b.tradingbotId,
-                        overflow: TextOverflow.ellipsis,
+          if (widget.accountIdFromParent == null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+              child: DropdownButtonFormField<String>(
+                value: _botId != null &&
+                        _bots.any((b) => b.tradingbotId == _botId)
+                    ? _botId
+                    : null,
+                decoration: InputDecoration(
+                  labelText: '账户',
+                  labelStyle: AppFinanceStyle.labelTextStyle(context),
+                  filled: true,
+                  fillColor: Colors.white.withValues(alpha: 0.06),
+                ),
+                dropdownColor: const Color(0xFF1a1a24),
+                style: TextStyle(color: AppFinanceStyle.valueColor),
+                items: _bots
+                    .map(
+                      (b) => DropdownMenuItem(
+                        value: b.tradingbotId,
+                        child: Text(
+                          (b.tradingbotName != null &&
+                                  b.tradingbotName!.isNotEmpty)
+                              ? b.tradingbotName!
+                              : b.tradingbotId,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (v) {
-                setState(() => _botId = v);
-                _load();
-              },
-            ),
-          ),
+                    )
+                    .toList(),
+                onChanged: (v) {
+                  setState(() => _botId = v);
+                  _load();
+                },
+              ),
+            )
+          else
+            const SizedBox(height: 8),
           if (_activeCount != null && _activeCount! > 0)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -246,7 +267,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
                                   _line(
                                     context,
                                     '盈利',
-                                    formatUiInteger(s.profitAmount!),
+                                    s.profitAmount!.toStringAsFixed(1),
                                   ),
                                 if (s.profitPercent != null)
                                   _line(

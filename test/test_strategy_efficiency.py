@@ -73,6 +73,55 @@ def test_month_start_cash_by_month_from_snapshots():
     assert m.get("2026-04") == 5000.0
 
 
+def test_fill_cash_gaps_middle_days():
+    """K 线连续多日，仅部分日有快照：缺日补 sod=eod=上一真实日 eod，增量 0。"""
+    bars = [
+        {"day": "2026-04-01"},
+        {"day": "2026-04-02"},
+        {"day": "2026-04-03"},
+    ]
+    cash = {
+        "2026-04-01": {
+            "sod_cash": 100.0,
+            "eod_cash": 103.0,
+            "cash_delta_usdt": 3.0,
+        },
+        "2026-04-03": {
+            "sod_cash": 103.0,
+            "eod_cash": 108.0,
+            "cash_delta_usdt": 5.0,
+        },
+    }
+    filled = se.fill_cash_by_day_for_market_bars(bars, cash)
+    assert filled["2026-04-01"]["cash_delta_usdt"] == 3.0
+    assert filled["2026-04-02"]["sod_cash"] == 103.0
+    assert filled["2026-04-02"]["eod_cash"] == 103.0
+    assert filled["2026-04-02"]["cash_delta_usdt"] == 0.0
+    assert filled["2026-04-03"]["cash_delta_usdt"] == 5.0
+
+
+def test_fill_cash_before_first_snapshot_uses_anchor_sod():
+    bars = [{"day": "2026-04-01"}, {"day": "2026-04-02"}]
+    cash = {
+        "2026-04-02": {
+            "sod_cash": 200.0,
+            "eod_cash": 205.0,
+            "cash_delta_usdt": 5.0,
+        },
+    }
+    filled = se.fill_cash_by_day_for_market_bars(bars, cash)
+    assert filled["2026-04-01"]["sod_cash"] == 200.0
+    assert filled["2026-04-01"]["eod_cash"] == 200.0
+    assert filled["2026-04-01"]["cash_delta_usdt"] == 0.0
+
+
+def test_fill_cash_empty_snapshots_all_zero():
+    bars = [{"day": "2026-04-02"}]
+    filled = se.fill_cash_by_day_for_market_bars(bars, {})
+    assert filled["2026-04-02"]["cash_delta_usdt"] == 0.0
+    assert filled["2026-04-02"]["sod_cash"] == 0.0
+
+
 def test_merge_cash_yield_uses_month_base():
     bars = [
         {
@@ -95,3 +144,20 @@ def test_merge_cash_yield_uses_month_base():
     r = rows[0]
     assert abs(r["cash_delta_pct"] - 0.5) < 1e-9
     assert r["month_start_cash"] == 2000.0
+
+
+def test_normalize_bot_profit_snapshots_for_efficiency():
+    raw = [
+        {
+            "snapshot_at": "2026-04-01T10:00:00.000Z",
+            "equity_usdt": 100.0,
+            "current_balance": 99.0,
+        },
+        {"snapshot_at": "2026-04-01T20:00:00.000Z", "current_balance": 104.0},
+    ]
+    norm = se.normalize_bot_profit_snapshots_for_efficiency(raw)
+    assert len(norm) == 2
+    assert norm[0]["cash_balance"] == 100.0
+    assert norm[1]["cash_balance"] == 104.0
+    by = se.daily_cash_delta_by_utc_day(norm)
+    assert by["2026-04-01"]["cash_delta_usdt"] == 4.0

@@ -5,7 +5,7 @@ import '../../api/models.dart';
 import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
 import '../../utils/number_display_format.dart';
-import '../../widgets/profit_percent_line_chart.dart';
+import '../../widgets/balance_profit_line_chart.dart';
 import '../../widgets/water_background.dart';
 import 'web_account_profit_screen.dart';
 
@@ -312,16 +312,14 @@ class _SummaryCell extends StatelessWidget {
     final labelStyle = baseLabel.copyWith(
       fontSize: (baseLabel.fontSize ?? 14) - 2,
     );
-    final align = trailingLabel
-        ? CrossAxisAlignment.end
-        : CrossAxisAlignment.start;
     final ta = trailingLabel ? TextAlign.end : TextAlign.start;
     return Row(
       mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: align,
+      mainAxisAlignment: MainAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.end,
       children: [
         Text(label, style: labelStyle, textAlign: ta),
-        const SizedBox(height: 4),
+        const SizedBox(width: 6),
         Text(
           value,
           style: valueStyle,
@@ -431,7 +429,7 @@ class _OverviewGlassCard extends StatelessWidget {
           const SizedBox(height: 8),
           Expanded(
             child: snapshots.isNotEmpty
-                ? ProfitPercentLineChart(snapshots: snapshots)
+                ? CashBalanceLineChart(snapshots: snapshots)
                 : Center(
                     child: Text(
                       '暂无收益',
@@ -469,8 +467,7 @@ class _OverviewStatCol extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.baseline,
-      textBaseline: TextBaseline.alphabetic,
+      crossAxisAlignment: CrossAxisAlignment.end,
       children: [
         Text(label, style: labelStyle),
         const SizedBox(width: 6),
