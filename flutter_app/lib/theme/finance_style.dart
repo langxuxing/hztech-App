@@ -85,14 +85,43 @@ class FinanceCard extends StatelessWidget {
     required this.child,
     this.padding,
     this.onTap,
+    /// 状态强调色：加粗边框、顶部色条与可选外发光（策略启停等仪表盘卡片）。
+    this.statusAccent,
+    /// 与 [statusAccent] 配合，0–1 调节外发光强度（如运行中呼吸灯）。
+    this.accentGlowT = 0,
+    /// 若提供则替代纯色卡面，形成深灰微渐变（与毛玻璃叠加）。
+    this.surfaceGradient,
   });
 
   final Widget child;
   final EdgeInsetsGeometry? padding;
   final VoidCallback? onTap;
+  final Color? statusAccent;
+  /// 0–1，默认 0。
+  final double accentGlowT;
+  final Gradient? surfaceGradient;
 
   @override
   Widget build(BuildContext context) {
+    final accent = statusAccent;
+    final borderColor = accent != null
+        ? Color.alphaBlend(
+            accent.withValues(alpha: 0.42),
+            AppFinanceStyle.cardBorder,
+          )
+        : AppFinanceStyle.cardBorder;
+    final glowT = accentGlowT.clamp(0.0, 1.0);
+    final extraShadow = accent != null
+        ? <BoxShadow>[
+            BoxShadow(
+              color: accent.withValues(alpha: 0.08 + 0.22 * glowT),
+              blurRadius: 12 + 14 * glowT,
+              spreadRadius: 0,
+              offset: const Offset(0, 2),
+            ),
+          ]
+        : const <BoxShadow>[];
+
     final content = ClipRRect(
       borderRadius: BorderRadius.circular(AppFinanceStyle.cardRadius),
       child: Stack(
@@ -108,18 +137,48 @@ class FinanceCard extends StatelessWidget {
           ),
           Container(
             decoration: BoxDecoration(
-              color: AppFinanceStyle.cardBackground,
+              color: surfaceGradient == null ? AppFinanceStyle.cardBackground : null,
+              gradient: surfaceGradient,
               borderRadius: BorderRadius.circular(AppFinanceStyle.cardRadius),
-              border: Border.all(color: AppFinanceStyle.cardBorder, width: 1),
-              boxShadow: AppFinanceStyle.cardShadow,
+              border: Border.all(
+                color: borderColor,
+                width: accent != null ? 1.5 : 1,
+              ),
+              boxShadow: [...AppFinanceStyle.cardShadow, ...extraShadow],
             ),
             child: Stack(
               children: [
-                // 顶部高光线
+                if (accent != null)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    top: 0,
+                    height: 4,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            accent.withValues(alpha: 0.35 + 0.45 * glowT),
+                            accent.withValues(alpha: 0.15 + 0.2 * glowT),
+                          ],
+                          begin: Alignment.centerLeft,
+                          end: Alignment.centerRight,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: accent.withValues(alpha: 0.35 * glowT),
+                            blurRadius: 10,
+                            spreadRadius: -1,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                // 顶部高光线（与状态条并存时略下移）
                 Positioned(
                   left: 0,
                   right: 0,
-                  top: 0,
+                  top: accent != null ? 4 : 0,
                   height: 1,
                   child: Container(
                     decoration: BoxDecoration(

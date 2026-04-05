@@ -1,6 +1,6 @@
 [
   {
-    "account_id": "OKX_Alang_Sandbox",
+    "account_id": "Alang_Sandbox",
     "account_name": "阿郎测试",
     "exchange_account": "OKX",
     "symbol": "PEPE-USDT-SWAP",
@@ -11,7 +11,7 @@
     "enbaled": true
   },
   {
-    "account_id": "OKX_Dong_Live",
+    "account_id": "Dong_Live",
     "account_name": "董杰VIP",
     "exchange_account": "OKX",
     "symbol": "PEPE-USDT-SWAP",
@@ -22,7 +22,7 @@
     "enbaled": true
   },
   {
-    "account_id": "OKX_Hztech_Devops",
+    "account_id": "Hztech_Devops",
     "account_name": "禾正科技测试",
     "exchange_account": "OKX",
     "symbol": "PEPE-USDT-SWAP",
@@ -33,7 +33,7 @@
     "enbaled": true
   },
   {
-    "account_id": "OKX_Forest_Sandbox",
+    "account_id": "Forest_Sandbox",
     "account_name": "林总沙盘",
     "exchange_account": "OKX",
     "symbol": "PEPE-USDT-SWAP",
@@ -44,7 +44,7 @@
     "enbaled": false
   },
   {
-    "account_id": "OKX_Forest_Live",
+    "account_id": "Forest_Live",
     "account_name": "林总账户",
     "exchange_account": "OKX",
     "symbol": "PEPE-USDT-SWAP",
@@ -55,7 +55,7 @@
     "enbaled": false
   },
   {
-    "account_id": "OKX_Guoguo_Live",
+    "account_id": "Guoguo_Live",
     "account_name": "果果账户",
     "exchange_account": "OKX",
     "symbol": "PEPE-USDT-SWAP",
@@ -66,7 +66,7 @@
     "enbaled": false
   },
   {
-    "account_id": "OKX_HzTech_MainRepo",
+    "account_id": "HzTech_MainRepo",
     "account_name": "禾正主仓",
     "exchange_account": "OKX",
     "symbol": "PEPE-USDT-SWAP",
@@ -77,7 +77,7 @@
     "enbaled": true
   },
   {
-    "account_id": "OKX_HzTech_Moneyflow@001",
+    "account_id": "HzTech_Moneyflow@001",
     "account_name": "细水长流1-禾正现金流",
     "exchange_account": "OKX",
     "symbol": "PEPE-USDT-SWAP",
@@ -88,7 +88,7 @@
     "enbaled": true
   },
   {
-    "account_id": "OKX_HzTech_Moneyflow@002",
+    "account_id": "HzTech_Moneyflow@002",
     "account_name": "细水长流2-Defi专户",
     "exchange_account": "OKX",
     "symbol": "PEPE-USDT-SWAP",
@@ -99,7 +99,7 @@
     "enbaled":true
   },
   {
-    "account_id": "OKX_HzTech_Moneyflow@003",
+    "account_id": "HzTech_Moneyflow@003",
     "account_name": "细水长流3-复利增长",
     "exchange_account": "OKX",
     "symbol": "PEPE-USDT-SWAP",
@@ -110,7 +110,7 @@
     "enbaled": true
   },
   {
-    "account_id": "OKX_HzTech_Moneyflow@004",
+    "account_id": "HzTech_Moneyflow@004",
     "account_name": "细水长流4-董哥哥VIP",
     "exchange_account": "OKX",
     "symbol": "PEPE-USDT-SWAP",
@@ -121,7 +121,7 @@
     "enbaled": true
   },
   {
-    "account_id": "OKX_HzTech_Moneyflow@005",
+    "account_id": "HzTech_Moneyflow@005",
     "account_name": "细水长流5",
     "exchange_account": "OKX",
     "symbol": "PEPE-USDT-SWAP",

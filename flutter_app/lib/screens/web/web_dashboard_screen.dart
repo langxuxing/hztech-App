@@ -316,10 +316,12 @@ class _SummaryCell extends StatelessWidget {
         ? CrossAxisAlignment.end
         : CrossAxisAlignment.start;
     final ta = trailingLabel ? TextAlign.end : TextAlign.start;
-    return Column(
+    return Row(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: align,
       children: [
+        Text(label, style: labelStyle, textAlign: ta),
+        const SizedBox(height: 4),
         Text(
           value,
           style: valueStyle,
@@ -327,8 +329,6 @@ class _SummaryCell extends StatelessWidget {
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
         ),
-        const SizedBox(height: 4),
-        Text(label, style: labelStyle, textAlign: ta),
       ],
     );
   }
@@ -472,9 +472,9 @@ class _OverviewStatCol extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.baseline,
       textBaseline: TextBaseline.alphabetic,
       children: [
-        Text(value, style: numStyle),
-        const SizedBox(width: 6),
         Text(label, style: labelStyle),
+        const SizedBox(width: 6),
+        Text(value, style: numStyle),
       ],
     );
   }

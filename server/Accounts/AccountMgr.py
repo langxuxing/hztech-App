@@ -22,6 +22,17 @@ from typing import Any
 
 ACCOUNTS_DIR = Path(__file__).resolve().parent
 
+# 定时任务 DEBUG 日志：账号列宽（超长截断后左对齐）
+_LOG_ACCOUNT_COL_WIDTH = 20
+
+
+def _fmt_log_account_id(account_id: str, width: int = _LOG_ACCOUNT_COL_WIDTH) -> str:
+    s = str(account_id or "").strip()
+    if len(s) > width:
+        s = s[:width]
+    return s.ljust(width)
+
+
 _test_account_key_mod: Any = None
 
 
@@ -172,7 +183,10 @@ def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None 
         initial = float(meta["initial_capital"]) if meta else _initial_capital(row)
 
         if not path:
-            log.debug("account_snapshot_skip: %s 无密钥文件", aid)
+            log.debug(
+                "账号快照跳过: %s 无密钥文件",
+                _fmt_log_account_id(aid),
+            )
             continue
 
         live = okx_mod.okx_fetch_balance(config_path=path)
@@ -207,10 +221,10 @@ def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None 
             )
 
         log.debug(
-            "account_snapshot_ok: %s equity=%s cash=%s",
-            aid,
-            total_eq,
-            cash,
+            "账户快照: %s \t权益=%d \t现金=%d",
+            _fmt_log_account_id(aid),
+            int(round(total_eq)),
+            int(round(cash)),
         )
 
 def _fetch_and_save_tradingbot_snapshots() -> None:
@@ -268,7 +282,10 @@ def refresh_all_positions_history(
         aid = str(row.get("account_id") or "").strip()
         path = resolve_okx_config_path(aid)
         if not path:
-            log.debug("positions_history_skip: %s 无密钥文件", aid)
+            log.debug(
+                "持仓历史跳过: %s 无密钥文件",
+                _fmt_log_account_id(aid),
+            )
             continue
 
         hist, err = okx_mod.okx_fetch_positions_history(config_path=path)
@@ -284,8 +301,8 @@ def refresh_all_positions_history(
             continue
         n = db_module.account_positions_history_insert_batch(aid, hist, ts)
         log.debug(
-            "positions_history_ok: %s api_rows=%d inserted=%d",
-            aid,
+            "持仓历史: %s \t接口行=%d \t写入=%d",
+            _fmt_log_account_id(aid),
             len(hist),
             n,
         )
@@ -317,7 +334,12 @@ def refresh_positions_history_one(
     if not hist:
         return True, "无新历史仓位数据"
     n = db_module.account_positions_history_insert_batch(aid, hist, ts)
-    log.info("positions_history_one_ok: %s api_rows=%d inserted=%d", aid, len(hist), n)
+    log.info(
+        "positions_history_one_ok: %s api_rows=%d inserted=%d",
+        _fmt_log_account_id(aid),
+        len(hist),
+        n,
+    )
     return True, f"已写入 {n} 条新记录"
 
 

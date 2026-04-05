@@ -143,7 +143,11 @@ def start_shell_bot(account_id: str, script_abs: Path) -> dict:
     if existing:
         return {"ok": False, "error": "进程已在运行", "pids": existing}
 
-    log_path = root / f"account_{_safe_pid_tag(account_id)}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    log_dir = root / "server" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_id = _safe_pid_tag(account_id)
+    log_path = log_dir / f"account_{safe_id}_{ts}.log"
     cmd = (
         f'nohup env HZTECH_ACCOUNT_ID="{account_id}" bash "{script_abs}" start '
         f'>> "{log_path}" 2>&1 & echo $!'
