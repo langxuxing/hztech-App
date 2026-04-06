@@ -816,6 +816,40 @@ class _WebStrategyPerformanceScreenState
           row([
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              child: Text('月初权益', style: labStyle),
+            ),
+            ...rows.map(
+              (e) => Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                child: Text(
+                  e.monthStartEquity != null
+                      ? _fmtIntAmount(e.monthStartEquity)
+                      : '—',
+                  style: valStyle,
+                  textAlign: TextAlign.right,
+                ),
+              ),
+            ),
+          ]),
+          row([
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              child: Text('权益收益率%', style: labStyle),
+            ),
+            ...rows.map(
+              (e) => Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                child: Text(
+                  _fmtPctOneLabel(e.equityDeltaPct),
+                  style: valStyle,
+                  textAlign: TextAlign.right,
+                ),
+              ),
+            ),
+          ]),
+          row([
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
               child: Text('策略能效', style: labStyle),
             ),
             ...rows.map(
@@ -826,6 +860,40 @@ class _WebStrategyPerformanceScreenState
                   style: valStyle.copyWith(
                     color: _efficiencyPointColor(e.efficiencyRatio),
                   ),
+                  textAlign: TextAlign.right,
+                ),
+              ),
+            ),
+          ]),
+          row([
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              child: Text('权益能效', style: labStyle),
+            ),
+            ...rows.map(
+              (e) => Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                child: Text(
+                  _fmtEfficiencyCell(e.equityEfficiencyRatio),
+                  style: valStyle.copyWith(
+                    color: _efficiencyPointColor(e.equityEfficiencyRatio),
+                  ),
+                  textAlign: TextAlign.right,
+                ),
+              ),
+            ),
+          ]),
+          row([
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              child: Text('ATR14', style: labStyle),
+            ),
+            ...rows.map(
+              (e) => Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                child: Text(
+                  e.atr14 != null ? e.atr14!.toStringAsFixed(8) : '—',
+                  style: valStyle,
                   textAlign: TextAlign.right,
                 ),
               ),
@@ -952,9 +1020,10 @@ class _WebStrategyPerformanceScreenState
               Expanded(
                 child: Text(
                   title,
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                     color: AppFinanceStyle.valueColor,
                     fontWeight: FontWeight.w600,
+                    fontSize: 20,
                   ),
                 ),
               ),
@@ -968,15 +1037,16 @@ class _WebStrategyPerformanceScreenState
               ),
             ],
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 12),
           Text(
             '${eff.instId}：每日波动率% = |最高−最低|÷收盘 × 100%；'
-            '现金收益率% = 当日现金增量 ÷ 月初资金 × 100%；'
-            '策略能效 = 当日现金增量÷ (每日波动 |最高−最低| × 1e9)；'
+            '现金/权益收益率% = 当日增量 ÷ UTC 月初资金或月初权益 × 100%；'
+            '策略/权益能效 = 当日增量÷ (每日波动 |最高−最低| × 1e9)；'
+            'ATR14 为 Wilder 经典波幅（与表中「每日波动」列非同一定义）；'
             '$cashNote',
             style: AppFinanceStyle.labelTextStyle(
               context,
-            ).copyWith(fontSize: 12),
+            ).copyWith(fontSize: 14),
           ),
           const SizedBox(height: 12),
           DefaultTabController(
@@ -989,10 +1059,12 @@ class _WebStrategyPerformanceScreenState
                   unselectedLabelColor: AppFinanceStyle.labelColor.withValues(
                     alpha: 0.65,
                   ),
+                  labelStyle: const TextStyle(fontSize: 14),
+                  unselectedLabelStyle: const TextStyle(fontSize: 14),
                   indicatorColor: AppFinanceStyle.profitGreenEnd,
                   indicatorSize: TabBarIndicatorSize.label,
                   tabs: const [
-                    Tab(text: '按日图表'),
+                    Tab(text: '图表'),
                     Tab(text: '数据'),
                   ],
                 ),
@@ -1013,16 +1085,26 @@ class _WebStrategyPerformanceScreenState
                               _chartBarPatternLegendRow(
                                 context,
                                 pattern: _EffBarHatchPattern.diagonal,
-                                baseColor: const Color.fromRGBO(245, 245, 245, 0.58),
+                                baseColor: const Color.fromRGBO(
+                                  245,
+                                  245,
+                                  245,
+                                  0.58,
+                                ),
                                 label:
                                     '每日波动率%（上半轴柱，斜纹；着色：白/黄/红 <6% / 6–10% / >10%）',
                               ),
                               _chartBarPatternLegendRow(
                                 context,
                                 pattern: _EffBarHatchPattern.grid,
-                                baseColor: const Color.fromRGBO(34, 197, 94, 0.62),
+                                baseColor: const Color.fromRGBO(
+                                  34,
+                                  197,
+                                  94,
+                                  0.62,
+                                ),
                                 label:
-                                    '现金收益率%（下半轴柱，网格底纹；着色：灰/白/绿 <0.5% / 0.5–1% / ≥1%）',
+                                    '现金收益率%（下半轴柱，网格；着色：灰/白/绿 <0.5% / 0.5–1% / ≥1%）',
                               ),
                               _chartLegendRow(
                                 context,

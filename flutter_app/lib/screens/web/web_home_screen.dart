@@ -1,42 +1,10 @@
 import 'package:flutter/material.dart';
 
-import '../../secure/prefs.dart';
-import '../../theme/finance_style.dart';
-
-/// 洛伦兹吸引子主视觉（后端 `GET /res/bg`）。
-class WebHomeScreen extends StatefulWidget {
+/// Web 首页：本地洛伦兹吸引子图作为全屏背景。
+class WebHomeScreen extends StatelessWidget {
   const WebHomeScreen({super.key});
 
-  @override
-  State<WebHomeScreen> createState() => _WebHomeScreenState();
-}
-
-class _WebHomeScreenState extends State<WebHomeScreen> {
-  final _prefs = SecurePrefs();
-  String? _bgUrl;
-  int _imgKey = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _resolveUrl();
-  }
-
-  Future<void> _resolveUrl() async {
-    final base = await _prefs.backendBaseUrl;
-    if (!mounted) return;
-    final b = base.trim();
-    if (b.isEmpty) {
-      setState(() => _bgUrl = null);
-      return;
-    }
-    final u = b.startsWith('http') ? b : 'http://$b';
-    final normalized = u.endsWith('/') ? u : '$u/';
-    setState(() {
-      _bgUrl = '${normalized}res/bg';
-      _imgKey++;
-    });
-  }
+  static const String _bgAsset = 'images/lorenz_butterfly.jpg';
 
   @override
   Widget build(BuildContext context) {
@@ -45,27 +13,12 @@ class _WebHomeScreenState extends State<WebHomeScreen> {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          if (_bgUrl != null)
-            Image.network(
-              _bgUrl!,
-              key: ValueKey<int>(_imgKey),
+          Positioned.fill(
+            child: Image.asset(
+              _bgAsset,
               fit: BoxFit.cover,
               alignment: Alignment.center,
-              errorBuilder: (_, __, ___) =>
-                  const ColoredBox(color: Color(0xFF0a1628)),
-            )
-          else
-            const ColoredBox(color: Color(0xFF0a1628)),
-          Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Colors.black.withValues(alpha: 0.35),
-                  Colors.black.withValues(alpha: 0.75),
-                ],
-              ),
+              filterQuality: FilterQuality.medium,
             ),
           ),
           SafeArea(
@@ -86,7 +39,7 @@ class _WebHomeScreenState extends State<WebHomeScreen> {
                           textAlign: TextAlign.center,
                           style: Theme.of(context).textTheme.headlineMedium
                               ?.copyWith(
-                                color: AppFinanceStyle.valueColor,
+                                color: const Color(0xFFE8E8F0),
                                 fontWeight: FontWeight.w800,
                                 letterSpacing: 1,
                               ),

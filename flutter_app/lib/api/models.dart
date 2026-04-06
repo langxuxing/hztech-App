@@ -404,6 +404,20 @@ class StrategyDailyEfficiencyRow {
   /// 策略能效 = 当日现金增量 USDT ÷ (价格波幅 |高−低| × 1e9)。
   final double? efficiencyRatio;
 
+  /// 权益日增量（与现金口径对称，非负增量）。
+  final double? equityDeltaUsdt;
+  /// 权益收益率% = 权益日增量 ÷ UTC 月初权益 × 100。
+  final double? equityDeltaPct;
+  final double? monthStartEquity;
+  /// 权益能效 = 权益日增量 ÷ (|高−低| × 1e9)。
+  final double? equityEfficiencyRatio;
+
+  /// Wilder ATR(14)，经典 TR；与 `tr`（|H−L|）不同。
+  final double? atr14;
+  final double? threshold01AtrPrice;
+  final double? threshold06AtrPrice;
+  final double? threshold12AtrPrice;
+
   StrategyDailyEfficiencyRow({
     required this.day,
     required this.open,
@@ -418,6 +432,14 @@ class StrategyDailyEfficiencyRow {
     this.cashDeltaPct,
     this.monthStartCash,
     this.efficiencyRatio,
+    this.equityDeltaUsdt,
+    this.equityDeltaPct,
+    this.monthStartEquity,
+    this.equityEfficiencyRatio,
+    this.atr14,
+    this.threshold01AtrPrice,
+    this.threshold06AtrPrice,
+    this.threshold12AtrPrice,
   });
 
   factory StrategyDailyEfficiencyRow.fromJson(Map<String, dynamic> json) {
@@ -435,6 +457,14 @@ class StrategyDailyEfficiencyRow {
       cashDeltaPct: (json['cash_delta_pct'] as num?)?.toDouble(),
       monthStartCash: (json['month_start_cash'] as num?)?.toDouble(),
       efficiencyRatio: (json['efficiency_ratio'] as num?)?.toDouble(),
+      equityDeltaUsdt: (json['equity_delta_usdt'] as num?)?.toDouble(),
+      equityDeltaPct: (json['equity_delta_pct'] as num?)?.toDouble(),
+      monthStartEquity: (json['month_start_equity'] as num?)?.toDouble(),
+      equityEfficiencyRatio: (json['equity_efficiency_ratio'] as num?)?.toDouble(),
+      atr14: (json['atr14'] as num?)?.toDouble(),
+      threshold01AtrPrice: (json['threshold_0_1_atr_price'] as num?)?.toDouble(),
+      threshold06AtrPrice: (json['threshold_0_6_atr_price'] as num?)?.toDouble(),
+      threshold12AtrPrice: (json['threshold_1_2_atr_price'] as num?)?.toDouble(),
     );
   }
 }

@@ -6,6 +6,34 @@ import '../auth/app_user_role.dart';
 import '../secure/prefs.dart';
 import '../theme/finance_style.dart';
 
+/// 用户管理弹窗内主文字 rgb(220,220,220)
+const Color _kUserDialogText = Color(0xFFDCDCDC);
+
+const TextStyle _userDialogLabel = TextStyle(
+  fontSize: 14,
+  fontWeight: FontWeight.w500,
+  color: _kUserDialogText,
+);
+
+const TextStyle _userDialogField = TextStyle(color: _kUserDialogText);
+
+const TextStyle _userDialogTitle = TextStyle(
+  fontSize: 18,
+  fontWeight: FontWeight.w600,
+  color: _kUserDialogText,
+);
+
+TextStyle _userDialogHintStyle() => TextStyle(
+  color: _kUserDialogText.withValues(alpha: 0.58),
+  fontSize: 13,
+);
+
+TextStyle _userDialogCaptionStyle() => TextStyle(
+  color: _kUserDialogText.withValues(alpha: 0.88),
+  fontSize: 12,
+  height: 1.35,
+);
+
 String _userFacingError(Object e) {
   if (e is StateError) {
     final m = e.message;
@@ -65,7 +93,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
           fontSize: 12,
           color: selected
               ? AppFinanceStyle.profitGreenEnd
-              : AppFinanceStyle.valueColor,
+              : _kUserDialogText,
         ),
       ),
       selected: selected,
@@ -76,6 +104,102 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
       surfaceTintColor: Colors.transparent,
       materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+  }
+
+  InputDecoration _userDialogCompactFieldDecoration({String? hint}) {
+    return InputDecoration(
+      isDense: true,
+      filled: true,
+      fillColor: Colors.white.withValues(alpha: 0.06),
+      contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+      hintText: hint,
+      hintStyle: hint != null ? _userDialogHintStyle() : null,
+    );
+  }
+
+  /// 全名、手机号、角色（类型）同一行。
+  Widget _fullNamePhoneRoleRow({
+    required TextEditingController fullNameCtrl,
+    required TextEditingController phoneCtrl,
+    required AppUserRole role,
+    required Key roleDropdownKey,
+    required void Function(void Function()) setDialogLocal,
+    required void Function(AppUserRole newRole) onRoleSelected,
+    String fullNameHint = '选填',
+    String phoneHint = '选填',
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          flex: 5,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('全名', style: _userDialogLabel),
+              const SizedBox(height: 4),
+              TextField(
+                controller: fullNameCtrl,
+                style: _userDialogField,
+                decoration: _userDialogCompactFieldDecoration(hint: fullNameHint),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          flex: 5,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('手机号', style: _userDialogLabel),
+              const SizedBox(height: 4),
+              TextField(
+                controller: phoneCtrl,
+                keyboardType: TextInputType.phone,
+                style: _userDialogField,
+                decoration: _userDialogCompactFieldDecoration(hint: phoneHint),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          flex: 4,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('类型', style: _userDialogLabel),
+              const SizedBox(height: 4),
+              DropdownMenu<AppUserRole>(
+                key: roleDropdownKey,
+                initialSelection: role,
+                textStyle: _userDialogField,
+                menuStyle: MenuStyle(
+                  backgroundColor: WidgetStateProperty.all(const Color(0xFF2a2a36)),
+                ),
+                dropdownMenuEntries: [
+                  for (final r in AppUserRole.assignableRoles())
+                    DropdownMenuEntry(
+                      value: r,
+                      label: AppUserRole.label(r),
+                    ),
+                ],
+                onSelected: (v) {
+                  if (v != null) {
+                    setDialogLocal(() => onRoleSelected(v));
+                  }
+                },
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -119,76 +243,45 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       builder: (ctx) {
         return StatefulBuilder(
           builder: (ctx, setLocal) {
-            return AlertDialog(
+            return Theme(
+              data: Theme.of(ctx).copyWith(
+                colorScheme: Theme.of(ctx).colorScheme.copyWith(onSurface: _kUserDialogText),
+              ),
+              child: AlertDialog(
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.sizeOf(ctx).width * 0.5,
+              ),
               backgroundColor: const Color(0xFF1a1a24),
-              title: Text(
+              title: const Text(
                 '新增用户',
-                style: const TextStyle(color: AppFinanceStyle.valueColor),
+                style: _userDialogTitle,
               ),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Text('登录名（用户名）', style: AppFinanceStyle.labelTextStyle(context)),
+                    const Text('登录名（用户名）', style: _userDialogLabel),
                     const SizedBox(height: 6),
                     TextField(
                       controller: userCtrl,
-                      style: const TextStyle(color: AppFinanceStyle.valueColor),
+                      style: _userDialogField,
                       autocorrect: false,
                       decoration: InputDecoration(
                         filled: true,
                         fillColor: Colors.white.withValues(alpha: 0.06),
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                         hintText: '用于登录，不可与已有账号重复',
-                        hintStyle: TextStyle(
-                          color: AppFinanceStyle.labelColor.withValues(alpha: 0.55),
-                          fontSize: 13,
-                        ),
+                        hintStyle: _userDialogHintStyle(),
                       ),
                     ),
                     const SizedBox(height: 12),
-                    Text('全名', style: AppFinanceStyle.labelTextStyle(context)),
-                    const SizedBox(height: 6),
-                    TextField(
-                      controller: fullNameCtrl,
-                      style: const TextStyle(color: AppFinanceStyle.valueColor),
-                      decoration: InputDecoration(
-                        filled: true,
-                        fillColor: Colors.white.withValues(alpha: 0.06),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                        hintText: '选填，用于列表展示',
-                        hintStyle: TextStyle(
-                          color: AppFinanceStyle.labelColor.withValues(alpha: 0.55),
-                          fontSize: 13,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text('手机号', style: AppFinanceStyle.labelTextStyle(context)),
-                    const SizedBox(height: 6),
-                    TextField(
-                      controller: phoneCtrl,
-                      keyboardType: TextInputType.phone,
-                      style: const TextStyle(color: AppFinanceStyle.valueColor),
-                      decoration: InputDecoration(
-                        filled: true,
-                        fillColor: Colors.white.withValues(alpha: 0.06),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                        hintText: '选填',
-                        hintStyle: TextStyle(
-                          color: AppFinanceStyle.labelColor.withValues(alpha: 0.55),
-                          fontSize: 13,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text('密码（至少 6 位）', style: AppFinanceStyle.labelTextStyle(context)),
+                    const Text('密码（至少 6 位）', style: _userDialogLabel),
                     const SizedBox(height: 6),
                     TextField(
                       controller: passCtrl,
                       obscureText: true,
-                      style: const TextStyle(color: AppFinanceStyle.valueColor),
+                      style: _userDialogField,
                       decoration: InputDecoration(
                         filled: true,
                         fillColor: Colors.white.withValues(alpha: 0.06),
@@ -196,12 +289,12 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                       ),
                     ),
                     const SizedBox(height: 12),
-                    Text('确认密码', style: AppFinanceStyle.labelTextStyle(context)),
+                    const Text('确认密码', style: _userDialogLabel),
                     const SizedBox(height: 6),
                     TextField(
                       controller: pass2Ctrl,
                       obscureText: true,
-                      style: const TextStyle(color: AppFinanceStyle.valueColor),
+                      style: _userDialogField,
                       decoration: InputDecoration(
                         filled: true,
                         fillColor: Colors.white.withValues(alpha: 0.06),
@@ -209,47 +302,32 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                       ),
                     ),
                     const SizedBox(height: 16),
-                    Text('角色', style: AppFinanceStyle.labelTextStyle(context)),
-                    const SizedBox(height: 4),
-                    Text(
-                      '客户需勾选下方可见账户；其他角色不按账户过滤。',
-                      style: TextStyle(
-                        color: AppFinanceStyle.labelColor.withValues(alpha: 0.85),
-                        fontSize: 12,
-                        height: 1.35,
-                      ),
+                    _fullNamePhoneRoleRow(
+                      fullNameCtrl: fullNameCtrl,
+                      phoneCtrl: phoneCtrl,
+                      role: role,
+                      roleDropdownKey: ValueKey<AppUserRole>(role),
+                      setDialogLocal: setLocal,
+                      onRoleSelected: (r) => role = r,
+                      fullNameHint: '选填',
                     ),
                     const SizedBox(height: 8),
-                    DropdownMenu<AppUserRole>(
-                      key: ValueKey<AppUserRole>(role),
-                      initialSelection: role,
-                      textStyle: const TextStyle(color: AppFinanceStyle.valueColor),
-                      menuStyle: MenuStyle(
-                        backgroundColor: WidgetStateProperty.all(const Color(0xFF2a2a36)),
-                      ),
-                      dropdownMenuEntries: [
-                        for (final r in AppUserRole.assignableRoles())
-                          DropdownMenuEntry(
-                            value: r,
-                            label: AppUserRole.label(r),
-                          ),
-                      ],
-                      onSelected: (v) {
-                        if (v != null) setLocal(() => role = v);
-                      },
+                    Text(
+                      '客户需勾选下方可见账户；其他角色不按账户过滤。',
+                      style: _userDialogCaptionStyle(),
                     ),
                     if (role == AppUserRole.customer) ...[
                       const SizedBox(height: 16),
-                      Text(
+                      const Text(
                         '客户可访问账户（多选）',
-                        style: AppFinanceStyle.labelTextStyle(context),
+                        style: _userDialogLabel,
                       ),
                       const SizedBox(height: 8),
                       if (_accountChoices.isEmpty)
                         Text(
                           '暂无账户列表',
                           style: TextStyle(
-                            color: AppFinanceStyle.labelColor.withValues(alpha: 0.9),
+                            color: _kUserDialogText.withValues(alpha: 0.9),
                             fontSize: 13,
                           ),
                         )
@@ -288,6 +366,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                   child: const Text('创建'),
                 ),
               ],
+            ),
             );
           },
         );
@@ -355,15 +434,19 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   Future<void> _deleteUser(ManagedUserRow row) async {
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => Theme(
+        data: Theme.of(ctx).copyWith(
+          colorScheme: Theme.of(ctx).colorScheme.copyWith(onSurface: _kUserDialogText),
+        ),
+        child: AlertDialog(
         backgroundColor: const Color(0xFF1a1a24),
         title: const Text(
           '删除用户',
-          style: TextStyle(color: AppFinanceStyle.valueColor),
+          style: _userDialogTitle,
         ),
         content: Text(
           '确定删除用户「${row.username}」？此操作不可恢复。',
-          style: TextStyle(color: AppFinanceStyle.labelColor.withValues(alpha: 0.95)),
+          style: TextStyle(color: _kUserDialogText.withValues(alpha: 0.95)),
         ),
         actions: [
           TextButton(
@@ -376,6 +459,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
             child: const Text('删除'),
           ),
         ],
+      ),
       ),
     );
     if (ok != true || !mounted) return;
@@ -407,11 +491,18 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       builder: (ctx) {
         return StatefulBuilder(
           builder: (ctx, setLocal) {
-            return AlertDialog(
+            return Theme(
+              data: Theme.of(ctx).copyWith(
+                colorScheme: Theme.of(ctx).colorScheme.copyWith(onSurface: _kUserDialogText),
+              ),
+              child: AlertDialog(
+              constraints: BoxConstraints(
+                maxWidth: MediaQuery.sizeOf(ctx).width * 0.5,
+              ),
               backgroundColor: const Color(0xFF1a1a24),
               title: Text(
                 row.username,
-                style: const TextStyle(color: AppFinanceStyle.valueColor),
+                style: _userDialogTitle,
               ),
               content: SingleChildScrollView(
                 child: Column(
@@ -420,89 +511,34 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                   children: [
                     Text(
                       '登录名不可在此修改；全名与手机号仅用于展示与联系。',
-                      style: TextStyle(
-                        color: AppFinanceStyle.labelColor.withValues(alpha: 0.85),
-                        fontSize: 12,
-                        height: 1.35,
-                      ),
+                      style: _userDialogCaptionStyle(),
                     ),
                     const SizedBox(height: 12),
-                    Text('全名', style: AppFinanceStyle.labelTextStyle(context)),
-                    const SizedBox(height: 6),
-                    TextField(
-                      controller: fullNameCtrl,
-                      style: const TextStyle(color: AppFinanceStyle.valueColor),
-                      decoration: InputDecoration(
-                        filled: true,
-                        fillColor: Colors.white.withValues(alpha: 0.06),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                        hintText: '选填',
-                        hintStyle: TextStyle(
-                          color: AppFinanceStyle.labelColor.withValues(alpha: 0.55),
-                          fontSize: 13,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text('手机号', style: AppFinanceStyle.labelTextStyle(context)),
-                    const SizedBox(height: 6),
-                    TextField(
-                      controller: phoneCtrl,
-                      keyboardType: TextInputType.phone,
-                      style: const TextStyle(color: AppFinanceStyle.valueColor),
-                      decoration: InputDecoration(
-                        filled: true,
-                        fillColor: Colors.white.withValues(alpha: 0.06),
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                        hintText: '选填',
-                        hintStyle: TextStyle(
-                          color: AppFinanceStyle.labelColor.withValues(alpha: 0.55),
-                          fontSize: 13,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Text('角色', style: AppFinanceStyle.labelTextStyle(context)),
-                    const SizedBox(height: 4),
-                    Text(
-                      '改为非管理员时，若该用户是最后一位管理员，将无法保存。',
-                      style: TextStyle(
-                        color: AppFinanceStyle.labelColor.withValues(alpha: 0.85),
-                        fontSize: 12,
-                        height: 1.35,
-                      ),
+                    _fullNamePhoneRoleRow(
+                      fullNameCtrl: fullNameCtrl,
+                      phoneCtrl: phoneCtrl,
+                      role: role,
+                      roleDropdownKey: ValueKey<AppUserRole>(role),
+                      setDialogLocal: setLocal,
+                      onRoleSelected: (r) => role = r,
                     ),
                     const SizedBox(height: 8),
-                    DropdownMenu<AppUserRole>(
-                      key: ValueKey<AppUserRole>(role),
-                      initialSelection: role,
-                      textStyle: const TextStyle(color: AppFinanceStyle.valueColor),
-                      menuStyle: MenuStyle(
-                        backgroundColor: WidgetStateProperty.all(const Color(0xFF2a2a36)),
-                      ),
-                      dropdownMenuEntries: [
-                        for (final r in AppUserRole.assignableRoles())
-                          DropdownMenuEntry(
-                            value: r,
-                            label: AppUserRole.label(r),
-                          ),
-                      ],
-                      onSelected: (v) {
-                        if (v != null) setLocal(() => role = v);
-                      },
+                    Text(
+                      '改为非管理员时，若该用户是最后一位管理员，将无法保存。',
+                      style: _userDialogCaptionStyle(),
                     ),
                     if (role == AppUserRole.customer) ...[
                       const SizedBox(height: 16),
-                      Text(
+                      const Text(
                         '客户可访问账户（多选）',
-                        style: AppFinanceStyle.labelTextStyle(context),
+                        style: _userDialogLabel,
                       ),
                       const SizedBox(height: 8),
                       if (_accountChoices.isEmpty)
                         Text(
                           '暂无账户列表，请先配置 Account_List',
                           style: TextStyle(
-                            color: AppFinanceStyle.labelColor.withValues(alpha: 0.9),
+                            color: _kUserDialogText.withValues(alpha: 0.9),
                             fontSize: 13,
                           ),
                         )
@@ -541,6 +577,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                   child: const Text('保存'),
                 ),
               ],
+            ),
             );
           },
         );

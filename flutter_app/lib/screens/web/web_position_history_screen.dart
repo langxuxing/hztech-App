@@ -236,8 +236,7 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final content = WaterBackground(
-      child: Column(
+    final column = Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (widget.accountIdFromParent == null || _isAdmin)
@@ -450,8 +449,10 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
               ),
             ),
         ],
-      ),
-    );
+      );
+    final content = widget.accountIdFromParent != null
+        ? column
+        : WaterBackground(child: column);
 
     if (widget.embedInShell) {
       return content;

@@ -363,8 +363,19 @@ def run_build_mobile() -> int:
     """构建 Android release APK +（macOS 默认）iOS release IPA。成功返回 0，失败返回 1。
 
     仅打 Android：export HZTECH_SKIP_IOS_BUILD=1
+    仅 Web（跳过 APK/iOS）：export HZTECH_SKIP_MOBILE_BUILD=1
     非 macOS：只校验 APK。
     """
+    if os.environ.get("HZTECH_SKIP_MOBILE_BUILD", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        print(
+            "已跳过移动端构建（HZTECH_SKIP_MOBILE_BUILD）；"
+            "仅后续 build-web 等步骤会执行。"
+        )
+        return 0
     apk_ok = build_apk()
     ios_skipped = os.environ.get("HZTECH_SKIP_IOS_BUILD", "").strip().lower() in (
         "1",

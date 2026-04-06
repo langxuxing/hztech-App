@@ -977,6 +977,73 @@ def bot_season_list_by_bot(bot_id: str, limit: int = 50) -> list[dict]:
         conn.close()
 
 
+def bot_season_get_by_id(bot_id: str, season_id: int) -> dict | None:
+    """按 bot_id + 主键 id 取单条赛季（用于区间汇总等）。"""
+    bid = (bot_id or "").strip()
+    try:
+        sid = int(season_id)
+    except (TypeError, ValueError):
+        return None
+    if not bid:
+        return None
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """SELECT id, bot_id, started_at, stopped_at, initial_balance, initial_cash,
+                      final_balance, final_cash, profit_amount, profit_percent, created_at
+               FROM bot_seasons WHERE bot_id = ? AND id = ?""",
+            (bid, sid),
+        )
+        r = cur.fetchone()
+        if not r:
+            return None
+        return {
+            "id": r[0],
+            "bot_id": r[1],
+            "started_at": r[2],
+            "stopped_at": r[3],
+            "initial_balance": r[4],
+            "initial_cash": float(r[5]) if r[5] is not None else None,
+            "final_balance": r[6],
+            "final_cash": float(r[7]) if r[7] is not None else None,
+            "profit_amount": r[8],
+            "profit_percent": r[9],
+            "created_at": r[10],
+        }
+    finally:
+        conn.close()
+
+
+def account_positions_history_aggregate_u_time_range(
+    account_id: str,
+    u_time_start_ms: int,
+    u_time_end_ms: int,
+) -> dict[str, Any]:
+    """
+    在 u_time_ms（平仓/更新时间，毫秒）闭区间内汇总历史仓位：笔数、净盈亏（pnl+fee+funding_fee）。
+    """
+    aid = (account_id or "").strip()
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT COUNT(*),
+                   SUM(COALESCE(pnl, 0) + COALESCE(fee, 0) + COALESCE(funding_fee, 0))
+            FROM account_positions_history
+            WHERE account_id = ?
+              AND CAST(u_time_ms AS INTEGER) >= ?
+              AND CAST(u_time_ms AS INTEGER) <= ?
+            """,
+            (aid, int(u_time_start_ms), int(u_time_end_ms)),
+        )
+        r = cur.fetchone()
+        cnt = int(r[0] or 0)
+        net = float(r[1] or 0.0)
+        return {"close_count": cnt, "net_realized_pnl_usdt": net}
+    finally:
+        conn.close()
+
+
 # ---------- Account_List 账户（AccountMgr 定时快照、月初权益） ----------
 def account_meta_upsert(account_id: str, initial_capital: float) -> None:
     """写入或更新账户初始资金（来自 Account_List.json 的 Initial_capital）。"""

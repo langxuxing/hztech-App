@@ -11,7 +11,8 @@ App 所需 API（与 QtraderApi.kt 一致）：
   GET  /api/tradingbots           交易账户列表（需 Bearer token）
   POST /api/tradingbots/{id}/start|stop|restart|season-start|season-stop（需 Bearer token；赛季脚本成功后由服务端写 bot_seasons：新赛季与上一赛季同一时刻衔接；stop 写当前未结赛季止期及期末权益/现金）
   GET  /api/tradingbots/{id}/pending-orders | /ticker  当前委托、行情（不入库；id 可为 Account_List 的 account_id）
-  GET  /api/tradingbots/{id}/strategy-daily-efficiency  策略效能：account_snapshots 或 bot_profit_snapshots 日权益→现金收益率%/能效（?inst_id=&days=）
+  GET  /api/tradingbots/{id}/strategy-daily-efficiency  策略效能：现金/权益收益率%、能效、ATR14 与阈值（?inst_id=&days=）
+  GET  /api/tradingbots/{id}/seasons/{season_id}/positions-summary  赛季区间内历史平仓笔数与净盈亏（Account_List）
   GET  /kline/<file>.json  PEPE 等 1m 标记价格 K 线 JSON（写入 flutter_app/web/kline；夜间定时补历史）
   GET  /api/tradingbots/{id}/tradingbot-events  账户启停事件（需 Bearer token）
   GET  /api/logs                  日志查询（需 Bearer token，?limit=100&level=&source=）
@@ -474,7 +475,7 @@ def _require_trader_admin_or_analyst():
     """收网测试等：客户不可调用。"""
     if _is_trader() or _is_admin() or _is_strategy_analyst():
         return None
-    return jsonify({"success": False, "message": "客户账号无权使用此功能"}), 403
+    return jsonify({"success": False, "message": "客户无权使用此功能"}), 403
 
 
 def _customer_bot_forbidden(bot_id: str):
@@ -585,7 +586,7 @@ def _live_equity_cash_for_bot(bot_id: str) -> tuple[float, float]:
     return eq, cash
 
 
-# 账号信息同步器：从okx交易所读取账号信息并写入数据库
+# 账户信息同步器：从 OKX 交易所读取账户信息并写入数据库
 def _job_fetch_account_and_save_snapshots() -> None:
     """定时任务：Account_List 账户写入 account_snapshots + account_positions_history（由 AccountMgr；另兼容 tradingbots.json 旧 bot 写入 bot_profit_snapshots）。"""
     try:
@@ -647,14 +648,14 @@ def _start_account_snapshot_timer() -> None:
             try:
                 _job_fetch_account_and_save_snapshots()
                 app.logger.info(
-                    "账号信息同步器：周期完成（间隔=%ss）",
+                    "账户信息同步器：周期完成（间隔=%ss）",
                     _ACCOUNT_SYNC_INTERVAL_SEC,
                 )
             except Exception as e:
                 _sync_mark_completed(str(e))
                 _db.log_insert(
                     "WARN",
-                    "账号信息同步器：周期错误",
+                    "账户信息同步器：周期错误",
                     source="timer",
                     extra={"error": str(e)},
                 )
@@ -1314,7 +1315,9 @@ def api_bot_profit_history(bot_id):
 def api_strategy_daily_efficiency(bot_id):
     """
     策略效能：每日波动率（|高−低|/收盘%）、现金收益率%（日现金增量/UTC 自然月月初资金×100）、
-    策略能效（日增量 USDT÷(波幅×1e9)）。日线 OHLC/TR 来自 market_daily_bars 全站缓存。
+    策略能效（日增量 USDT÷(波幅×1e9)）；并返回权益日增量、权益收益率%（÷月初权益）、权益能效、
+    Wilder ATR(14) 及 0.1/0.6/1.2×ATR 价格阈值（经典 TR，与库字段 tr=|H−L| 不同）。
+    日线 OHLC/TR 来自 market_daily_bars 全站缓存。
     现金：Account_List 账户读 account_snapshots（cash_basis=account_snapshots_cash）；
     其余 bot 读 bot_profit_snapshots 的 equity_usdt 作日权益变动（cash_basis=bot_profit_equity）；
     无任何快照时按 K 线日期补 sod=eod=0、增量 0（cash_basis=none），仍合并计算能效（增量为 0 则能效为 0）。
@@ -1385,8 +1388,37 @@ def api_strategy_daily_efficiency(bot_id):
     )
 
     month_bases = _strategy_efficiency.month_start_cash_by_month_from_snapshots(snaps)
+
+    equity_snaps: list[dict] = []
+    for r in snaps:
+        ts = str(r.get("snapshot_at") or "")
+        if bot_id in account_ids:
+            eq = float(r.get("equity_usdt") or 0.0)
+        else:
+            if r.get("equity_usdt") is not None:
+                eq = float(r["equity_usdt"])
+            else:
+                eq = float(r.get("cash_balance") or 0.0)
+        equity_snaps.append({"snapshot_at": ts, "equity_usdt": eq})
+
+    equity_by_day = _strategy_efficiency.daily_equity_delta_by_utc_day(equity_snaps)
+    equity_by_day = _strategy_efficiency.fill_equity_by_day_for_market_bars(
+        bars, equity_by_day
+    )
+    month_equity_bases = _strategy_efficiency.month_start_equity_by_month_from_snapshots(
+        equity_snaps
+    )
+
+    bars_asc = sorted(bars, key=lambda x: str(x.get("day") or ""))
+    atr14_by_day = _strategy_efficiency.compute_atr14_wilder_by_day(bars_asc)
+
     rows = _strategy_efficiency.merge_daily_efficiency_rows(
-        bars, cash_by_day, month_bases or None
+        bars,
+        cash_by_day,
+        month_bases or None,
+        equity_by_day=equity_by_day,
+        month_equity_base_by_month=month_equity_bases or None,
+        atr14_by_day=atr14_by_day,
     )
     # merge 会覆盖 span=days+12 的 K 线，行数可能多于请求天数；仅返回最近 days 个 UTC 自然日（merge 已按日倒序）
     if len(rows) > days:
@@ -1824,6 +1856,82 @@ def api_tradingbot_seasons(bot_id):
     )
 
 
+def _iso_utc_to_epoch_ms(iso_s: str | None) -> int:
+    s = (iso_s or "").strip()
+    if not s:
+        return 0
+    try:
+        if s.endswith("Z"):
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        else:
+            dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp() * 1000)
+    except (TypeError, ValueError):
+        return 0
+
+
+@app.route(
+    "/api/tradingbots/<bot_id>/seasons/<int:season_id>/positions-summary",
+    methods=["GET"],
+)
+@require_auth
+def api_tradingbot_season_positions_summary(bot_id, season_id: int):
+    """
+    按赛季时间区间汇总 account_positions_history：平仓笔数、净盈亏（UTC 边界由 u_time_ms 毫秒决定）。
+    仅当 bot_id 为 Account_List 中的 account_id 时有数据；否则返回 success 与零值说明。
+    """
+    denied = _customer_bot_forbidden(bot_id)
+    if denied:
+        return denied
+    account_ids = {
+        x["account_id"] for x in _account_mgr.list_account_basics(enabled_only=False)
+    }
+    if (bot_id or "").strip() not in account_ids:
+        return jsonify(
+            {
+                "success": True,
+                "bot_id": bot_id,
+                "season_id": season_id,
+                "account_id": bot_id,
+                "message": "非 Account_List 账户，无 positions-history 汇总",
+                "close_count": 0,
+                "net_realized_pnl_usdt": 0.0,
+                "u_time_start_ms": None,
+                "u_time_end_ms": None,
+            }
+        )
+    sea = _db.bot_season_get_by_id(bot_id, season_id)
+    if not sea:
+        return jsonify({"success": False, "message": "赛季不存在"}), 404
+    t0 = _iso_utc_to_epoch_ms(str(sea.get("started_at") or ""))
+    if t0 <= 0:
+        return jsonify({"success": False, "message": "赛季 started_at 无效"}), 400
+    stopped = sea.get("stopped_at")
+    if stopped:
+        t1 = _iso_utc_to_epoch_ms(str(stopped))
+    else:
+        t1 = int(datetime.now(timezone.utc).timestamp() * 1000)
+    if t1 < t0:
+        return jsonify({"success": False, "message": "赛季时间区间无效"}), 400
+    agg = _db.account_positions_history_aggregate_u_time_range(bot_id, t0, t1)
+    return jsonify(
+        {
+            "success": True,
+            "bot_id": bot_id,
+            "season_id": season_id,
+            "account_id": bot_id,
+            "started_at": sea.get("started_at"),
+            "stopped_at": sea.get("stopped_at"),
+            "u_time_start_ms": t0,
+            "u_time_end_ms": t1,
+            "close_count": agg["close_count"],
+            "net_realized_pnl_usdt": agg["net_realized_pnl_usdt"],
+        }
+    )
+
+
 @app.route("/api/tradingbots/<bot_id>/tradingbot-events", methods=["GET"])
 @require_auth
 def api_bot_tradingbot_events(bot_id):
@@ -2081,12 +2189,12 @@ def api_me_customer_okx_json(account_id):
     allowed = {x.strip() for x in _db.user_get_linked_account_ids(g.current_username) if x}
     if aid not in allowed:
         return jsonify({"success": False, "message": "未绑定该账户，请联系管理员"}), 403
-    if not _account_list_store.get_account(aid):
-        return jsonify({"success": False, "message": "服务端无此账户配置，请联系管理员维护 Account_List"}), 404
     data = request.get_json(silent=True)
     body, verr = _validate_customer_okx_json_body(data)
     if verr:
         return jsonify({"success": False, "message": verr}), 400
+    if not _account_list_store.get_account(aid):
+        return jsonify({"success": False, "message": "服务端无此账户配置，请联系管理员维护 Account_List"}), 404
     path = _account_mgr.resolve_okx_key_write_path(aid)
     if path is None:
         return jsonify({"success": False, "message": "无法解析密钥保存路径"}), 400
@@ -2111,7 +2219,7 @@ def api_me_customer_accounts_test(account_id):
     return _okx_account_test_http_response(aid)
 
 
-# ---------- API：OKX 账号信息（脱敏） ----------
+# ---------- API：OKX 账户信息（脱敏） ----------
 @app.route("/api/okx/info", methods=["GET"])
 def api_okx_info():
     info = _okx.okx_info_safe()

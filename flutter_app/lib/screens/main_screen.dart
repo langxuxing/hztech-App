@@ -42,7 +42,7 @@ class _MainScreenState extends State<MainScreen> {
     if (_isCustomer) {
       return [
         (label: '账户收益', icon: Icons.account_balance_wallet),
-        (label: '账号配置', icon: Icons.vpn_key_outlined),
+        (label: '账户配置', icon: Icons.vpn_key_outlined),
         (label: '应用设置', icon: Icons.settings),
       ];
     }

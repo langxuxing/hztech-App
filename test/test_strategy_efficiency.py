@@ -164,6 +164,48 @@ def test_normalize_bot_profit_snapshots_for_efficiency():
     norm = se.normalize_bot_profit_snapshots_for_efficiency(raw)
     assert len(norm) == 2
     assert norm[0]["cash_balance"] == 100.0
+    assert norm[0]["equity_usdt"] == 100.0
     assert norm[1]["cash_balance"] == 104.0
+    assert norm[1]["equity_usdt"] == 104.0
     by = se.daily_cash_delta_by_utc_day(norm)
     assert by["2026-04-01"]["cash_delta_usdt"] == 4.0
+
+
+def test_merge_includes_equity_and_atr_placeholder():
+    bars = [
+        {
+            "day": "2026-04-02",
+            "open": 1.0,
+            "high": 1.1,
+            "low": 0.9,
+            "close": 1.0,
+            "tr": 0.2,
+        }
+    ]
+    cash = {
+        "2026-04-02": {
+            "sod_cash": 1000.0,
+            "eod_cash": 1010.0,
+            "cash_delta_usdt": 10.0,
+        }
+    }
+    equity = {
+        "2026-04-02": {
+            "sod_equity": 2000.0,
+            "eod_equity": 2020.0,
+            "equity_delta_usdt": 20.0,
+        }
+    }
+    rows = se.merge_daily_efficiency_rows(
+        bars,
+        cash,
+        {"2026-04": 1000.0},
+        equity_by_day=equity,
+        month_equity_base_by_month={"2026-04": 2000.0},
+        atr14_by_day={"2026-04-02": 0.05},
+    )
+    r = rows[0]
+    assert abs(r["equity_delta_pct"] - 1.0) < 1e-9
+    assert r["month_start_equity"] == 2000.0
+    assert r["atr14"] == 0.05
+    assert abs(r["threshold_0_1_atr_price"] - 0.005) < 1e-12

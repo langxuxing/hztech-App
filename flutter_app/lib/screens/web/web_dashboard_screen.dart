@@ -9,11 +9,20 @@ import '../../widgets/balance_profit_line_chart.dart';
 import '../../widgets/water_background.dart';
 import 'web_account_profit_screen.dart';
 
-/// Web「账号总览」：与侧栏 [WebMainShell] 文案一致，汇总权益与盈亏，点击进入账号详情。
+/// Web「账户总览」：与侧栏 [WebMainShell] 文案一致，汇总权益与盈亏；点击卡片由 [onOpenAccountProfit]
+/// 切到「账户收益」Tab（与侧栏点入同一布局，含左侧菜单）。无回调时仍走独立 push。
 /// 脚本启停见 [WebTradingBotControlScreen]（侧栏「策略启停」）。
 class WebDashboardScreen extends StatefulWidget {
-  const WebDashboardScreen({super.key, this.sharedBots = const []});
+  const WebDashboardScreen({
+    super.key,
+    this.sharedBots = const [],
+    this.onOpenAccountProfit,
+  });
+
   final List<UnifiedTradingBot> sharedBots;
+
+  /// 嵌入 [WebMainShell] 时由壳层切换到「账户收益」侧栏 Tab（保留左侧菜单），并可选带上默认 bot。
+  final void Function(String? botId)? onOpenAccountProfit;
   @override
   State<WebDashboardScreen> createState() => _WebDashboardScreenState();
 }
@@ -85,6 +94,11 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
 
   void _openAccount(AccountProfit a) {
     final id = a.botId.isNotEmpty ? a.botId : null;
+    final open = widget.onOpenAccountProfit;
+    if (open != null) {
+      open(id);
+      return;
+    }
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (ctx) => WebAccountProfitScreen(
@@ -140,7 +154,7 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              '账号总览',
+                              '账户总览',
                               style: Theme.of(context).textTheme.titleLarge
                                   ?.copyWith(
                                     color: AppFinanceStyle.valueColor,

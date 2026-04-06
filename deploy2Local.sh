@@ -2,7 +2,9 @@
 # 本地部署：1) 默认同时构建 Flutter Android release APK 与（macOS 上）iOS release IPA，以及 Web
 #             2) 启动服务（默认双进程 API 9001 + Web 9000；HZTECH_LOCAL_UNIFIED_PORT=1 时为单进程）
 # 依赖：Flutter/Android；IPA 需 macOS + Xcode + 签名；无 AWS/SSH
-# 默认：在 macOS 上 APK 与 IPA 均须成功才会启动服务；仅打 Android 时：export HZTECH_SKIP_IOS_BUILD=1
+# 默认：在 macOS 上 APK 与 IPA 均须成功才会启动服务
+# 仅 Android：export HZTECH_SKIP_IOS_BUILD=1
+# 仅 Web（不构建 APK/iOS）：export HZTECH_SKIP_MOBILE_BUILD=1
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR"
@@ -19,10 +21,15 @@ echo "  本地部署：Flutter 构建 → 启动本地服务"
 echo "=============================================="
 
 echo ""
-echo "=== 1/4 构建 Flutter 移动端（默认 release APK + macOS 上 IPA）==="
-python3 "$PROJECT_ROOT/server/server_mgr.py" build
-echo "  APK 输出: $PROJECT_ROOT/apk/"
-echo "  IPA 输出（仅 macOS 成功时）: $PROJECT_ROOT/ipa/"
+_skmb=$(printf '%s' "${HZTECH_SKIP_MOBILE_BUILD:-}" | tr '[:upper:]' '[:lower:]')
+if [[ "$_skmb" == "1" || "$_skmb" == "true" || "$_skmb" == "yes" ]]; then
+  echo "=== 1/4 跳过 Flutter 移动端（HZTECH_SKIP_MOBILE_BUILD）==="
+else
+  echo "=== 1/4 构建 Flutter 移动端（默认 release APK + macOS 上 IPA）==="
+  python3 "$PROJECT_ROOT/server/server_mgr.py" build
+  echo "  APK 输出: $PROJECT_ROOT/apk/"
+  echo "  IPA 输出（仅 macOS 成功时）: $PROJECT_ROOT/ipa/"
+fi
 
 echo ""
 echo "=== 2/4 构建 Flutter Web (release) ==="

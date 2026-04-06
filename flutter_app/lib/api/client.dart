@@ -386,6 +386,18 @@ class ApiClient {
     return StrategyDailyEfficiencyResponse.fromJson(map);
   }
 
+  /// 赛季时间区间内历史平仓笔数与净盈亏（`close_count`, `net_realized_pnl_usdt`）。
+  Future<Map<String, dynamic>> getSeasonPositionsSummary(
+    String botId,
+    int seasonId,
+  ) async {
+    final uri = Uri.parse(
+      '${_normalizedBase}api/tradingbots/$botId/seasons/$seasonId/positions-summary',
+    );
+    final resp = await _getWithRetry(uri, _headers);
+    return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
   /// GET /api/health（无需登录）
   Future<HealthResponse> getHealth() async {
     final uri = Uri.parse('${_normalizedBase}api/health');

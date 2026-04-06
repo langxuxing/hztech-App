@@ -21,7 +21,7 @@ String _fmtOkxContractPxForUi(double v) {
   return formatUiInteger(v * _kOkxContractPxUiScale);
 }
 
-/// Web「账户画像」：顶栏账户选择 → 账号详情 → 持仓|赛季（宽屏 50/50）→ 权益/现金各一行三列（折线|柱|日历）。
+/// Web「账户画像」：顶栏账户选择 → 账户详情 → 持仓|赛季（宽屏 50/50）→ 权益/现金各一行三列（折线|柱|日历）。
 ///
 /// 视口 ≥[_kLayoutWideBp] 为上述栅格；更窄同序纵向堆叠。超宽内容限制在 [_maxContentWidth] 内居中。
 /// [embedInShell] 缺省 true（侧栏 Tab 无本页 AppBar）；独立路由请用 [WebAccountProfitScreen] 或传入 false。
@@ -79,6 +79,15 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   /// 宽屏「当前持仓 | 赛季盈利」行高（较原三列行高减少 30%）。
   static const double _kPositionsSeasonRowHeight = _kTripleRowHeight * 0.7;
   static const double _kTripleGutter = 12;
+
+  /// 宽屏权益/现金「日历 | 折线+柱」整行较 [_kTripleRowHeight] 加高 10%，日历网格更大。
+  static double get _kTripleMetricsRowHeight => _kTripleRowHeight * 1.1;
+
+  /// 窄屏权益/现金日历 [gridMaxHeight] 相对折线/柱统一带高的倍数（仅日历加高 10%）。
+  static const double _kProfileCalendarHeightFactor = 1.1;
+
+  /// 「权益日历」「现金日历」标题与下方内容的额外间距。
+  static const double _kProfileCalendarTitleExtraGap = 12;
 
   /// 窄屏与宽屏单列内折线/柱/日历图表区统一高度。
   static const double _kUnifiedChartBandHeight = 420;
@@ -294,7 +303,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   @override
   void initState() {
     super.initState();
-    // 若父级已下发列表则先展示，再异步拉取收益等（选中项与 initialBotId 对齐，避免先闪第一个账号）
+    // 若父级已下发列表则先展示，再异步拉取收益等（选中项与 initialBotId 对齐，避免先闪第一个账户）
     if (widget.sharedBots.isNotEmpty) {
       _bots = _mergeInitialPlaceholder(List.from(widget.sharedBots));
       _selectedBotId = _pickBotIdForLoad(_bots);
@@ -331,7 +340,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         _syncOkxTickerSubscription();
       }
     }
-    // MainScreen 异步加载完 bots 后下发，同步到本页；须保留 initialBotId 占位，否则会退回第一个账号
+    // MainScreen 异步加载完 bots 后下发，同步到本页；须保留 initialBotId 占位，否则会退回第一个账户
     if (widget.sharedBots.isNotEmpty &&
         widget.sharedBots.length != _bots.length) {
       _bots = _mergeInitialPlaceholder(List.from(widget.sharedBots));
@@ -340,6 +349,15 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         _selectedBotId = _pickBotIdForLoad(_bots);
       }
       setState(() {});
+    }
+    // 壳层从仪表盘切换 Tab 时下发 [initialBotId]；清空回 null 时不应回退当前选中项
+    final oldI = oldWidget.initialBotId?.trim();
+    final newI = _trimmedInitialBotId;
+    if (oldI != newI &&
+        newI != null &&
+        newI.isNotEmpty &&
+        newI != _selectedBotId) {
+      unawaited(_loadForBot(newI));
     }
   }
 
@@ -814,7 +832,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                   : null,
               automaticallyImplyLeading: !canPop,
               title: Text(
-                '账号详情',
+                '账户详情',
                 style: AppFinanceStyle.labelTextStyle(context).copyWith(
                   color: AppFinanceStyle.valueColor,
                   fontSize: 18,
@@ -1033,6 +1051,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     if (!wide) {
       final calCap = _kUnifiedChartBandHeight;
       final plotH = calendarGridPixelHeightForCap(calCap, compact: false);
+      final calCapCalendar = calCap * _kProfileCalendarHeightFactor;
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -1095,7 +1114,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
               showMonthNavigator: false,
               focusedMonth: month,
               onFocusedMonthChanged: setEquityMonth,
-              gridMaxHeight: calCap,
+              gridMaxHeight: calCapCalendar,
+              titleToBodyExtraGap: _kProfileCalendarTitleExtraGap,
               dailyCloseCounts: _equityCalendarCloseCounts,
             ),
           ),
@@ -1114,7 +1134,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         ),
         const SizedBox(height: 12),
         SizedBox(
-          height: _kTripleRowHeight,
+          height: _kTripleMetricsRowHeight,
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -1132,6 +1152,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                       focusedMonth: month,
                       onFocusedMonthChanged: setEquityMonth,
                       expandGridArea: true,
+                      titleToBodyExtraGap: _kProfileCalendarTitleExtraGap,
+                      centerCalendarGridInExpanded: true,
                       dailyCloseCounts: _equityCalendarCloseCounts,
                     ),
                   ),
@@ -1142,8 +1164,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    SizedBox(
-                      height: _kTripleRowHeight / 2,
+                    Expanded(
                       child: _tripleMetricCard(
                         child: SizedBox.expand(
                           child: Column(
@@ -1177,8 +1198,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                       ),
                     ),
                     SizedBox(height: _kTripleGutter),
-                    SizedBox(
-                      height: _kTripleRowHeight / 2,
+                    Expanded(
                       child: _tripleMetricCard(
                         child: SizedBox.expand(
                           child: MonthEndValueBarPanel(
@@ -1220,6 +1240,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     if (!wide) {
       final calCap = _kUnifiedChartBandHeight;
       final plotH = calendarGridPixelHeightForCap(calCap, compact: false);
+      final calCapCalendar = calCap * _kProfileCalendarHeightFactor;
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -1282,7 +1303,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
               showMonthNavigator: false,
               focusedMonth: month,
               onFocusedMonthChanged: setCashMonth,
-              gridMaxHeight: calCap,
+              gridMaxHeight: calCapCalendar,
+              titleToBodyExtraGap: _kProfileCalendarTitleExtraGap,
               dailyCloseCounts: _cashCalendarCloseCounts,
             ),
           ),
@@ -1301,7 +1323,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         ),
         const SizedBox(height: 12),
         SizedBox(
-          height: _kTripleRowHeight,
+          height: _kTripleMetricsRowHeight,
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -1319,6 +1341,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                       focusedMonth: month,
                       onFocusedMonthChanged: setCashMonth,
                       expandGridArea: true,
+                      titleToBodyExtraGap: _kProfileCalendarTitleExtraGap,
+                      centerCalendarGridInExpanded: true,
                       dailyCloseCounts: _cashCalendarCloseCounts,
                     ),
                   ),
@@ -1329,8 +1353,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    SizedBox(
-                      height: _kTripleRowHeight / 2,
+                    Expanded(
                       child: _tripleMetricCard(
                         child: SizedBox.expand(
                           child: Column(
@@ -1364,8 +1387,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                       ),
                     ),
                     SizedBox(height: _kTripleGutter),
-                    SizedBox(
-                      height: _kTripleRowHeight / 2,
+                    Expanded(
                       child: _tripleMetricCard(
                         child: SizedBox.expand(
                           child: MonthEndValueBarPanel(
@@ -1417,7 +1439,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
       context,
       fontSize: 20,
     ).copyWith(color: c);
-    // 成本/均价/现价/标记：与账号详情数值同档字号；合约价经 [_fmtOkxContractPxForUi] ×1e9 再整数分组，避免极小价落成 0。
+    // 成本/均价/现价/标记：与账户详情数值同档字号；合约价经 [_fmtOkxContractPxForUi] ×1e9 再整数分组，避免极小价落成 0。
     final plWhiteStyle = AppFinanceStyle.valueTextStyle(
       context,
       fontSize: 20,
@@ -1895,7 +1917,7 @@ class _PriceAxisBar extends StatelessWidget {
 
     double norm(double p) => ((p - axisLo) / safeSpan).clamp(0.0, 1.0);
 
-    // 现价与账号详情主数值同档；浮动盈亏白色同档（与持仓区多/空仓盈亏一致）。
+    // 现价与账户详情主数值同档；浮动盈亏白色同档（与持仓区多/空仓盈亏一致）。
     final curPxStyle = AppFinanceStyle.valueTextStyle(
       context,
       fontSize: 20,

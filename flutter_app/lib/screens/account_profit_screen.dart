@@ -12,7 +12,7 @@ import '../widgets/equity_cash_percent_line_chart.dart';
 import '../widgets/month_end_profit_panel.dart';
 import '../widgets/water_background.dart';
 
-/// APK「账户收益」（客户视图）：账户选择 → 账号盈利信息总览 → 现金（日历 / 曲线 / 每日）→ 权益（日历 / 曲线 / 每日）。
+/// APK「账户收益」（客户视图）：账户选择 → 账户盈利信息总览 → 现金（日历 / 曲线 / 每日）→ 权益（日历 / 曲线 / 每日）。
 class AccountProfitScreen extends StatefulWidget {
   const AccountProfitScreen({
     super.key,
@@ -619,7 +619,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
     );
   }
 
-  /// 1. 账号盈利信息总览（与 Web 账户画像核心指标一致，不含机器人/交易所细节）
+  /// 1. 账户盈利信息总览（与 Web 账户画像核心指标一致，不含机器人/交易所细节）
   Widget _buildProfitOverview() {
     final a = _selectedAccount;
     if (a == null) return const SizedBox.shrink();
@@ -636,7 +636,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
       Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _sectionTitle('账号盈利信息总览'),
+          _sectionTitle('账户盈利信息总览'),
           const SizedBox(height: 12),
           Text(
             bot?.tradingbotName ?? bot?.tradingbotId ?? a.botId,

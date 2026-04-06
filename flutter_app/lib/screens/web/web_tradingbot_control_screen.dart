@@ -8,7 +8,7 @@ import '../../widgets/water_background.dart';
 import 'web_account_profit_screen.dart';
 
 /// Web「策略启停」：与侧栏 [WebMainShell] 一致；多列玻璃卡网格，赛季 + 机器人会话时长 + 启停/重启。
-/// 账户级资金曲线与汇总见侧栏「账号总览」[WebDashboardScreen]。
+/// 账户级资金曲线与汇总见侧栏「账户总览」[WebDashboardScreen]。
 class WebTradingBotControlScreen extends StatefulWidget {
   const WebTradingBotControlScreen({super.key, this.sharedBots = const []});
 
@@ -588,21 +588,12 @@ class _WebTradingBotControlScreenState
   @override
   Widget build(BuildContext context) {
     final stats = _aggregateStats();
-    const techBase = LinearGradient(
-      begin: Alignment.topLeft,
-      end: Alignment.bottomRight,
-      colors: [
-        Color(0xFF0B1528),
-        Color(0xFF0A0F18),
-        AppFinanceStyle.backgroundDark,
-      ],
-    );
 
     return ColoredBox(
       color: AppFinanceStyle.backgroundDark,
       child: WaterBackground(
-        baseGradient: techBase,
         child: Stack(
+          fit: StackFit.expand,
           children: [
             RefreshIndicator(
               onRefresh: _load,
@@ -705,7 +696,9 @@ class _WebTradingBotControlScreenState
                                       events,
                                       running,
                                     );
-                                    final openSeason = _hasOpenSeason(seasons);
+                                    final openSeason = _hasOpenSeason(
+                                      seasons,
+                                    );
                                     return _AccountGlassCard(
                                       account: a,
                                       bot: bot,
@@ -761,7 +754,9 @@ class _WebTradingBotControlScreenState
                             SizedBox(
                               width: 22,
                               height: 22,
-                              child: CircularProgressIndicator(strokeWidth: 2),
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                              ),
                             ),
                             SizedBox(width: 14),
                             Text('批量操作中…'),
@@ -779,7 +774,7 @@ class _WebTradingBotControlScreenState
   }
 }
 
-/// 顶部全局统计与一键启停；统计区与 [WebDashboardScreen] 账号总览条一致（标题 + FinanceCard + 汇总列）。
+/// 顶部全局统计与一键启停；统计区与 [WebDashboardScreen] 账户总览条一致（标题 + FinanceCard + 汇总列）。
 class _GlobalBotStatsBar extends StatelessWidget {
   const _GlobalBotStatsBar({
     required this.total,

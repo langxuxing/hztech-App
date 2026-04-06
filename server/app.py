@@ -298,7 +298,7 @@ def _live_equity_cash_for_bot(bot_id: str) -> tuple[float, float]:
 
 
 def _job_fetch_account_and_save_snapshots() -> None:
-    """定时任务：按 bot 的 account_api_file 分别拉取账号信息并写入 bot_profit_snapshots（每 10 分钟）。仅用 Accounts 下配置，不回退全局。"""
+    """定时任务：按 bot 的 account_api_file 分别拉取账户信息并写入 bot_profit_snapshots（每 10 分钟）。仅用 Accounts 下配置，不回退全局。"""
     bots = _load_tradingbots_config()
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     for b in bots:
@@ -357,7 +357,7 @@ def _job_fetch_account_and_save_snapshots() -> None:
 
 
 def _start_account_snapshot_timer() -> None:
-    """后台线程：每 10 分钟执行一次账号快照；启动后 30 秒执行第一次。"""
+    """后台线程：每 10 分钟执行一次账户快照；启动后 30 秒执行第一次。"""
 
     def _loop() -> None:
         time.sleep(30)
@@ -899,7 +899,7 @@ def api_logs():
     return jsonify({"success": True, "logs": rows})
 
 
-# ---------- API：OKX 账号信息（脱敏） ----------
+# ---------- API：OKX 账户信息（脱敏） ----------
 @app.route("/api/okx/info", methods=["GET"])
 def api_okx_info():
     info = _okx.okx_info_safe()
@@ -908,7 +908,7 @@ def api_okx_info():
     return jsonify({"ok": True, "info": info})
 
 
-# 启动 10 分钟定时器：拉取账号信息并写入盈利快照
+# 启动 10 分钟定时器：拉取账户信息并写入盈利快照
 _start_account_snapshot_timer()
 
 # App 进程启停写入 strategy_events（bot_id="app"），便于审计

@@ -150,14 +150,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           if (widget.appUserRole == AppUserRole.admin) ...[
                             const SizedBox(height: 12),
                             Text(
-                              '系统配置：请在 Web 侧栏「用户管理」维护用户类型与客户绑定账户；「账号管理」维护 Account_List；此处可修改后端地址与退出登录。',
+                              '系统配置：请在 Web 侧栏「用户管理」维护用户类型与客户绑定账户；「账户管理」维护 Account_List；此处可修改后端地址与退出登录。',
                               style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 13, height: 1.4),
                             ),
                           ],
                           if (widget.appUserRole == AppUserRole.customer) ...[
                             const SizedBox(height: 12),
                             Text(
-                              '请在「账号配置」上传 OKX 密钥 JSON（与 QTrader 格式一致）。管理员须先在「账号管理」创建账户并在「用户管理」中绑定您的 account_id。',
+                              '请在「账户配置」上传 OKX 密钥 JSON（与 QTrader 格式一致）。管理员须先在「账户管理」创建账户并在「用户管理」中绑定您的 account_id。',
                               style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 13, height: 1.4),
                             ),
                           ],

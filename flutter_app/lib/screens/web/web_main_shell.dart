@@ -34,9 +34,9 @@ class _NavItem {
 }
 
 /// 浏览器端主导航：侧栏 / 抽屉 + 多 Tab，与移动端 [MainScreen] 分流。
-/// 客户（customer）：仅「账号详情」全宽单页，无侧栏；更多菜单含 OKX 账号配置与退出登录。
+/// 客户（customer）：仅「账户详情」全宽单页，无侧栏；更多菜单含 OKX 账户配置与退出登录。
 /// 其他角色侧栏顺序：主页 → 仪表盘 → 账户收益 → 策略启停 → 策略能效 → 赛季与历史仓位
-/// → 收网测试（交易员/管理员/策略分析师）→ 账号配置（客户 OKX JSON，仅非 Web 客户壳）→ 账号管理 / 用户管理（管理员）→ 下载 → 设置。
+/// → 收网测试（交易员/管理员/策略分析师）→ 账户配置（客户 OKX JSON，仅非 Web 客户壳）→ 账户管理 / 用户管理（管理员）→ 下载 → 设置。
 class WebMainShell extends StatefulWidget {
   const WebMainShell({super.key, this.onLogout});
 
@@ -53,6 +53,9 @@ class _WebMainShellState extends State<WebMainShell> {
   List<UnifiedTradingBot> _sharedBots = [];
   AppUserRole _role = AppUserRole.trader;
 
+  /// 仪表盘卡片点入「账户收益」时一帧内下发，供 [WebAccountProfitScreen.initialBotId] 触发切换账户。
+  String? _profitInitialFromDashboard;
+
   List<_NavItem> _itemsForRole() {
     final bots = _sharedBots;
     return [
@@ -64,10 +67,13 @@ class _WebMainShellState extends State<WebMainShell> {
       ),
       if (_role.canViewGlobalDashboard)
         _NavItem(
-          title: '账号总览',
+          title: '账户总览',
           icon: Icons.dashboard_outlined,
           selectedIcon: Icons.dashboard,
-          page: WebDashboardScreen(sharedBots: bots),
+          page: WebDashboardScreen(
+            sharedBots: bots,
+            onOpenAccountProfit: _openAccountProfitFromDashboard,
+          ),
         ),
 
       if (_role.canViewStrategyPerformance)
@@ -75,7 +81,11 @@ class _WebMainShellState extends State<WebMainShell> {
           title: '账户收益',
           icon: Icons.insights_outlined,
           selectedIcon: Icons.insights,
-          page: WebAccountProfitScreen(sharedBots: bots, embedInShell: true),
+          page: WebAccountProfitScreen(
+            sharedBots: bots,
+            embedInShell: true,
+            initialBotId: _profitInitialFromDashboard,
+          ),
         ),
       if (_role.canViewStrategyStart)
         _NavItem(
@@ -103,7 +113,7 @@ class _WebMainShellState extends State<WebMainShell> {
         ),
       if (_role.canConfigureLinkedOkxKeys)
         _NavItem(
-          title: '账号配置',
+          title: '账户配置',
           icon: Icons.vpn_key_outlined,
           selectedIcon: Icons.vpn_key,
           page: const CustomerAccountSetupScreen(embedInShell: true),
@@ -117,7 +127,7 @@ class _WebMainShellState extends State<WebMainShell> {
         ),
       if (_role.canManageUsers)
         _NavItem(
-          title: '账号管理',
+          title: '账户管理',
           icon: Icons.account_balance_wallet_outlined,
           selectedIcon: Icons.account_balance_wallet,
           page: const WebAccountConfigAdminScreen(embedInShell: true),
@@ -244,6 +254,27 @@ class _WebMainShellState extends State<WebMainShell> {
     if (i >= 0) setState(() => _index = i);
   }
 
+  int? _indexOfNavTitle(String title) {
+    final items = _itemsForRole();
+    final i = items.indexWhere((e) => e.title == title);
+    return i >= 0 ? i : null;
+  }
+
+  void _openAccountProfitFromDashboard(String? botId) {
+    final i = _indexOfNavTitle('账户收益');
+    if (i == null) return;
+    final t = botId?.trim();
+    final id = (t == null || t.isEmpty) ? null : t;
+    setState(() {
+      _profitInitialFromDashboard = id;
+      _index = i;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() => _profitInitialFromDashboard = null);
+    });
+  }
+
   Future<void> _customerLogout(BuildContext context) async {
     final ok = await showDialog<bool>(
       context: context,
@@ -275,7 +306,7 @@ class _WebMainShellState extends State<WebMainShell> {
           backgroundColor: AppFinanceStyle.backgroundDark,
           appBar: AppBar(
             title: Text(
-              '账号配置',
+              '账户配置',
               style: AppFinanceStyle.labelTextStyle(ctx).copyWith(
                 color: AppFinanceStyle.valueColor,
                 fontSize: 18,
@@ -291,7 +322,7 @@ class _WebMainShellState extends State<WebMainShell> {
     );
   }
 
-  /// Web 客户：仅账号详情 + 顶栏菜单（无侧栏）。
+  /// Web 客户：仅账户详情 + 顶栏菜单（无侧栏）。
   Widget _buildCustomerShell(BuildContext context) {
     final titleStyle = AppFinanceStyle.labelTextStyle(context).copyWith(
       color: AppFinanceStyle.valueColor,
@@ -301,7 +332,7 @@ class _WebMainShellState extends State<WebMainShell> {
     return Scaffold(
       backgroundColor: AppFinanceStyle.backgroundDark,
       appBar: AppBar(
-        title: Text('账号详情', style: titleStyle),
+        title: Text('账户详情', style: titleStyle),
         backgroundColor: AppFinanceStyle.backgroundDark,
         foregroundColor: AppFinanceStyle.valueColor,
         surfaceTintColor: Colors.transparent,
@@ -320,7 +351,7 @@ class _WebMainShellState extends State<WebMainShell> {
             itemBuilder: (ctx) => const [
               PopupMenuItem(
                 value: 'okx',
-                child: Text('账号配置（OKX）'),
+                child: Text('账户配置（OKX）'),
               ),
               PopupMenuItem(
                 value: 'logout',

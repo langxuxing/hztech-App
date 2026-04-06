@@ -408,6 +408,56 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
         ? AppFinanceStyle.profitGreenEnd
         : Colors.red.shade300;
 
+    final metricsColumn = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _wrapRow([_metricChip(context, '交易标的：', mkt)]),
+        const SizedBox(height: 10),
+        _wrapRow([
+          _metricChip(context, '开始时间(北京):', formatIsoAsBeijing(s.startedAt)),
+          const SizedBox(width: 10),
+          _metricChip(context, '结束时间(北京):', formatIsoAsBeijing(s.stoppedAt)),
+          const SizedBox(width: 10),
+        ]),
+        _wrapRow([
+          _metricChip(context, '开始资金：', formatUiInteger(s.initialBalance)),
+          const SizedBox(width: 10),
+          if (s.finalBalance != null)
+            _metricChip(context, '结束资金：', formatUiInteger(s.finalBalance!)),
+          const SizedBox(width: 10),
+          if (s.profitAmount != null)
+            _metricChip(
+              context,
+              '盈利：',
+              s.profitAmount!.toStringAsFixed(1),
+              valueColor: profitColor,
+            ),
+          const SizedBox(width: 10),
+          if (s.profitPercent != null)
+            _metricChip(
+              context,
+              '收益率：',
+              formatUiPercentLabel(s.profitPercent!),
+              valueColor: profitColor,
+            ),
+        ]),
+        _wrapRow([
+          _metricChip(context, 'ATR(14天):', '—'),
+          const SizedBox(width: 10),
+          _metricChip(context, '多空获利止盈距离:', '—'),
+          const SizedBox(width: 10),
+          _metricChip(context, '第一次浮亏加仓距离:', '—'),
+          const SizedBox(width: 10),
+          _metricChip(context, '第二次浮亏加仓距离:', '—'),
+        ]),
+      ],
+    );
+    final historyExpansion = _positionsExpansion(
+      context,
+      '本赛季历史仓位（${agg.count}）',
+      agg,
+    );
+
     return FinanceCard(
       padding: const EdgeInsets.all(14),
       child: Column(
@@ -459,46 +509,34 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
             ],
           ),
           const SizedBox(height: 10),
-          _wrapRow([_metricChip(context, '交易标的：', mkt)]),
-          const SizedBox(height: 10),
-          _wrapRow([
-            _metricChip(context, '开始时间(北京):', formatIsoAsBeijing(s.startedAt)),
-            const SizedBox(width: 10),
-            _metricChip(context, '结束时间(北京):', formatIsoAsBeijing(s.stoppedAt)),
-            const SizedBox(width: 10),
-          ]),
-          _wrapRow([
-            _metricChip(context, '开始资金：', formatUiInteger(s.initialBalance)),
-            const SizedBox(width: 10),
-            if (s.finalBalance != null)
-              _metricChip(context, '结束资金：', formatUiInteger(s.finalBalance!)),
-            const SizedBox(width: 10),
-            if (s.profitAmount != null)
-              _metricChip(
-                context,
-                '盈利：',
-                s.profitAmount!.toStringAsFixed(1),
-                valueColor: profitColor,
-              ),
-            const SizedBox(width: 10),
-            if (s.profitPercent != null)
-              _metricChip(
-                context,
-                '收益率：',
-                formatUiPercentLabel(s.profitPercent!),
-                valueColor: profitColor,
-              ),
-          ]),
-          _wrapRow([
-            _metricChip(context, 'ATR(14天):', '—'),
-            const SizedBox(width: 10),
-            _metricChip(context, '多空获利止盈距离:', '—'),
-            const SizedBox(width: 10),
-            _metricChip(context, '第一次浮亏加仓距离:', '—'),
-            const SizedBox(width: 10),
-            _metricChip(context, '第二次浮亏加仓距离:', '—'),
-          ]),
-          _positionsExpansion(context, '本赛季历史仓位（${agg.count}）', agg),
+          LayoutBuilder(
+            builder: (ctx, bc) {
+              final wide = bc.maxWidth >= 520;
+              if (!wide) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    metricsColumn,
+                    historyExpansion,
+                  ],
+                );
+              }
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    flex: 5,
+                    child: metricsColumn,
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    flex: 5,
+                    child: historyExpansion,
+                  ),
+                ],
+              );
+            },
+          ),
         ],
       ),
     );
@@ -510,6 +548,50 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
     final profitColor = agg.profitSum >= 0
         ? AppFinanceStyle.profitGreenEnd
         : const Color(0xFFFF6B6B);
+
+    final metricsColumn = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _wrapRow([
+          _metricChip(context, '开始', formatIsoAsBeijing(s.startedAt)),
+          _metricChip(context, '结束', formatIsoAsBeijing(s.stoppedAt)),
+          _metricChip(context, '市场', _marketLabel ?? '—'),
+        ]),
+        _wrapRow([
+          _metricChip(context, '初期', formatUiInteger(s.initialBalance)),
+          if (s.finalBalance != null)
+            _metricChip(context, '期末', formatUiInteger(s.finalBalance!)),
+          if (s.profitAmount != null)
+            _metricChip(
+              context,
+              '盈利',
+              s.profitAmount!.toStringAsFixed(1),
+              valueColor: (s.profitAmount ?? 0) >= 0
+                  ? AppFinanceStyle.profitGreenEnd
+                  : Colors.red.shade300,
+            ),
+          if (s.profitPercent != null)
+            _metricChip(
+              context,
+              '收益率',
+              formatUiPercentLabel(s.profitPercent!),
+            ),
+        ]),
+        _wrapRow([
+          _metricChip(
+            context,
+            '仓位数·盈亏',
+            '${agg.count} · ${agg.profitSum.toStringAsFixed(1)}',
+            valueColor: profitColor,
+          ),
+        ]),
+      ],
+    );
+    final historyExpansion = _positionsExpansion(
+      context,
+      '历史仓位（${agg.count}）',
+      agg,
+    );
 
     return FinanceCard(
       padding: const EdgeInsets.all(14),
@@ -562,40 +644,34 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
             ],
           ),
           const SizedBox(height: 8),
-          _wrapRow([
-            _metricChip(context, '开始', formatIsoAsBeijing(s.startedAt)),
-            _metricChip(context, '结束', formatIsoAsBeijing(s.stoppedAt)),
-            _metricChip(context, '市场', _marketLabel ?? '—'),
-          ]),
-          _wrapRow([
-            _metricChip(context, '初期', formatUiInteger(s.initialBalance)),
-            if (s.finalBalance != null)
-              _metricChip(context, '期末', formatUiInteger(s.finalBalance!)),
-            if (s.profitAmount != null)
-              _metricChip(
-                context,
-                '盈利',
-                s.profitAmount!.toStringAsFixed(1),
-                valueColor: (s.profitAmount ?? 0) >= 0
-                    ? AppFinanceStyle.profitGreenEnd
-                    : Colors.red.shade300,
-              ),
-            if (s.profitPercent != null)
-              _metricChip(
-                context,
-                '收益率',
-                formatUiPercentLabel(s.profitPercent!),
-              ),
-          ]),
-          _wrapRow([
-            _metricChip(
-              context,
-              '仓位数·盈亏',
-              '${agg.count} · ${agg.profitSum.toStringAsFixed(1)}',
-              valueColor: profitColor,
-            ),
-          ]),
-          _positionsExpansion(context, '历史仓位（${agg.count}）', agg),
+          LayoutBuilder(
+            builder: (ctx, bc) {
+              final wide = bc.maxWidth >= 520;
+              if (!wide) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    metricsColumn,
+                    historyExpansion,
+                  ],
+                );
+              }
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    flex: 5,
+                    child: metricsColumn,
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    flex: 5,
+                    child: historyExpansion,
+                  ),
+                ],
+              );
+            },
+          ),
         ],
       ),
     );
@@ -603,8 +679,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final content = WaterBackground(
-      child: Column(
+    final column = Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (widget.accountIdFromParent == null)
@@ -732,8 +807,10 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
                   ),
           ),
         ],
-      ),
-    );
+      );
+    final content = widget.accountIdFromParent != null
+        ? column
+        : WaterBackground(child: column);
 
     if (widget.embedInShell) {
       return content;

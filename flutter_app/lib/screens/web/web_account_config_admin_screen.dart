@@ -1,4 +1,4 @@
-import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -9,58 +9,15 @@ import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
 import '../../widgets/water_background.dart';
 
-/// 最近一次「测连 OKX」结果，用于卡片展示（内存态，刷新页面后清空）。
-class _AccountTestSummary {
-  const _AccountTestSummary({
-    required this.at,
-    required this.connectionOk,
-    required this.configurationOk,
-    this.message,
-    this.instId,
-    this.targetLeverage,
-    this.balanceSummary,
-    this.okxUid,
-  });
+/// 最近一次「测试账户」完整响应，用于卡片 checklist（内存态，刷新页面后清空）。
+class _AccountTestRecord {
+  const _AccountTestRecord({required this.at, required this.response});
 
   final DateTime at;
-  final bool connectionOk;
-  final bool configurationOk;
-  final String? message;
-  final String? instId;
-  final String? targetLeverage;
-  final String? balanceSummary;
-  final String? okxUid;
-
-  static _AccountTestSummary fromApiMap(Map<String, dynamic> m) {
-    final ok = m['success'] == true;
-    if (!ok) {
-      return _AccountTestSummary(
-        at: DateTime.now(),
-        connectionOk: false,
-        configurationOk: false,
-        message: m['message']?.toString(),
-      );
-    }
-    final cfgOk = m['configuration_ok'] == true;
-    String? uid;
-    final ac = m['account_config'];
-    if (ac is Map) {
-      final u = ac['uid'];
-      if (u != null && '$u'.trim().isNotEmpty) uid = '$u';
-    }
-    return _AccountTestSummary(
-      at: DateTime.now(),
-      connectionOk: true,
-      configurationOk: cfgOk,
-      instId: m['inst_id_checked']?.toString(),
-      targetLeverage: m['target_leverage']?.toString(),
-      balanceSummary: m['balance_summary']?.toString(),
-      okxUid: uid,
-    );
-  }
+  final Map<String, dynamic> response;
 }
 
-/// 管理员维护 Account_List.json（侧栏「账号管理」）。
+/// 管理员维护 Account_List.json（侧栏「账户管理」）。
 class WebAccountConfigAdminScreen extends StatefulWidget {
   const WebAccountConfigAdminScreen({super.key, this.embedInShell = false});
 
@@ -77,7 +34,7 @@ class _WebAccountConfigAdminScreenState
   List<AccountConfigRow> _accounts = [];
   bool _loading = true;
   String? _error;
-  final Map<String, _AccountTestSummary> _testSummaryByAccountId = {};
+  final Map<String, _AccountTestRecord> _testRecordByAccountId = {};
 
   Future<void> _load() async {
     setState(() {
@@ -285,45 +242,429 @@ class _WebAccountConfigAdminScreenState
     );
   }
 
-  Widget _testSummaryBody(BuildContext context, _AccountTestSummary s) {
-    final base = AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 12);
-    if (!s.connectionOk) {
-      return Text(
-        s.message ?? '连接失败',
-        style: base.copyWith(color: Colors.red.shade200),
-      );
+  Map<String, dynamic>? _asStringKeyMap(dynamic v) {
+    if (v is Map<String, dynamic>) return v;
+    if (v is Map) {
+      return v.map((k, e) => MapEntry(k.toString(), e));
     }
-    final cfgText = s.configurationOk ? '通过' : '未通过';
-    final cfgColor = s.configurationOk
-        ? AppFinanceStyle.profitGreenEnd
-        : Colors.orange.shade200;
+    return null;
+  }
+
+  bool? _asBool(dynamic v) {
+    if (v is bool) return v;
+    return null;
+  }
+
+  String _fmtBalNum(double n) {
+    if (n == n.roundToDouble()) return '${n.round()}';
+    return n.toStringAsFixed(2);
+  }
+
+  ({String avail, String total, String locked}) _balanceDisplay(
+    Map<String, dynamic>? bal,
+  ) {
+    double toD(dynamic x) {
+      if (x == null) return 0;
+      if (x is num) return x.toDouble();
+      return double.tryParse(x.toString()) ?? 0;
+    }
+
+    if (bal == null) {
+      return (avail: '—', total: '—', locked: '—');
+    }
+    final total = toD(bal['total_eq'] ?? bal['equity_usdt']);
+    final avail = toD(bal['avail_eq'] ?? bal['cash_balance']);
+    var locked = total - avail;
+    if (locked < 0) locked = 0;
+    return (
+      avail: _fmtBalNum(avail),
+      total: _fmtBalNum(total),
+      locked: _fmtBalNum(locked),
+    );
+  }
+
+  ({String? long, String? short}) _leverageLongShortParse(
+    dynamic levInfo,
+    String instId,
+  ) {
+    String? l;
+    String? s;
+    final want = instId.trim();
+    if (want.isEmpty) return (long: l, short: s);
+    if (levInfo is List) {
+      for (final raw in levInfo) {
+        final item = _asStringKeyMap(raw);
+        if (item == null) continue;
+        if ('${item['instId'] ?? ''}'.trim() != want) continue;
+        final ps = '${item['posSide'] ?? 'net'}'.toLowerCase().trim();
+        final lv = item['lever']?.toString();
+        if (lv == null || lv.isEmpty) continue;
+        if (ps == 'long') {
+          l = lv;
+        } else if (ps == 'short') {
+          s = lv;
+        } else if (ps == 'net') {
+          l = lv;
+          s = lv;
+        }
+      }
+    }
+    return (long: l, short: s);
+  }
+
+  String _triStateLabel(bool? v) {
+    if (v == true) return '是';
+    if (v == false) return '否';
+    return '未判定';
+  }
+
+  Widget _checklistGridCell(
+    BuildContext context, {
+    required int index,
+    required String label,
+    required String detail,
+    required bool? ok,
+  }) {
+    final base = AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 13);
+    late IconData icon;
+    late Color color;
+    if (ok == true) {
+      icon = Icons.check_circle_outline;
+      color = AppFinanceStyle.profitGreenEnd;
+    } else if (ok == false) {
+      icon = Icons.cancel_outlined;
+      color = Colors.orange.shade200;
+    } else {
+      icon = Icons.help_outline;
+      color = AppFinanceStyle.labelColor;
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text.rich(
-          TextSpan(
-            style: base,
-            children: [
-              const TextSpan(text: '连接：'),
-              TextSpan(
-                text: '成功',
-                style: TextStyle(color: AppFinanceStyle.profitGreenEnd),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(icon, size: 18, color: color),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                '$index',
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: base.copyWith(fontWeight: FontWeight.w600),
               ),
-              const TextSpan(text: '　配置检查：'),
-              TextSpan(text: cfgText, style: TextStyle(color: cfgColor)),
-            ],
+            ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Expanded(
+          child: Text(
+            '$label',
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: base.copyWith(fontWeight: FontWeight.w600),
           ),
         ),
-        if (s.instId != null && s.instId!.isNotEmpty)
-          Text(
-            '标的：${s.instId}　杠杆：${s.targetLeverage ?? '—'}x',
-            style: base,
+        const SizedBox(height: 4),
+        Text(
+          detail,
+          maxLines: 5,
+          overflow: TextOverflow.ellipsis,
+          style: base.copyWith(
+            color: AppFinanceStyle.valueColor,
+            fontSize: 13,
+            height: 1.3,
           ),
-        if (s.balanceSummary != null && s.balanceSummary!.isNotEmpty)
-          Text('余额：${s.balanceSummary}', style: base),
-        if (s.okxUid != null && s.okxUid!.isNotEmpty)
-          Text('OKX uid：${s.okxUid}', style: base),
+        ),
       ],
+    );
+  }
+
+  /// 单行 8 列网格；父级较窄时横向滚动。
+  Widget _verificationChecklistGrid(BuildContext context, List<Widget> cells) {
+    const minCell = 118.0;
+    const crossSpacing = 8.0;
+    const gridHeight = 158.0;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final w = constraints.maxWidth;
+        final gridW = math.max(w, minCell * 8);
+        final inner = (gridW - 7 * crossSpacing) / 8;
+        final aspect = inner / gridHeight;
+        final grid = GridView.count(
+          crossAxisCount: 8,
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          crossAxisSpacing: crossSpacing,
+          mainAxisSpacing: 0,
+          childAspectRatio: aspect,
+          children: cells,
+        );
+        final boxed = SizedBox(width: gridW, height: gridHeight, child: grid);
+        if (w.isFinite && gridW > w + 0.5) {
+          return SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: boxed,
+          );
+        }
+        return boxed;
+      },
+    );
+  }
+
+  Widget _verificationChecklist(
+    BuildContext context,
+    Map<String, dynamic> m,
+    AccountConfigRow row,
+  ) {
+    final okConn = m['success'] == true;
+    if (!okConn) {
+      return Text(
+        m['message']?.toString() ?? '连接失败',
+        style: AppFinanceStyle.labelTextStyle(
+          context,
+        ).copyWith(fontSize: 12, color: Colors.red.shade200),
+      );
+    }
+    final checks = _asStringKeyMap(m['checks']) ?? {};
+    bool? chk(String k) => _asBool(checks[k]);
+
+    final ac = _asStringKeyMap(m['account_config']) ?? {};
+    final uid = ac['uid']?.toString().trim() ?? '';
+    final uidOk = uid.isNotEmpty;
+
+    final cap = row.initialCapital;
+    final capStr = cap != null ? _fmtBalNum(cap) : '—';
+    final capOk = cap != null && cap > 0;
+
+    final inst = '${m['inst_id_checked'] ?? ''}'.trim();
+    final fmtOk = chk('swap_symbol_format');
+    final instOk = chk('swap_instrument_ok');
+    final pairOk = fmtOk == true && instOk == true;
+
+    final bidir = chk('pos_mode_long_short');
+    final swapSup = chk('swap_instrument_ok');
+    final cross = chk('mgn_mode_cross_ok');
+    final levLOk = chk('leverage_long_ok');
+    final levSOk = chk('leverage_short_ok');
+
+    final levs = _leverageLongShortParse(m['leverage_info'], inst);
+    final tgt = '${m['target_leverage'] ?? ''}'.trim();
+    final tgtDisp = tgt.isEmpty ? '—' : '${tgt}x';
+    final longDetail = levs.long != null
+        ? '${levs.long}x（目标 $tgtDisp）'
+        : '—（目标 $tgtDisp）';
+    final shortDetail = levs.short != null
+        ? '${levs.short}x（目标 $tgtDisp）'
+        : '—（目标 $tgtDisp）';
+
+    return _verificationChecklistGrid(context, [
+      _checklistGridCell(
+        context,
+        index: 1,
+        label: '初始资金',
+        detail: capStr,
+        ok: capOk,
+      ),
+      _checklistGridCell(
+        context,
+        index: 2,
+        label: '交易对',
+        detail: inst.isEmpty ? '—' : inst,
+        ok: pairOk,
+      ),
+      _checklistGridCell(
+        context,
+        index: 3,
+        label: '是否双向持仓',
+        detail: _triStateLabel(bidir),
+        ok: bidir,
+      ),
+      _checklistGridCell(
+        context,
+        index: 4,
+        label: '是否支持合约',
+        detail: _triStateLabel(swapSup),
+        ok: swapSup,
+      ),
+      _checklistGridCell(
+        context,
+        index: 5,
+        label: '是否全仓',
+        detail: _triStateLabel(cross),
+        ok: cross,
+      ),
+      _checklistGridCell(
+        context,
+        index: 6,
+        label: '多仓的杠杆',
+        detail: longDetail,
+        ok: levLOk,
+      ),
+      _checklistGridCell(
+        context,
+        index: 7,
+        label: '空仓的杠杆',
+        detail: shortDetail,
+        ok: levSOk,
+      ),
+    ]);
+  }
+
+  Widget _warningsSection(BuildContext context, Map<String, dynamic> m) {
+    final warns = m['configuration_warnings'];
+    if (warns is! List || warns.isEmpty) return const SizedBox.shrink();
+    final base = AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 12);
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('警告与说明', style: base.copyWith(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          ...warns.map(
+            (e) => Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: SelectableText(
+                e.toString(),
+                style: base.copyWith(color: Colors.orange.shade200),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showTestAccountResultDialog(
+    Map<String, dynamic> m,
+    AccountConfigRow row,
+  ) async {
+    final ok = m['success'] == true;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        final maxW = math.min(MediaQuery.sizeOf(ctx).width - 48, 1280.0);
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1e1e28),
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 24,
+            vertical: 40,
+          ),
+          title: Text(
+            ok ? '测试账户' : '测试失败',
+            style: TextStyle(color: AppFinanceStyle.valueColor),
+          ),
+          content: SizedBox(
+            width: maxW,
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (ok) ...[
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(
+                          flex: 1,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                m['configuration_ok'] == true
+                                    ? '配置检查：通过'
+                                    : '配置检查：未通过',
+                                style: TextStyle(
+                                  color: m['configuration_ok'] == true
+                                      ? AppFinanceStyle.profitGreenEnd
+                                      : Colors.orange.shade200,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              Text(
+                                '资金',
+                                style: AppFinanceStyle.labelTextStyle(ctx)
+                                    .copyWith(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                              ),
+                              const SizedBox(height: 4),
+                              ...(() {
+                                final bal = _asStringKeyMap(
+                                  m['balance_summary'],
+                                );
+                                final d = _balanceDisplay(bal);
+                                final base = TextStyle(
+                                  color: AppFinanceStyle.valueColor,
+                                  fontSize: 14,
+                                  height: 1.35,
+                                );
+                                return [
+                                  SelectableText(
+                                    '可用：${d.avail} USDT',
+                                    style: base,
+                                  ),
+                                  SelectableText(
+                                    '总计：${d.total} USDT',
+                                    style: base,
+                                  ),
+                                  SelectableText(
+                                    '锁定：${d.locked} USDT',
+                                    style: base,
+                                  ),
+                                ];
+                              })(),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                          flex: 3,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                '验证结果',
+                                style: AppFinanceStyle.labelTextStyle(ctx)
+                                    .copyWith(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                              ),
+                              const SizedBox(height: 8),
+                              _verificationChecklist(ctx, m, row),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ] else ...[
+                    SelectableText(
+                      m['message']?.toString() ?? '失败',
+                      style: TextStyle(
+                        color: Colors.red.shade200,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                  _warningsSection(ctx, m),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('关闭'),
+            ),
+          ],
+        );
+      },
     );
   }
 
@@ -344,89 +685,13 @@ class _WebAccountConfigAdminScreenState
       final api = ApiClient(baseUrl, token: token);
       final m = await api.adminTestAccountConnection(row.accountId);
       if (!mounted) return;
-      final summary = _AccountTestSummary.fromApiMap(m);
       setState(() {
-        _testSummaryByAccountId[row.accountId] = summary;
+        _testRecordByAccountId[row.accountId] = _AccountTestRecord(
+          at: DateTime.now(),
+          response: m,
+        );
       });
-      final ok = m['success'] == true;
-      final cfgOk = m['configuration_ok'] == true;
-      final warns = m['configuration_warnings'];
-      final buf = StringBuffer();
-      if (ok) {
-        buf.write('连接: 成功。配置检查: ${cfgOk ? "通过" : "未通过"}。');
-        buf.write('\n标的: ${m['inst_id_checked'] ?? ''}，目标杠杆: ${m['target_leverage'] ?? ''}x');
-        buf.write('\n余额摘要: ${m['balance_summary']}');
-        final checks = m['checks'];
-        buf.write('\n\n【检查项】');
-        if (checks != null) {
-          try {
-            buf.write('\n${const JsonEncoder.withIndent('  ').convert(checks)}');
-          } catch (_) {
-            buf.write('\n$checks');
-          }
-        } else {
-          buf.write('\n（无）');
-        }
-        final ac = m['account_config'];
-        buf.write('\n\n【账户配置】（OKX GET /api/v5/account/config）');
-        if (ac is Map && ac.isNotEmpty) {
-          try {
-            buf.write('\n${const JsonEncoder.withIndent('  ').convert(ac)}');
-          } catch (_) {
-            buf.write('\n$ac');
-          }
-          final uid = ac['uid'];
-          if (uid != null && '$uid'.trim().isNotEmpty) {
-            buf.write('\nOKX 用户标识 uid: $uid');
-          }
-        } else {
-          buf.write('\n（无数据：账户配置接口未返回有效内容，请查看下方警告）');
-        }
-        final lev = m['leverage_info'];
-        buf.write('\n\n【杠杆信息】');
-        if (lev != null) {
-          try {
-            buf.write('\n${const JsonEncoder.withIndent('  ').convert(lev)}');
-          } catch (_) {
-            buf.write('\n$lev');
-          }
-        } else {
-          buf.write('\n（无）');
-        }
-      } else {
-        buf.write(m['message']?.toString() ?? '失败');
-      }
-      if (warns is List && warns.isNotEmpty) {
-        buf.write('\n\n【警告与说明】\n');
-        buf.writeAll(warns.map((e) => e.toString()), '\n');
-      }
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          backgroundColor: const Color(0xFF1e1e28),
-          title: Text(
-            ok ? '测连 OKX' : '测连失败',
-            style: TextStyle(color: AppFinanceStyle.valueColor),
-          ),
-          content: SingleChildScrollView(
-            child: SelectableText(
-              buf.toString(),
-              style: TextStyle(
-                color: ok ? AppFinanceStyle.labelColor : Colors.red.shade200,
-                fontSize: 13,
-                height: 1.35,
-                fontFamily: 'monospace',
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('关闭'),
-            ),
-          ],
-        ),
-      );
+      await _showTestAccountResultDialog(m, row);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -503,7 +768,7 @@ class _WebAccountConfigAdminScreenState
                     itemCount: _accounts.length,
                     itemBuilder: (ctx, i) {
                       final a = _accounts[i];
-                      final sum = _testSummaryByAccountId[a.accountId];
+                      final testRec = _testRecordByAccountId[a.accountId];
                       final name = a.accountName?.trim();
                       final titleLine = (name != null && name.isNotEmpty)
                           ? '$name (${a.accountId})'
@@ -512,104 +777,240 @@ class _WebAccountConfigAdminScreenState
                         padding: const EdgeInsets.only(bottom: 10),
                         child: FinanceCard(
                           padding: const EdgeInsets.all(14),
-                          child: Column(
+                          child: Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      titleLine,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        color: AppFinanceStyle.valueColor,
-                                        fontWeight: FontWeight.w700,
-                                        fontSize: 15,
+                              Expanded(
+                                child: Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Expanded(
+                                      flex: 1,
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Expanded(
+                                                child: Text(
+                                                  titleLine,
+                                                  maxLines: 2,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: TextStyle(
+                                                    color: AppFinanceStyle
+                                                        .valueColor,
+                                                    fontWeight: FontWeight.w700,
+                                                    fontSize: 15,
+                                                  ),
+                                                ),
+                                              ),
+                                              if (!a.enabled)
+                                                Padding(
+                                                  padding:
+                                                      const EdgeInsets.only(
+                                                        left: 8,
+                                                      ),
+                                                  child: Text(
+                                                    '已禁用',
+                                                    style: TextStyle(
+                                                      color: AppFinanceStyle
+                                                          .labelColor,
+                                                      fontSize: 12,
+                                                    ),
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 10),
+                                          Text(
+                                            '账户',
+                                            style:
+                                                AppFinanceStyle.labelTextStyle(
+                                                  context,
+                                                ).copyWith(
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w600,
+                                                  letterSpacing: 0.3,
+                                                ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          _infoLine(
+                                            context,
+                                            'account_id',
+                                            a.accountId,
+                                          ),
+                                          _infoLine(context, '标的', a.symbol),
+                                          _infoLine(
+                                            context,
+                                            '密钥文件',
+                                            a.accountKeyFile,
+                                          ),
+                                          _infoLine(
+                                            context,
+                                            '脚本',
+                                            a.scriptFile,
+                                          ),
+                                          _infoLine(
+                                            context,
+                                            '策略',
+                                            a.tradingStrategy,
+                                          ),
+                                          _infoLine(
+                                            context,
+                                            '初始资金',
+                                            a.initialCapital != null
+                                                ? '${a.initialCapital}'
+                                                : null,
+                                          ),
+                                          _infoLine(
+                                            context,
+                                            '交易所',
+                                            a.exchangeAccount,
+                                          ),
+                                          if (testRec != null &&
+                                              testRec.response['success'] ==
+                                                  true) ...[
+                                            const SizedBox(height: 10),
+                                            Text(
+                                              '资金',
+                                              style:
+                                                  AppFinanceStyle.labelTextStyle(
+                                                    context,
+                                                  ).copyWith(
+                                                    fontSize: 11,
+                                                    fontWeight: FontWeight.w600,
+                                                    letterSpacing: 0.3,
+                                                  ),
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Row(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                              children: () {
+                                                final bal = _asStringKeyMap(
+                                                  testRec.response['balance_summary'],
+                                                );
+                                                final d = _balanceDisplay(bal);
+                                                final valStyle = TextStyle(
+                                                  color: AppFinanceStyle.valueColor,
+                                                  fontSize: 12,
+                                                );
+                                                return [
+                                                  Text.rich(
+                                                    TextSpan(
+                                                      style: AppFinanceStyle.labelTextStyle(context).copyWith(
+                                                        fontSize: 12,
+                                                      ),
+                                                      children: [
+                                                        const TextSpan(
+                                                          text: '可用：',
+                                                        ),
+                                                        TextSpan(
+                                                          text: '${d.avail} USDT',
+                                                          style: valStyle,
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                  Text.rich(
+                                                    TextSpan(
+                                                      style: AppFinanceStyle.labelTextStyle(context).copyWith(
+                                                        fontSize: 12,
+                                                      ),
+                                                      children: [
+                                                        const TextSpan(
+                                                          text: '总计：',
+                                                        ),
+                                                        TextSpan(
+                                                          text: '${d.total} USDT',
+                                                          style: valStyle,
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                  Text.rich(
+                                                    TextSpan(
+                                                      style: AppFinanceStyle.labelTextStyle(context).copyWith(
+                                                        fontSize: 12,
+                                                      ),
+                                                      children: [
+                                                        const TextSpan(
+                                                          text: '锁定：',
+                                                        ),
+                                                        TextSpan(
+                                                          text: '${d.locked} USDT',
+                                                          style: valStyle,
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ];
+                                              }(),
+                                            ),
+                                          ],
+                                        ],
                                       ),
                                     ),
-                                  ),
-                                  if (!a.enabled)
-                                    Padding(
-                                      padding: const EdgeInsets.only(left: 8),
-                                      child: Text(
-                                        '已禁用',
-                                        style: TextStyle(
-                                          color: AppFinanceStyle.labelColor,
-                                          fontSize: 12,
-                                        ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      flex: 3,
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          if (testRec != null) ...[
+                                            Text(
+                                              '测试验证（${testRec.at.hour.toString().padLeft(2, '0')}:${testRec.at.minute.toString().padLeft(2, '0')}）',
+                                              style:
+                                                  AppFinanceStyle.labelTextStyle(
+                                                    context,
+                                                  ).copyWith(
+                                                    fontSize: 13,
+                                                    fontWeight: FontWeight.w600,
+                                                  ),
+                                            ),
+                                            const SizedBox(height: 8),
+                                            _verificationChecklist(
+                                              context,
+                                              testRec.response,
+                                              a,
+                                            ),
+                                          ] else
+                                            Padding(
+                                              padding: const EdgeInsets.only(
+                                                top: 6,
+                                              ),
+                                              child: Text(
+                                                '尚未测试；点击右侧「测试账户」后在此显示验证结果',
+                                                style:
+                                                    AppFinanceStyle.labelTextStyle(
+                                                      context,
+                                                    ).copyWith(fontSize: 13),
+                                              ),
+                                            ),
+                                        ],
                                       ),
                                     ),
-                                ],
-                              ),
-                              const SizedBox(height: 10),
-                              Text(
-                                '基本信息',
-                                style: AppFinanceStyle.labelTextStyle(
-                                  context,
-                                ).copyWith(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  letterSpacing: 0.3,
+                                  ],
                                 ),
                               ),
-                              const SizedBox(height: 4),
-                              _infoLine(context, '标的', a.symbol),
-                              _infoLine(context, '密钥文件', a.accountKeyFile),
-                              _infoLine(context, '脚本', a.scriptFile),
-                              _infoLine(context, '策略', a.tradingStrategy),
-                              _infoLine(
-                                context,
-                                '初始资金',
-                                a.initialCapital != null
-                                    ? '${a.initialCapital}'
-                                    : null,
-                              ),
-                              _infoLine(context, '交易所', a.exchangeAccount),
-                              if (sum != null) ...[
-                                const SizedBox(height: 10),
-                                Divider(
-                                  height: 1,
-                                  color: AppFinanceStyle.cardBorder
-                                      .withValues(alpha: 0.6),
-                                ),
-                                const SizedBox(height: 8),
-                                Text(
-                                  '测连验证（${sum.at.hour.toString().padLeft(2, '0')}:${sum.at.minute.toString().padLeft(2, '0')}）',
-                                  style: AppFinanceStyle.labelTextStyle(
-                                    context,
-                                  ).copyWith(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                _testSummaryBody(context, sum),
-                              ] else
-                                Padding(
-                                  padding: const EdgeInsets.only(top: 6),
-                                  child: Text(
-                                    '尚未测连；点击下方「测连 OKX」后在此显示验证摘要',
-                                    style: AppFinanceStyle.labelTextStyle(
-                                      context,
-                                    ).copyWith(fontSize: 12),
-                                  ),
-                                ),
-                              const SizedBox(height: 12),
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.center,
+                              const SizedBox(width: 8),
+                              Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.end,
                                 children: [
                                   TextButton(
                                     onPressed: () => _openEditor(existing: a),
                                     child: const Text('编辑'),
                                   ),
-                                  const Spacer(),
                                   TextButton(
                                     onPressed: () => _test(a),
-                                    child: const Text('测连 OKX'),
+                                    child: const Text('测试账户'),
                                   ),
-                                  const SizedBox(width: 4),
                                   TextButton(
                                     onPressed: () => _delete(a),
                                     child: Text(
@@ -653,7 +1054,7 @@ class _WebAccountConfigAdminScreenState
       backgroundColor: AppFinanceStyle.backgroundDark,
       appBar: AppBar(
         title: Text(
-          '账号管理',
+          '账户管理',
           style: AppFinanceStyle.labelTextStyle(
             context,
           ).copyWith(color: AppFinanceStyle.valueColor, fontSize: 18),

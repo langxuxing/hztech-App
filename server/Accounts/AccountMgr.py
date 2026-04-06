@@ -25,7 +25,7 @@ from typing import Any
 
 ACCOUNTS_DIR = Path(__file__).resolve().parent
 
-# 定时任务 DEBUG 日志：账号列宽（超长截断后左对齐）
+# 定时任务 DEBUG 日志：账户列宽（超长截断后左对齐）
 _LOG_ACCOUNT_COL_WIDTH = 20
 
 
@@ -224,7 +224,7 @@ def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None 
 
         if not path:
             log.debug(
-                "账号快照跳过: %s 无密钥文件",
+                "账户快照跳过: %s 无密钥文件",
                 _fmt_log_account_id(aid),
             )
             continue

@@ -856,6 +856,12 @@ class MonthEndValueCalendarPanel extends StatefulWidget {
 
     /// 为 true 时日历网格在父级有限高度内 [Expanded] 铺满，与折线/柱图三列对齐。
     this.expandGridArea = false,
+
+    /// 加在标题（及非 compact 时的说明）与下方月份条/网格之间的竖向间距。
+    this.titleToBodyExtraGap = 0,
+
+    /// 为 true 且 [expandGridArea] 时，在 [Expanded] 可用高度内将日历网格上下居中。
+    this.centerCalendarGridInExpanded = false,
   });
 
   final List<BotProfitSnapshot> snapshots;
@@ -870,6 +876,8 @@ class MonthEndValueCalendarPanel extends StatefulWidget {
   final double? gridMaxHeight;
   final Map<int, int>? dailyCloseCounts;
   final bool expandGridArea;
+  final double titleToBodyExtraGap;
+  final bool centerCalendarGridInExpanded;
 
   @override
   State<MonthEndValueCalendarPanel> createState() =>
@@ -958,7 +966,10 @@ class _MonthEndValueCalendarPanelState
             ).copyWith(fontSize: 12),
           ),
         ],
-        SizedBox(height: widget.compact ? 6 : 16),
+        SizedBox(
+          height:
+              (widget.compact ? 6 : 16) + widget.titleToBodyExtraGap,
+        ),
         if (monthly.isEmpty)
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
@@ -1042,7 +1053,7 @@ class _MonthEndValueCalendarPanelState
                   final raw =
                       (cons.maxHeight - headerH - rs - nRows * rs) / nRows;
                   final ch = raw.clamp(24.0, 80.0);
-                  return _CalendarGrid(
+                  final grid = _CalendarGrid(
                     year: focus.year,
                     month: focus.month,
                     dailyPnL: daily,
@@ -1052,6 +1063,13 @@ class _MonthEndValueCalendarPanelState
                     headerFontSize: widget.compact ? 10 : 12,
                     rowSpacing: rs,
                   );
+                  if (widget.centerCalendarGridInExpanded) {
+                    return Align(
+                      alignment: Alignment.center,
+                      child: grid,
+                    );
+                  }
+                  return grid;
                 },
               ),
             )

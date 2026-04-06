@@ -273,7 +273,7 @@ class _CustomerAccountSetupScreenState extends State<CustomerAccountSetupScreen>
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                   child: Text(
                     '请粘贴与 QTrader 一致的 OKX JSON（含 api.key / secret / passphrase）。'
-                    '管理员须先在「账号管理」中创建账户并为您绑定 account_id，symbol 须为永续如 PEPE-USDT-SWAP。',
+                    '管理员须先在「账户管理」中创建账户并为您绑定 account_id，symbol 须为永续如 PEPE-USDT-SWAP。',
                     style: AppFinanceStyle.labelTextStyle(context).copyWith(
                       fontSize: 12,
                       height: 1.35,
@@ -362,7 +362,7 @@ class _CustomerAccountSetupScreenState extends State<CustomerAccountSetupScreen>
       backgroundColor: AppFinanceStyle.backgroundDark,
       appBar: AppBar(
         title: Text(
-          '账号配置',
+          '账户配置',
           style: AppFinanceStyle.labelTextStyle(context).copyWith(
                 color: AppFinanceStyle.valueColor,
                 fontSize: 18,

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-测试 OKX 账号密钥 JSON：连接、账户信息、当前持仓（仅依赖 api 段）。
+测试 OKX 账户密钥 JSON：连接、账户信息、当前持仓（仅依赖 api 段）。
 
 密钥文件路径由 Account_List.json 的 account_key_file 决定，相对目录 OKX_Api_Key/
 （若该路径不存在则回退尝试 Accounts 根目录，兼容旧布局）。
 默认仅测试 exchange_account 为 OKX 且 enbaled 为 true 的条目；可用命令行覆盖。
 
-沙盒账号需在请求头中加 x-simulated-trading: 1，base_url 均为 https://www.okx.com。
+沙盒（模拟盘）账户需在请求头中加 x-simulated-trading: 1，base_url 均为 https://www.okx.com。
 """
 import argparse
 import base64
@@ -205,7 +205,7 @@ def _private_get(
 
 
 def test_one_account(cfg: dict) -> dict:
-    """对单个账号：测连接（balance）、读账户信息、读持仓。返回汇总结果。"""
+    """对单个账户：测连接（balance）、读账户信息、读持仓。返回汇总结果。"""
     name = cfg["name"]
     base_url = cfg["base_url"]
     key, secret, passphrase = cfg["key"], cfg["secret"], cfg["passphrase"]
@@ -289,7 +289,7 @@ def main():
         )
         sys.exit(2)
 
-    print("========== OKX 多账号测试（连接 / 账户 / 持仓）==========")
+    print("========== OKX 多账户测试（连接 / 账户信息 / 持仓）==========")
     print(f"账户列表: {ACCOUNT_LIST_FILE.name}，密钥目录: {OKX_API_KEY_DIR.name}/\n")
 
     all_ok = True

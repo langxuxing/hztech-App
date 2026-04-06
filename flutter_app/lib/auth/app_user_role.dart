@@ -54,7 +54,7 @@ enum AppUserRole {
   /// 用户与角色管理（增删改权限）
   bool get canManageUsers => this == AppUserRole.admin;
 
-  /// 已绑定账户的 OKX 密钥 JSON 上传与测连（Web 侧栏「账号配置」）
+  /// 已绑定账户的 OKX 密钥 JSON 上传与测连（Web 侧栏「账户配置」）
   bool get canConfigureLinkedOkxKeys => this == AppUserRole.customer;
 
   /// Web「收网测试」页：交易员、管理员、策略分析师（与后端一致；客户无）

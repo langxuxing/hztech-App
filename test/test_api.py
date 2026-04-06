@@ -489,7 +489,7 @@ class TestCustomerScope:
 
 
 class TestCustomerAccountSetupApi:
-    """客户账号配置：GET /api/me/customer-accounts、PUT okx-json。"""
+    """客户账户配置：GET /api/me/customer-accounts、PUT okx-json。"""
 
     def test_customer_accounts_forbidden_for_admin(self, client, auth_headers):
         r = client.get("/api/me/customer-accounts", headers=auth_headers)

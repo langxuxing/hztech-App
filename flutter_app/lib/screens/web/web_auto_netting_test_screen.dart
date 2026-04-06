@@ -4,6 +4,7 @@ import '../../api/client.dart';
 import '../../api/models.dart';
 import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
+import '../../widgets/water_background.dart';
 
 /// Web：自动收网测试（仅策略分析师；后端目前为记录桩，可后续对接实盘）。
 class WebAutoNettingTestScreen extends StatefulWidget {
@@ -101,11 +102,12 @@ class _WebAutoNettingTestScreenState extends State<WebAutoNettingTestScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final body = SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 560),
-        child: Column(
+    final body = WaterBackground(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 560),
+          child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
@@ -189,6 +191,7 @@ class _WebAutoNettingTestScreenState extends State<WebAutoNettingTestScreen> {
           ],
         ),
       ),
+    ),
     );
 
     return Scaffold(

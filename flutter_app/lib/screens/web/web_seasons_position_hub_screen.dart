@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../api/models.dart';
 import '../../auth/app_user_role.dart';
 import '../../theme/finance_style.dart';
+import '../../widgets/water_background.dart';
 import 'web_position_history_screen.dart';
 import 'web_seasons_screen.dart';
 
@@ -70,9 +71,13 @@ class _WebSeasonsPositionHubScreenState extends State<WebSeasonsPositionHubScree
   @override
   Widget build(BuildContext context) {
     // 布局：账户选择置顶 → 其下为「赛季 | 历史仓位」Tab（子页不再重复账户下拉）。
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
+    // 与 [WebAccountProfileScreen] / [WebStrategyPerformanceScreen] 相同底图；子 Tab 内不再重复叠 WaterBackground。
+    return ColoredBox(
+      color: AppFinanceStyle.backgroundDark,
+      child: WaterBackground(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
         Material(
           color: Colors.transparent,
           child: Padding(
@@ -161,6 +166,8 @@ class _WebSeasonsPositionHubScreenState extends State<WebSeasonsPositionHubScree
           ),
         ),
       ],
+        ),
+      ),
     );
   }
 }

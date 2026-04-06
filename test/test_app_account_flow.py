@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-模拟 Flutter App 账号相关请求链：登录 → account-profit → tradingbots →
+模拟 Flutter App 登录与交易所账户相关请求链：登录 → account-profit → tradingbots →
 按列表中的 account_id 拉持仓 / 收益历史 / 委托 / 行情（与 ApiClient 一致）。
 
 与 AccountMgr 数据源的全量对齐见 test_main_accountmgr_e2e.py。
@@ -26,7 +26,7 @@ def _first_okx_account_id(bots: list) -> str | None:
 
 
 class TestAppAccountFlowLikeFlutter:
-    """与 flutter_app/lib/api/client.dart 中账号接口调用顺序一致。"""
+    """与 flutter_app/lib/api/client.dart 中账户相关接口调用顺序一致。"""
 
     def test_login_then_account_apis_match_app_contract(self, client, auth_headers):
         # 1) account-profit（账户盈亏页）
