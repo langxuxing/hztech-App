@@ -68,10 +68,11 @@ echo "  单进程模式: HZTECH_LOCAL_UNIFIED_PORT=1 $0"
 echo "  按 Ctrl+C 停止两个进程"
 echo ""
 
-env HZTECH_API_ONLY=1 PORT="$API_PORT" python3 server/main.py &
+# 避免 shell 中已 export 的 HZTECH_* 串到另一进程
+env HZTECH_STATIC_ONLY= HZTECH_API_ONLY=1 PORT="$API_PORT" python3 server/main.py &
 _API_PID=$!
 
-env HZTECH_STATIC_ONLY=1 PORT="$WEB_PORT" python3 server/main.py &
+env HZTECH_API_ONLY= HZTECH_STATIC_ONLY=1 PORT="$WEB_PORT" python3 server/main.py &
 _WEB_PID=$!
 
 set +e

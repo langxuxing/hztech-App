@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 本地部署：1) 构建 Flutter APK 与 Web  2) 启动单进程服务（API + Flutter Web，默认 9001，与 App API 约定一致；AWS 分拆时 Web 为 9000）
-# 依赖：Flutter/Android 环境（构建 APK 时需要）；无 AWS/SSH
+# 本地部署：1) 构建 Flutter Android APK +（macOS）iOS IPA 与 Web  2) 启动服务（默认双进程 API 9001 + Web 9000；HZTECH_LOCAL_UNIFIED_PORT=1 时为单进程）
+# 依赖：Flutter/Android（APK）；macOS + Xcode（IPA）；无 AWS/SSH
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR"
@@ -17,9 +17,10 @@ echo "  本地部署：Flutter 构建 → 启动本地服务"
 echo "=============================================="
 
 echo ""
-echo "=== 1/4 构建 Flutter App (release APK) ==="
+echo "=== 1/4 构建 Flutter 移动端 (release APK + macOS 上 IPA) ==="
 python3 "$PROJECT_ROOT/server/server_mgr.py" build || true
 echo "  APK 输出: $PROJECT_ROOT/apk/"
+echo "  IPA 输出（仅 macOS 成功时）: $PROJECT_ROOT/ipa/"
 
 echo ""
 echo "=== 2/4 构建 Flutter Web (release) ==="

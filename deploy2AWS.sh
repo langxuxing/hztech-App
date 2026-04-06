@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Ops 一键部署：1) 构建 Flutter APK  2) 同步 webserver + APK 到 AWS  3) 重启 AWS 后台服务
-# 依赖：server/deploy-aws.json、本机可 SSH 到 AWS、Flutter/Android 环境
+# Ops 一键部署：1) 构建 Flutter Android APK +（macOS）iOS IPA  2) 同步 webserver + apk/ + ipa/ + Web 到 AWS  3) 重启 AWS 后台服务
+# 依赖：server/deploy-aws.json、本机可 SSH 到 AWS、Flutter/Android 环境；IPA 需 macOS + Xcode（失败不阻断，以 APK 成功为准；可 export HZTECH_SKIP_IOS_BUILD=1 跳过 IPA）
 #
 # 双机 AWS（密钥路径见 server/deploy-aws.json）：
 #   API 后端  54.66.108.150  /home/ec2-user/Apiserver   密钥 hztech.pem
@@ -18,16 +18,17 @@ echo "  Ops 部署：Flutter 构建 → AWS 同步 → 服务重启"
 echo "=============================================="
 
 echo ""
-echo "=== 1/5 构建 Flutter App (release APK) ==="
+echo "=== 1/5 构建 Flutter 移动端 (release APK + macOS 上 IPA) ==="
 python3 "$PROJECT_ROOT/server/server_mgr.py" build
 echo "  APK 输出: $PROJECT_ROOT/apk/"
+echo "  IPA 输出（仅 macOS 成功时）: $PROJECT_ROOT/ipa/"
 
 echo ""
 echo "=== 2/5 构建 Flutter Web (release) ==="
 python3 "$PROJECT_ROOT/server/server_mgr.py" build-web || echo "  （跳过 Web 构建）"
 
 echo ""
-echo "=== 3/5 上传到 AWS（server/ + apk/ + flutter_app/build/web）==="
+echo "=== 3/5 上传到 AWS（server/ + apk/ + ipa/ + flutter_app/build/web）==="
 python3 "$PROJECT_ROOT/server/server_mgr.py" deploy --no-start
 # 仅 rsync 同步，不启动；步骤 3 统一重启服务
 
@@ -48,7 +49,7 @@ WEB_USER=$(python3 -c "import json; c=json.load(open('server/deploy-aws.json'));
 echo ""
 echo "=============================================="
 echo "  部署完成（双机：API 与 Web 分离）"
-echo "  Web/App（Flutter Web + APK）: http://${WEB_HOST}:${WEB_PORT}"
+echo "  Web/App（Flutter Web + apk/ + ipa/）: http://${WEB_HOST}:${WEB_PORT}"
 if [ -n "$API_HOST" ]; then
   echo "  API（/api/*）: http://${API_HOST}:${WEB_PORT}"
   echo "  日志 Web: ssh -i \"${WEB_KEY}\" ${WEB_USER}@${WEB_HOST} cat /home/ec2-user/hztechapp/server.log"

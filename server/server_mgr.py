@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 
 # 项目根目录（server 的上一级）
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -12,9 +13,13 @@ GRADLEW = PROJECT_ROOT / "gradlew"
 FLUTTER_APP = PROJECT_ROOT / "flutter_app"
 APK_DEBUG_DIR = PROJECT_ROOT / "app" / "build" / "outputs" / "apk" / "debug"
 FLUTTER_APK_DIR = FLUTTER_APP / "build" / "app" / "outputs" / "flutter-apk"
+FLUTTER_IPA_DIR = FLUTTER_APP / "build" / "ios" / "ipa"
 # 生成 APK 放入项目根下 apk/，部署后对应 AWS 上 hztechapp/apk/（见 deploy-aws.json remote_path）
 APK_DIR = PROJECT_ROOT / "apk"
 DEFAULT_APK_NAME = "禾正量化-release.apk"
+# iOS：flutter build ipa 产物复制到 ipa/，随 rsync 一并上传（与 apk/ 并列）
+IPA_DIR = PROJECT_ROOT / "ipa"
+DEFAULT_IPA_NAME = "禾正量化-release.ipa"
 
 
 def load_config():
@@ -270,6 +275,62 @@ def build_apk_flutter():
     return True
 
 
+def build_ios_flutter() -> bool:
+    """macOS + Xcode：flutter build ipa --release，并复制到项目根 ipa/。
+
+    - 非 macOS：跳过（打印说明），返回 False。
+    - 设置 HZTECH_SKIP_IOS_BUILD=1 时跳过。
+    - 构建失败（签名等）时返回 False，不中断 Android 流程；由 build 入口统一处理退出码。
+    """
+    if os.environ.get("HZTECH_SKIP_IOS_BUILD", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        print("已跳过 iOS 构建（HZTECH_SKIP_IOS_BUILD）。")
+        return False
+    if sys.platform != "darwin":
+        print("跳过 iOS 构建（非 macOS 无法执行 flutter build ipa；Android APK 仍正常构建）。")
+        return False
+    if not FLUTTER_APP.is_dir():
+        return False
+    env = dict(os.environ)
+    flutter_cmd = _find_flutter(env)
+    if not flutter_cmd:
+        print("未找到 Flutter，跳过 iOS 构建。")
+        return False
+    print("Building Flutter iOS IPA (release) ...")
+    extra = _flutter_dart_define_args()
+    if extra:
+        print("  dart-define: %s" % " ".join(extra))
+    try:
+        subprocess.run(
+            [flutter_cmd, "build", "ipa", "--release", *extra],
+            check=True,
+            cwd=str(FLUTTER_APP),
+            env=env,
+        )
+    except subprocess.CalledProcessError:
+        print(
+            "iOS IPA 构建失败（Xcode 签名、证书或 Pods 等）。"
+            "可 export HZTECH_SKIP_IOS_BUILD=1 仅打 Android；或在本机修复签名后重试。"
+        )
+        return False
+    if not FLUTTER_IPA_DIR.is_dir():
+        print("未找到 Flutter 输出目录 build/ios/ipa。")
+        return False
+    ipas = list(FLUTTER_IPA_DIR.glob("*.ipa"))
+    ipas.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    if not ipas:
+        print("未在 build/ios/ipa 下找到 .ipa 文件。")
+        return False
+    IPA_DIR.mkdir(parents=True, exist_ok=True)
+    dest = IPA_DIR / DEFAULT_IPA_NAME
+    shutil.copy2(ipas[0], dest)
+    print("IPA 已复制到: %s" % dest)
+    return True
+
+
 def build_web_flutter():
     """flutter build web，供 Flask 托管 flutter_app/build/web。"""
     if not FLUTTER_APP.is_dir():
@@ -453,11 +514,14 @@ def deploy_and_start(port=None, start_server=True):
 
 
 if __name__ == "__main__":
-    import sys
     cfg = load_config()
     if len(sys.argv) > 1 and sys.argv[1] == "build":
-        build_apk()
-        sys.exit(0)
+        apk_ok = build_apk()
+        build_ios_flutter()
+        sys.exit(0 if apk_ok else 1)
+    if len(sys.argv) > 1 and sys.argv[1] == "build-ios":
+        ok = build_ios_flutter()
+        sys.exit(0 if ok else 1)
     if len(sys.argv) > 1 and sys.argv[1] == "build-web":
         ok = build_web_flutter()
         sys.exit(0 if ok else 1)
@@ -466,6 +530,7 @@ if __name__ == "__main__":
         do_build = "--build" in sys.argv
         if do_build:
             build_apk()
+            build_ios_flutter()
         if "--build-web" in sys.argv:
             build_web_flutter()
         deploy_and_start(port=int(cfg.get("web_port", cfg.get("port", 9000))), start_server=start)
@@ -494,5 +559,5 @@ if __name__ == "__main__":
     target, key = get_ssh_target()
     print("SSH target:", target, "key:", key)
     print(
-        "Usage: python server_mgr.py [build | build-web | deploy [--build] [--build-web] [--no-start] | restart | db-sync | shell]"
+        "Usage: python server_mgr.py [build | build-ios | build-web | deploy [--build] [--build-web] [--no-start] | restart | db-sync | shell]"
     )

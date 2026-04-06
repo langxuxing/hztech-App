@@ -22,7 +22,7 @@ else
   python3 -m ensurepip --user -q 2>/dev/null || true
   python3 -m pip install --user -r server/requirements.txt -q
 fi
-mkdir -p apk res
+mkdir -p apk ipa res
 
 # 端口约定：单进程同时提供 Flutter Web + /api/*（与 run_local.sh / deploy-aws.json 的 web_port 一致）
 WEB_PORT="${WEB_PORT:-9000}"
