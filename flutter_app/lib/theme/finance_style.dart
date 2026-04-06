@@ -53,29 +53,27 @@ class AppFinanceStyle {
 
   /// 标签字体 14px, font-weight 500
   static TextStyle labelTextStyle(BuildContext context) {
-    return (Theme.of(context).textTheme.bodyMedium ?? const TextStyle()).copyWith(
-      fontSize: 14,
-      fontWeight: FontWeight.w500,
-      color: labelColor,
-    );
+    return (Theme.of(context).textTheme.bodyMedium ?? const TextStyle())
+        .copyWith(fontSize: 14, fontWeight: FontWeight.w500, color: labelColor);
   }
 
   /// 主数值字体：大号、粗体、valueColor
   static TextStyle valueTextStyle(BuildContext context, {double? fontSize}) {
-    return (Theme.of(context).textTheme.headlineSmall ?? const TextStyle()).copyWith(
-      fontSize: fontSize ?? 32,
-      fontWeight: FontWeight.w800,
-      color: valueColor,
-      letterSpacing: -0.5,
-    );
+    return (Theme.of(context).textTheme.headlineSmall ?? const TextStyle())
+        .copyWith(
+          fontSize: fontSize ?? 32,
+          fontWeight: FontWeight.w800,
+          color: valueColor,
+          letterSpacing: -0.5,
+        );
   }
 
   /// 盈利文字渐变色（用 LinearGradient 时需 ShaderMask）
   static LinearGradient get profitGradient => const LinearGradient(
-        colors: [profitGreenStart, profitGreenEnd],
-        begin: Alignment.centerLeft,
-        end: Alignment.centerRight,
-      );
+    colors: [profitGreenStart, profitGreenEnd],
+    begin: Alignment.centerLeft,
+    end: Alignment.centerRight,
+  );
 }
 
 /// 与 aa.html 一致的金融毛玻璃卡片：半透明、模糊、细边框、顶高光线、阴影。
@@ -85,10 +83,13 @@ class FinanceCard extends StatelessWidget {
     required this.child,
     this.padding,
     this.onTap,
+
     /// 状态强调色：加粗边框、顶部色条与可选外发光（策略启停等仪表盘卡片）。
     this.statusAccent,
+
     /// 与 [statusAccent] 配合，0–1 调节外发光强度（如运行中呼吸灯）。
     this.accentGlowT = 0,
+
     /// 若提供则替代纯色卡面，形成深灰微渐变（与毛玻璃叠加）。
     this.surfaceGradient,
   });
@@ -97,6 +98,7 @@ class FinanceCard extends StatelessWidget {
   final EdgeInsetsGeometry? padding;
   final VoidCallback? onTap;
   final Color? statusAccent;
+
   /// 0–1，默认 0。
   final double accentGlowT;
   final Gradient? surfaceGradient;
@@ -137,7 +139,9 @@ class FinanceCard extends StatelessWidget {
           ),
           Container(
             decoration: BoxDecoration(
-              color: surfaceGradient == null ? AppFinanceStyle.cardBackground : null,
+              color: surfaceGradient == null
+                  ? AppFinanceStyle.cardBackground
+                  : null,
               gradient: surfaceGradient,
               borderRadius: BorderRadius.circular(AppFinanceStyle.cardRadius),
               border: Border.all(

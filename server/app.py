@@ -285,6 +285,18 @@ def _bot_okx_config_path(bot_id: str) -> Path | None:
     return None
 
 
+def _live_equity_cash_for_bot(bot_id: str) -> tuple[float, float]:
+    path = _bot_okx_config_path(bot_id)
+    if not path or not path.is_file():
+        return 0.0, 0.0
+    live = _okx.okx_fetch_balance(config_path=path)
+    if not live:
+        return 0.0, 0.0
+    eq = float(live.get("equity_usdt") or live.get("total_eq") or 0.0)
+    cash = float(live.get("cash_balance") or live.get("avail_eq") or 0.0)
+    return eq, cash
+
+
 def _job_fetch_account_and_save_snapshots() -> None:
     """定时任务：按 bot 的 account_api_file 分别拉取账号信息并写入 bot_profit_snapshots（每 10 分钟）。仅用 Accounts 下配置，不回退全局。"""
     bots = _load_tradingbots_config()
@@ -533,6 +545,7 @@ def _collect_tradingbots_list() -> list[dict]:
                 "is_running": is_running,
                 "can_control": can_control,
                 "enabled": bool(b.get("enabled")),
+                "sandbox": False,
             }
         )
     return bots
@@ -591,12 +604,6 @@ def api_bot_start(bot_id):
     _db.strategy_event_insert(
         bot_id, "start", "manual", getattr(g, "current_username", None)
     )
-    if resp.get("ok"):
-        config_path = _bot_okx_config_path(bot_id)
-        live = _okx.okx_fetch_balance(config_path=config_path) if config_path else None
-        initial = (live.get("total_eq") or 0.0) if live else 0.0
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        _db.bot_season_insert(bot_id, ts, initial)
     return jsonify(_bot_op_response(resp, bot_id))
 
 
@@ -620,11 +627,9 @@ def api_bot_stop(bot_id):
         bot_id, "stop", "manual", getattr(g, "current_username", None)
     )
     if resp.get("ok"):
-        config_path = _bot_okx_config_path(bot_id)
-        live = _okx.okx_fetch_balance(config_path=config_path) if config_path else None
-        final_eq = (live.get("total_eq") or 0.0) if live else 0.0
+        final_eq, final_cash = _live_equity_cash_for_bot(bot_id)
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        _db.bot_season_update_on_stop(bot_id, ts, final_eq)
+        _db.bot_season_update_on_stop(bot_id, ts, final_eq, final_cash)
     return jsonify(_bot_op_response(resp, bot_id))
 
 
@@ -666,6 +671,16 @@ def api_bot_season_start(bot_id):
             "ok": resp.get("ok"),
         },
     )
+    if resp.get("ok"):
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        eq, cash = _live_equity_cash_for_bot(bot_id)
+        _db.bot_season_roll_forward(bot_id, ts, eq, cash)
+        _db.strategy_event_insert(
+            bot_id,
+            "season_start",
+            "manual",
+            getattr(g, "current_username", None),
+        )
     return jsonify(_bot_op_response(resp, bot_id))
 
 
@@ -685,6 +700,16 @@ def api_bot_season_stop(bot_id):
             "ok": resp.get("ok"),
         },
     )
+    if resp.get("ok"):
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        eq, cash = _live_equity_cash_for_bot(bot_id)
+        _db.bot_season_update_on_stop(bot_id, ts, eq, cash)
+        _db.strategy_event_insert(
+            bot_id,
+            "season_stop",
+            "manual",
+            getattr(g, "current_username", None),
+        )
     return jsonify(_bot_op_response(resp, bot_id))
 
 

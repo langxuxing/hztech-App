@@ -7,8 +7,8 @@
   stop          结束进程（读 .pid），写日志
   restart       先 stop 再 exec start
   checkhealth   打印 JSON：运行状态、未结束赛季等；写日志
-  season-start  开启新盈利赛季（关闭上一未结束赛季后插入 bot_seasons）
-  season-stop   结束当前未结束赛季；写日志与 strategy_events
+  season-start  日志 + JSON（bot_seasons 由服务端 POST /season-start 在脚本成功后写入）
+  season-stop   日志 + JSON（停赛写库由服务端 POST /season-stop 完成）
 
 环境变量：
   HZTECH_ACCOUNT_ID  必填，对应 account_id
@@ -90,6 +90,13 @@ def _equity_for_season(db, account_id: str) -> float:
     if snap:
         return float(snap["equity_usdt"])
     return _initial_capital_from_list(account_id)
+
+
+def _cash_for_season(db, account_id: str) -> float:
+    snap = db.account_snapshot_latest_by_account(account_id)
+    if snap:
+        return float(snap["cash_balance"])
+    return 0.0
 
 
 def _pid_is_alive(pid: int) -> bool:
@@ -280,26 +287,16 @@ def cmd_checkhealth() -> int:
 
 
 def cmd_season_start() -> int:
+    """赛季写库由服务端 POST season-start 在脚本成功后统一执行；此处仅日志/JSON，避免与 API 重复入库。"""
     db = _import_db()
     aid = _account_id_required()
     label = _script_label()
     ts = _ts_utc()
     eq = _equity_for_season(db, aid)
-
-    # 若存在未结束赛季，先按当前权益结案
-    open_rows = [
-        s
-        for s in db.bot_season_list_by_bot(aid, limit=100)
-        if s.get("stopped_at") is None
-    ]
-    if open_rows:
-        db.bot_season_update_on_stop(aid, ts, eq)
-
-    db.bot_season_insert(aid, ts, eq)
-    db.strategy_event_insert(aid, "season_start", "script", None)
+    cash = _cash_for_season(db, aid)
     db.log_insert(
         "INFO",
-        f"mock_bot season_start account={aid} initial_equity={eq}",
+        f"mock_bot season_start account={aid} initial_equity={eq} (db by API)",
         "mock_bot",
         extra={
             "account_id": aid,
@@ -309,7 +306,19 @@ def cmd_season_start() -> int:
             "ts": ts,
         },
     )
-    print(json.dumps({"ok": True, "action": "season_start", "account_id": aid, "started_at": ts, "initial_balance": eq}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "action": "season_start",
+                "account_id": aid,
+                "started_at": ts,
+                "initial_balance": eq,
+                "initial_cash": cash,
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 
@@ -319,11 +328,10 @@ def cmd_season_stop() -> int:
     label = _script_label()
     ts = _ts_utc()
     eq = _equity_for_season(db, aid)
-    db.bot_season_update_on_stop(aid, ts, eq)
-    db.strategy_event_insert(aid, "season_stop", "script", None)
+    cash = _cash_for_season(db, aid)
     db.log_insert(
         "INFO",
-        f"mock_bot season_stop account={aid} final_equity={eq}",
+        f"mock_bot season_stop account={aid} final_equity={eq} (db by API)",
         "mock_bot",
         extra={
             "account_id": aid,
@@ -333,7 +341,19 @@ def cmd_season_stop() -> int:
             "ts": ts,
         },
     )
-    print(json.dumps({"ok": True, "action": "season_stop", "account_id": aid, "stopped_at": ts, "final_balance": eq}, ensure_ascii=False))
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "action": "season_stop",
+                "account_id": aid,
+                "stopped_at": ts,
+                "final_balance": eq,
+                "final_cash": cash,
+            },
+            ensure_ascii=False,
+        )
+    )
     return 0
 
 

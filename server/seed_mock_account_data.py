@@ -118,14 +118,14 @@ def seed_one_account(
         rows += 1
         ym = f"{day.year:04d}-{day.month:02d}"
         if ym not in month_first:
-            month_first[ym] = (eq, ts)
+            month_first[ym] = (eq, cash, ts)
 
-    for ym, (open_eq, rec_at) in sorted(month_first.items()):
+    for ym, (open_eq, open_cash, rec_at) in sorted(month_first.items()):
         conn.execute(
             """INSERT OR REPLACE INTO account_month_open
-               (account_id, year_month, open_equity, recorded_at)
-               VALUES (?, ?, ?, ?)""",
-            (account_id, ym, open_eq, rec_at),
+               (account_id, year_month, open_equity, open_cash, recorded_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (account_id, ym, open_eq, open_cash, rec_at),
         )
 
     conn.execute(

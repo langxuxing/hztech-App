@@ -40,6 +40,20 @@ def _run_user_migrations(conn: sqlite3.Connection) -> None:
             pass
 
 
+def _ensure_account_schema_columns(conn: sqlite3.Connection) -> None:
+    """旧库补列：月初现金、赛季起止现金（与 QTrader-web 口径对齐的扩展字段）。"""
+    cur = conn.execute("PRAGMA table_info(account_month_open)")
+    cols = {str(r[1]) for r in cur.fetchall()}
+    if "open_cash" not in cols:
+        conn.execute("ALTER TABLE account_month_open ADD COLUMN open_cash REAL")
+    cur = conn.execute("PRAGMA table_info(bot_seasons)")
+    cols_b = {str(r[1]) for r in cur.fetchall()}
+    if "initial_cash" not in cols_b:
+        conn.execute("ALTER TABLE bot_seasons ADD COLUMN initial_cash REAL")
+    if "final_cash" not in cols_b:
+        conn.execute("ALTER TABLE bot_seasons ADD COLUMN final_cash REAL")
+
+
 def _seed_users_from_json(conn: sqlite3.Connection) -> None:
     """仅当 users 表为空时从 server/users.json 一次性导入；正式用户数据以 DB 为准。"""
     users_json = SERVER_DIR / "users.json"
@@ -117,7 +131,9 @@ def init_db() -> None:
                 started_at TEXT NOT NULL,
                 stopped_at TEXT,
                 initial_balance REAL NOT NULL DEFAULT 0,
+                initial_cash REAL,
                 final_balance REAL,
+                final_cash REAL,
                 profit_amount REAL,
                 profit_percent REAL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -146,6 +162,7 @@ def init_db() -> None:
                 account_id TEXT NOT NULL,
                 year_month TEXT NOT NULL,
                 open_equity REAL NOT NULL,
+                open_cash REAL,
                 recorded_at TEXT NOT NULL,
                 PRIMARY KEY (account_id, year_month)
             );
@@ -202,6 +219,8 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_market_daily_bars_inst_day ON market_daily_bars(inst_id, day);
         """)
+        conn.commit()
+        _ensure_account_schema_columns(conn)
         conn.commit()
         # 若用户表为空且存在 users.json，则导入
         cur = conn.execute("SELECT COUNT(*) FROM users")
@@ -709,7 +728,7 @@ def strategy_event_insert(
     trigger_type: str,
     username: str | None = None,
 ) -> None:
-    """记录策略启停事件。event_type: start|stop|restart，trigger_type: manual|auto。"""
+    """记录策略/赛季事件。event_type: start|stop|restart|season_start|season_stop；trigger_type: manual|auto|script。"""
     conn = get_conn()
     try:
         conn.execute(
@@ -758,14 +777,16 @@ def bot_season_insert(
     bot_id: str,
     started_at: str,
     initial_balance: float = 0,
+    *,
+    initial_cash: float | None = None,
 ) -> int:
-    """机器人启动时插入一条赛季记录，返回 id。"""
+    """插入一条赛季记录（通常由 bot_season_roll_forward 统一写入），返回 id。"""
     conn = get_conn()
     try:
         cur = conn.execute(
-            """INSERT INTO bot_seasons (bot_id, started_at, initial_balance)
-               VALUES (?, ?, ?)""",
-            (bot_id, started_at, initial_balance),
+            """INSERT INTO bot_seasons (bot_id, started_at, initial_balance, initial_cash)
+               VALUES (?, ?, ?, ?)""",
+            (bot_id, started_at, initial_balance, initial_cash),
         )
         conn.commit()
         return cur.lastrowid or 0
@@ -777,27 +798,74 @@ def bot_season_update_on_stop(
     bot_id: str,
     stopped_at: str,
     final_balance: float,
+    final_cash: float | None = None,
 ) -> None:
-    """机器人停止时更新最近一条未结束的赛季。"""
+    """更新最近一条未结束赛季：写入停止时间与期末权益/现金（停止策略或赛季结束）。"""
     conn = get_conn()
     try:
         cur = conn.execute(
-            """SELECT id, initial_balance FROM bot_seasons
-               WHERE bot_id = ? AND stopped_at IS NULL ORDER BY started_at DESC LIMIT 1""",
+            """SELECT id, initial_balance, initial_cash FROM bot_seasons
+               WHERE bot_id = ? AND (stopped_at IS NULL OR TRIM(COALESCE(stopped_at,'')) = '')
+               ORDER BY started_at DESC LIMIT 1""",
             (bot_id,),
         )
         row = cur.fetchone()
         if not row:
             return
         sid, initial = row[0], float(row[1])
+        init_cash_v = row[2]
+        init_cash = float(init_cash_v) if init_cash_v is not None else None
         profit_amount = final_balance - initial
         profit_percent = (profit_amount / initial * 100.0) if initial else 0.0
         conn.execute(
-            """UPDATE bot_seasons SET stopped_at = ?, final_balance = ?, profit_amount = ?, profit_percent = ?
+            """UPDATE bot_seasons SET stopped_at = ?, final_balance = ?, final_cash = ?,
+                      profit_amount = ?, profit_percent = ?
                WHERE id = ?""",
-            (stopped_at, final_balance, profit_amount, profit_percent, sid),
+            (stopped_at, final_balance, final_cash, profit_amount, profit_percent, sid),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def bot_season_roll_forward(
+    bot_id: str,
+    ts: str,
+    equity_usdt: float,
+    cash_usdt: float,
+) -> int:
+    """
+    启动新盈利赛季：将所有未结束赛季的 stopped_at 设为 ts（与新赛季 started_at 同一时刻，前后衔接），
+    再以同一快照写入新赛季的 initial_balance / initial_cash。
+    """
+    bid = (bot_id or "").strip()
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """SELECT id, initial_balance, initial_cash FROM bot_seasons
+               WHERE bot_id = ? AND (stopped_at IS NULL OR TRIM(COALESCE(stopped_at,'')) = '')
+               ORDER BY started_at ASC""",
+            (bid,),
+        )
+        for row in cur.fetchall():
+            sid, initial = int(row[0]), float(row[1] or 0)
+            ic_raw = row[2]
+            init_cash = float(ic_raw) if ic_raw is not None else 0.0
+            profit_amount = float(equity_usdt) - initial
+            profit_percent = (profit_amount / initial * 100.0) if initial else 0.0
+            conn.execute(
+                """UPDATE bot_seasons SET stopped_at = ?, final_balance = ?, final_cash = ?,
+                          profit_amount = ?, profit_percent = ?
+                   WHERE id = ?""",
+                (ts, equity_usdt, cash_usdt, profit_amount, profit_percent, sid),
+            )
+        cur2 = conn.execute(
+            """INSERT INTO bot_seasons (bot_id, started_at, initial_balance, initial_cash)
+               VALUES (?, ?, ?, ?)""",
+            (bid, ts, float(equity_usdt), float(cash_usdt)),
+        )
+        conn.commit()
+        return int(cur2.lastrowid or 0)
     finally:
         conn.close()
 
@@ -807,8 +875,8 @@ def bot_season_list_by_bot(bot_id: str, limit: int = 50) -> list[dict]:
     conn = get_conn()
     try:
         cur = conn.execute(
-            """SELECT id, bot_id, started_at, stopped_at, initial_balance, final_balance,
-                      profit_amount, profit_percent, created_at
+            """SELECT id, bot_id, started_at, stopped_at, initial_balance, initial_cash,
+                      final_balance, final_cash, profit_amount, profit_percent, created_at
                FROM bot_seasons WHERE bot_id = ? ORDER BY started_at DESC LIMIT ?""",
             (bot_id, limit),
         )
@@ -819,10 +887,12 @@ def bot_season_list_by_bot(bot_id: str, limit: int = 50) -> list[dict]:
                 "started_at": r[2],
                 "stopped_at": r[3],
                 "initial_balance": r[4],
-                "final_balance": r[5],
-                "profit_amount": r[6],
-                "profit_percent": r[7],
-                "created_at": r[8],
+                "initial_cash": float(r[5]) if r[5] is not None else None,
+                "final_balance": r[6],
+                "final_cash": float(r[7]) if r[7] is not None else None,
+                "profit_amount": r[8],
+                "profit_percent": r[9],
+                "created_at": r[10],
             }
             for r in cur.fetchall()
         ]
@@ -1055,18 +1125,20 @@ def account_month_open_get(account_id: str, year_month: str) -> dict | None:
     conn = get_conn()
     try:
         cur = conn.execute(
-            """SELECT account_id, year_month, open_equity, recorded_at
+            """SELECT account_id, year_month, open_equity, open_cash, recorded_at
                FROM account_month_open WHERE account_id = ? AND year_month = ?""",
             (account_id.strip(), year_month.strip()),
         )
         r = cur.fetchone()
         if not r:
             return None
+        oc = r[3]
         return {
             "account_id": r[0],
             "year_month": r[1],
             "open_equity": float(r[2]),
-            "recorded_at": r[3],
+            "open_cash": float(oc) if oc is not None else None,
+            "recorded_at": r[4],
         }
     finally:
         conn.close()
@@ -1077,15 +1149,23 @@ def account_month_open_insert_if_absent(
     year_month: str,
     open_equity: float,
     recorded_at: str,
+    *,
+    open_cash: float | None = None,
 ) -> None:
-    """每月仅第一条记录生效（月初首次快照时写入）。"""
+    """每月仅第一条记录生效（月初首次快照时写入权益与现金）。"""
     conn = get_conn()
     try:
         conn.execute(
             """INSERT OR IGNORE INTO account_month_open
-               (account_id, year_month, open_equity, recorded_at)
-               VALUES (?, ?, ?, ?)""",
-            (account_id.strip(), year_month.strip(), open_equity, recorded_at),
+               (account_id, year_month, open_equity, open_cash, recorded_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (
+                account_id.strip(),
+                year_month.strip(),
+                open_equity,
+                open_cash,
+                recorded_at,
+            ),
         )
         conn.commit()
     finally:

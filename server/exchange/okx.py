@@ -1099,6 +1099,65 @@ def _parse_okx_lever_value(value: object) -> float | None:
         return None
 
 
+def _okx_swap_instrument_supported(inst_id: str) -> tuple[bool | None, str | None]:
+    """公开接口查询 SWAP 合约是否存在且可交易。返回 (是否支持, 需写入 warnings 的说明)。"""
+    want = (inst_id or "").strip()
+    if not want.upper().endswith("-SWAP"):
+        return False, None
+    data, err = okx_public_get(
+        "/api/v5/public/instruments",
+        {"instType": "SWAP", "instId": want},
+    )
+    if err:
+        return None, f"SWAP 合约可交易性检查失败: {err}"
+    rows = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(rows, list) or not rows:
+        return False, f"OKX 未返回 SWAP 合约 {want}（代码错误或已下线）"
+    r0 = rows[0]
+    if not isinstance(r0, dict):
+        return False, "合约数据格式异常"
+    state = (r0.get("state") or "").strip().lower()
+    if state in ("live", "preopen"):
+        return True, None
+    if state in ("suspend", "expired"):
+        return False, f"合约 {want} 状态为 {state}，当前不可交易"
+    if not state:
+        return True, None
+    return False, f"合约 {want} 状态为 {state}，请确认是否可交易"
+
+
+def _okx_infer_mgn_mode_cross_ok(
+    inst_id: str,
+    account_mgn_mode: str,
+    rows: list[dict] | None,
+) -> tuple[bool | None, str | None]:
+    """是否全仓 cross：优先账户配置 mgnMode；为空时根据杠杆/持仓行的 mgnMode 推断。"""
+    want = inst_id.strip()
+    cfg = (account_mgn_mode or "").strip().lower()
+    if cfg == "cross":
+        return True, None
+    if cfg == "isolated":
+        return False, "账户保证金模式为逐仓（isolated），策略要求全仓 cross"
+    if not rows:
+        return None, "无法判定全仓：无杠杆/持仓数据且账户配置未返回 mgnMode"
+    modes: list[str] = []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        if (item.get("instId") or "").strip() != want:
+            continue
+        mm = (item.get("mgnMode") or "").strip().lower()
+        if mm:
+            modes.append(mm)
+    if not modes:
+        return None, "无法判定全仓：接口返回数据未包含 mgnMode"
+    if all(m == "cross" for m in modes):
+        return True, None
+    if any(m == "isolated" for m in modes):
+        return False, "该合约杠杆/持仓为逐仓（isolated），策略要求全仓 cross"
+    return None, f"无法判定全仓：mgnMode={modes!r}"
+
+
 def _okx_get_leverage_info_rows(
     config_path: Path | None,
     inst_id: str,
@@ -1197,13 +1256,22 @@ def okx_test_account_full(
     *,
     target_leverage: float = 50.0,
 ) -> dict[str, Any]:
-    """测连并检查交易配置（对齐 QTrader account_tester：账户 config、SWAP、双向持仓、目标杠杆）。
+    """测连并检查交易配置（账户 config、SWAP 代码与可交易性、余额、全仓 cross、双向持仓、目标杠杆）。
 
     - ``success``：余额接口成功（密钥可用）。
-    - ``configuration_ok``：SWAP 标的、双向持仓、多空杠杆均满足目标（无法判定时相应项为 null 并附说明）。
+    - ``configuration_ok``：下列检查项均为 True——SWAP 格式与合约状态、权益>0、全仓 cross、
+      双向持仓、多空杠杆等于目标（任一项无法判定为 True 则整体为 False，并见 warnings）。
     """
     inst_id = okx_normalize_swap_inst_id(symbol_for_inst)
     swap_format_ok = inst_id.upper().endswith("-SWAP")
+
+    swap_inst_ok: bool | None
+    swap_inst_warn: str | None
+    if swap_format_ok:
+        swap_inst_ok, swap_inst_warn = _okx_swap_instrument_supported(inst_id)
+    else:
+        swap_inst_ok = False
+        swap_inst_warn = None
 
     out: dict[str, Any] = {
         "success": False,
@@ -1217,15 +1285,21 @@ def okx_test_account_full(
         "configuration_warnings": [],
         "checks": {
             "swap_symbol_format": swap_format_ok,
+            "swap_instrument_ok": swap_inst_ok,
+            "balance_ok": None,
+            "mgn_mode_cross_ok": None,
             "pos_mode_long_short": None,
             "leverage_long_ok": None,
             "leverage_short_ok": None,
         },
     }
+    if swap_inst_warn:
+        out["configuration_warnings"].append(swap_inst_warn)
 
     bal, bal_err = _okx_fetch_balance_fallback(config_path)
     if bal is None:
         out["message"] = bal_err or "OKX 余额请求失败"
+        out["checks"]["balance_ok"] = False
         if not swap_format_ok:
             out["configuration_warnings"].append(
                 "交易对应 symbol 未规范为永续 SWAP instId（应以 -SWAP 结尾）"
@@ -1235,6 +1309,16 @@ def okx_test_account_full(
     out["success"] = True
     out["balance_summary"] = bal
     out["message"] = "OKX 连接成功"
+    try:
+        total_eq = float(bal.get("total_eq") or 0)
+    except (TypeError, ValueError):
+        total_eq = 0.0
+    balance_positive = total_eq > 0
+    out["checks"]["balance_ok"] = balance_positive
+    if not balance_positive:
+        out["configuration_warnings"].append(
+            "账户总权益为 0 或无法解析，请确认资金已划入交易账户"
+        )
 
     cfg_raw, cfg_err = okx_request(
         "GET", "/api/v5/account/config", config_path=config_path
@@ -1350,9 +1434,22 @@ def okx_test_account_full(
             "已拉取杠杆相关数据但未解析到有效 lever 字段，请确认 API 权限与合约代码"
         )
 
+    acfg_final = out.get("account_config") or {}
+    cross_ok, cross_msg = _okx_infer_mgn_mode_cross_ok(
+        inst_id,
+        str(acfg_final.get("mgn_mode") or ""),
+        rows_for_check,
+    )
+    out["checks"]["mgn_mode_cross_ok"] = cross_ok
+    if cross_msg:
+        out["configuration_warnings"].append(cross_msg)
+
     chk = out["checks"]
     out["configuration_ok"] = bool(
         swap_format_ok
+        and chk.get("swap_instrument_ok") is True
+        and chk.get("balance_ok") is True
+        and chk.get("mgn_mode_cross_ok") is True
         and chk.get("pos_mode_long_short") is True
         and chk.get("leverage_long_ok") is True
         and chk.get("leverage_short_ok") is True

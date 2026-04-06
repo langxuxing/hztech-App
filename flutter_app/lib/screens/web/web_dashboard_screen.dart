@@ -432,7 +432,9 @@ class _OverviewGlassCard extends StatelessWidget {
           const SizedBox(height: 8),
           Expanded(
             child: snapshots.isNotEmpty
-                ? CashBalanceLineChart(snapshots: snapshots)
+                ? IgnorePointer(
+                    child: CashBalanceLineChart(snapshots: snapshots),
+                  )
                 : Center(
                     child: Text(
                       '暂无收益',

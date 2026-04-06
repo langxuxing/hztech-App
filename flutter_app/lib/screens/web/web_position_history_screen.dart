@@ -327,109 +327,117 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
                   )
                 : Padding(
                     padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                    child: Scrollbar(
-                      child: Align(
-                        alignment: Alignment.topLeft,
-                        child: ConstrainedBox(
-                          constraints: BoxConstraints(
-                            maxWidth: (MediaQuery.sizeOf(context).width - 32)
-                                .clamp(200.0, 1180.0),
-                          ),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final w = constraints.maxWidth;
+                        final minTableW = w.isFinite && w > 0 ? w : 200.0;
+                        return Scrollbar(
                           child: SingleChildScrollView(
                             scrollDirection: Axis.horizontal,
-                            child: SingleChildScrollView(
-                              child: Theme(
-                                data: Theme.of(context).copyWith(
-                                  dividerColor: _tableBorder,
-                                  dataTableTheme: DataTableThemeData(
-                                    headingTextStyle: _headerStyle,
-                                    dataTextStyle: _cellStyle,
-                                    dividerThickness: 1,
-                                    horizontalMargin: 8,
-                                    columnSpacing: 10,
-                                  ),
-                                ),
-                                child: DataTable(
-                                  headingRowColor: WidgetStateProperty.all(
-                                    const Color(0xFF252532),
-                                  ),
-                                  dataRowColor:
-                                      WidgetStateProperty.resolveWith(
-                                    (states) => states.contains(
-                                          WidgetState.hovered,
-                                        )
-                                        ? const Color(0xFF1A1A22)
-                                        : const Color(0xFF12121a),
-                                  ),
-                                  border: TableBorder.symmetric(
-                                    inside: BorderSide(
-                                      color: _tableBorder,
-                                      width: 0.5,
+                            child: ConstrainedBox(
+                              constraints: BoxConstraints(minWidth: minTableW),
+                              child: SingleChildScrollView(
+                                child: Theme(
+                                  data: Theme.of(context).copyWith(
+                                    dividerColor: _tableBorder,
+                                    dataTableTheme: DataTableThemeData(
+                                      headingTextStyle: _headerStyle,
+                                      dataTextStyle: _cellStyle,
+                                      dividerThickness: 1,
+                                      horizontalMargin: 8,
+                                      columnSpacing: 10,
                                     ),
                                   ),
-                                  columns: [
-                              DataColumn(label: _headerCell('标的')),
-                              DataColumn(label: _headerCell('合约')),
-                              DataColumn(label: _headerCell('方向')),
-                              DataColumn(label: _headerCell('保证金')),
-                              DataColumn(label: _headerCell('杠杆(x)')),
-                              DataColumn(label: _headerCell('开仓价×1e9')),
-                              DataColumn(label: _headerCell('平仓价×1e9')),
-                              DataColumn(label: _headerCell('持仓量')),
-                              DataColumn(label: _headerCell('平仓量')),
-                              DataColumn(label: _headerCell('实现盈亏')),
-                              DataColumn(label: _headerCell('盈亏%')),
-                              DataColumn(label: _headerCell('手续费')),
-                              DataColumn(label: _headerCell('资金费')),
-                              DataColumn(label: _headerCell('开仓(北京)')),
-                              DataColumn(label: _headerCell('更新(北京)')),
-                                    DataColumn(
-                                        label: _headerCell('平仓类型')),
-                                  ],
-                                  rows: _rows.map((r) {
-                                    final pnlRaw = r.realizedPnl ?? r.pnl;
-                                    final pnlC = _pnlColor(pnlRaw);
-                                    final pnlShow = _fmtOneDecimal(pnlRaw);
-                                    return DataRow(
-                                      cells: [
-                                        DataCell(_cell(r.instId)),
-                                        DataCell(_cell(r.instType)),
-                                        DataCell(_sideCell(r.posSide)),
-                                        DataCell(_cell(_mgnLabel(r.mgnMode))),
-                                        DataCell(_cell(_fmtLeverInt(r.lever))),
-                                        DataCell(
-                                            _cell(_fmtPxTimes1e9(r.openAvgPx))),
-                                        DataCell(
-                                            _cell(_fmtPxTimes1e9(r.closeAvgPx))),
-                                        DataCell(_cell(r.openMaxPos)),
-                                        DataCell(_cell(r.closeTotalPos)),
-                                        DataCell(_cell(pnlShow, color: pnlC)),
-                                        DataCell(
-                                            _cell(_fmtPnlPercent(r.pnlRatio))),
-                                        DataCell(
-                                          _cell(
-                                            _fmtOneDecimal(r.fee),
-                                            color: _pnlColor(r.fee),
+                                  child: DataTable(
+                                    headingRowColor: WidgetStateProperty.all(
+                                      const Color(0xFF252532),
+                                    ),
+                                    dataRowColor:
+                                        WidgetStateProperty.resolveWith(
+                                      (states) => states.contains(
+                                            WidgetState.hovered,
+                                          )
+                                          ? const Color(0xFF1A1A22)
+                                          : const Color(0xFF12121a),
+                                    ),
+                                    border: TableBorder.symmetric(
+                                      inside: BorderSide(
+                                        color: _tableBorder,
+                                        width: 0.5,
+                                      ),
+                                    ),
+                                    columns: [
+                                      DataColumn(label: _headerCell('标的')),
+                                      DataColumn(label: _headerCell('合约')),
+                                      DataColumn(label: _headerCell('方向')),
+                                      DataColumn(label: _headerCell('保证金')),
+                                      DataColumn(label: _headerCell('杠杆(x)')),
+                                      DataColumn(
+                                          label: _headerCell('开仓价×1e9')),
+                                      DataColumn(
+                                          label: _headerCell('平仓价×1e9')),
+                                      DataColumn(label: _headerCell('持仓量')),
+                                      DataColumn(label: _headerCell('平仓量')),
+                                      DataColumn(label: _headerCell('实现盈亏')),
+                                      DataColumn(label: _headerCell('盈亏%')),
+                                      DataColumn(label: _headerCell('手续费')),
+                                      DataColumn(label: _headerCell('资金费')),
+                                      DataColumn(
+                                          label: _headerCell('开仓(北京)')),
+                                      DataColumn(
+                                          label: _headerCell('更新(北京)')),
+                                      DataColumn(
+                                          label: _headerCell('平仓类型')),
+                                    ],
+                                    rows: _rows.map((r) {
+                                      final pnlRaw = r.realizedPnl ?? r.pnl;
+                                      final pnlC = _pnlColor(pnlRaw);
+                                      final pnlShow = _fmtOneDecimal(pnlRaw);
+                                      return DataRow(
+                                        cells: [
+                                          DataCell(_cell(r.instId)),
+                                          DataCell(_cell(r.instType)),
+                                          DataCell(_sideCell(r.posSide)),
+                                          DataCell(_cell(_mgnLabel(r.mgnMode))),
+                                          DataCell(_cell(_fmtLeverInt(r.lever))),
+                                          DataCell(
+                                              _cell(_fmtPxTimes1e9(r.openAvgPx))),
+                                          DataCell(
+                                              _cell(
+                                                  _fmtPxTimes1e9(r.closeAvgPx))),
+                                          DataCell(_cell(r.openMaxPos)),
+                                          DataCell(_cell(r.closeTotalPos)),
+                                          DataCell(
+                                              _cell(pnlShow, color: pnlC)),
+                                          DataCell(
+                                              _cell(_fmtPnlPercent(r.pnlRatio))),
+                                          DataCell(
+                                            _cell(
+                                              _fmtOneDecimal(r.fee),
+                                              color: _pnlColor(r.fee),
+                                            ),
                                           ),
-                                        ),
-                                        DataCell(
-                                          _cell(
-                                            _fmtOneDecimal(r.fundingFee),
-                                            color: _pnlColor(r.fundingFee),
+                                          DataCell(
+                                            _cell(
+                                              _fmtOneDecimal(r.fundingFee),
+                                              color: _pnlColor(r.fundingFee),
+                                            ),
                                           ),
-                                        ),
-                                        DataCell(_cell(_formatBjMs(r.cTimeMs))),
-                                        DataCell(_cell(_formatBjMs(r.uTimeMs))),
-                                        DataCell(_cell(r.closeType)),
-                                      ],
-                                    );
-                                  }).toList(),
+                                          DataCell(
+                                              _cell(_formatBjMs(r.cTimeMs))),
+                                          DataCell(
+                                              _cell(_formatBjMs(r.uTimeMs))),
+                                          DataCell(_cell(r.closeType)),
+                                        ],
+                                      );
+                                    }).toList(),
+                                  ),
                                 ),
                               ),
                             ),
                           ),
-                        ),
-                      ),
+                        );
+                      },
                     ),
                   ),
           ),

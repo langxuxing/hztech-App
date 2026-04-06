@@ -73,7 +73,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   static const double _kLayoutWideBp = 960;
 
   /// 权益/现金宽屏三列整行高度（无内层滚动）。
-  static const double _kTripleRowHeight = 520;
+  /// 较 520 略增，为 fl_chart 轴标签 + 标题留足余量，避免「每日现金」等底部溢出。
+  static const double _kTripleRowHeight = 544;
 
   /// 宽屏「当前持仓 | 赛季盈利」行高（较原三列行高减少 30%）。
   static const double _kPositionsSeasonRowHeight = _kTripleRowHeight * 0.7;
@@ -1510,7 +1511,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                       ),
                       const SizedBox(height: 12),
                       Text(
-                        '数量：${longs.fold<int>(0, (s, p) => s + p.pos.round())}',
+                        '${longs.fold<int>(0, (s, p) => s + p.pos.round())}：数量',
                         style: posQtyStyle(AppFinanceStyle.profitGreenEnd),
                       ),
                       const SizedBox(height: 3),
@@ -1518,7 +1519,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                         Padding(
                           padding: const EdgeInsets.only(top: 2),
                           child: Text(
-                            '盈亏：${formatUiSignedInteger(_totalDynUpl(longs, curPx))}',
+                            '${formatUiSignedInteger(_totalDynUpl(longs, curPx))}：盈亏',
                             style: plWhiteStyle.copyWith(
                               color: AppFinanceStyle.profitGreenEnd,
                               fontSize: 20,

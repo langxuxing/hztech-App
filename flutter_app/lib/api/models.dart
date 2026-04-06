@@ -191,7 +191,7 @@ class UnifiedTradingBot {
   /// 是否支持在 App 中启停（仅部分 bot 如 simpleserver 可管控）
   final bool canControl;
 
-  /// 是否为测试账号
+  /// OKX 密钥 JSON 中 api.sandbox == true（模拟盘）；与账户是否启用无关
   final bool isTest;
 
   UnifiedTradingBot({
@@ -216,7 +216,7 @@ class UnifiedTradingBot {
       status: json['status'] as String? ?? 'stopped',
       isRunning: json['is_running'] as bool?,
       canControl: json['can_control'] as bool? ?? false,
-      isTest: json['enabled'] as bool? ?? false,
+      isTest: json['sandbox'] as bool? ?? false,
     );
   }
 }

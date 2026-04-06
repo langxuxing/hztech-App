@@ -55,8 +55,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
 
   List<UnifiedTradingBot> get _bots => widget.sharedBots;
 
-  String? get _effectiveBotId =>
-      widget.accountIdFromParent ?? _botId;
+  String? get _effectiveBotId => widget.accountIdFromParent ?? _botId;
 
   String? get _marketLabel {
     final m = widget.marketSymbol;
@@ -115,9 +114,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
       return _SeasonAgg(count: 0, profitSum: 0, rows: []);
     }
     final en = s.isActive == true ? null : _parseIsoUtc(s.stoppedAt);
-    final rows = _history
-        .where((r) => _positionInSeason(r, st, en))
-        .toList();
+    final rows = _history.where((r) => _positionInSeason(r, st, en)).toList();
     double sum = 0;
     for (final r in rows) {
       final p = _rowPnl(r);
@@ -225,10 +222,8 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
   TextStyle _label(BuildContext context, {double fs = 12}) =>
       AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: fs);
 
-  TextStyle _value(BuildContext context, {double fs = 13}) => TextStyle(
-        color: AppFinanceStyle.valueColor,
-        fontSize: fs,
-      );
+  TextStyle _value(BuildContext context, {double fs = 13}) =>
+      TextStyle(color: AppFinanceStyle.valueColor, fontSize: fs);
 
   Widget _metricChip(
     BuildContext context,
@@ -271,14 +266,14 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
     final pnlColor = pnl == null
         ? null
         : (pnl > 0
-            ? AppFinanceStyle.profitGreenEnd
-            : (pnl < 0 ? const Color(0xFFFF6B6B) : null));
+              ? AppFinanceStyle.profitGreenEnd
+              : (pnl < 0 ? const Color(0xFFFF6B6B) : null));
     final side = (r.posSide ?? '').toLowerCase();
     final sideLabel = side == 'long'
         ? '多'
         : side == 'short'
-            ? '空'
-            : (r.posSide ?? '—');
+        ? '空'
+        : (r.posSide ?? '—');
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 5),
       child: Row(
@@ -357,7 +352,10 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
                   flex: 3,
                   child: Text('标的', style: _label(context, fs: 11)),
                 ),
-                SizedBox(width: 28, child: Text('向', style: _label(context, fs: 11))),
+                SizedBox(
+                  width: 28,
+                  child: Text('向', style: _label(context, fs: 11)),
+                ),
                 Expanded(
                   flex: 2,
                   child: Text(
@@ -399,7 +397,11 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
     return _seasons.where((s) => s.id != highlight.id).toList();
   }
 
-  Widget _buildHighlightCard(BuildContext context, BotSeason s, _SeasonAgg agg) {
+  Widget _buildHighlightCard(
+    BuildContext context,
+    BotSeason s,
+    _SeasonAgg agg,
+  ) {
     final active = s.isActive == true;
     final mkt = _marketLabel ?? '—';
     final profitColor = (s.profitAmount ?? 0) >= 0
@@ -415,9 +417,14 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
             children: [
               if (active)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
-                    color: AppFinanceStyle.profitGreenEnd.withValues(alpha: 0.2),
+                    color: AppFinanceStyle.profitGreenEnd.withValues(
+                      alpha: 0.2,
+                    ),
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: Text(
@@ -431,7 +438,10 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
                 )
               else
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.white12,
                     borderRadius: BorderRadius.circular(6),
@@ -445,73 +455,50 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
                   ),
                 ),
               const Spacer(),
-              Text(
-                '#${s.id}',
-                style: _label(context, fs: 12),
-              ),
+              Text('#${s.id}', style: _label(context, fs: 12)),
             ],
           ),
           const SizedBox(height: 10),
+          _wrapRow([_metricChip(context, '交易标的：', mkt)]),
+          const SizedBox(height: 10),
           _wrapRow([
-            _metricChip(
-              context,
-              '开始(北京)',
-              formatIsoAsBeijing(s.startedAt),
-            ),
-            _metricChip(
-              context,
-              '结束(北京)',
-              formatIsoAsBeijing(s.stoppedAt),
-            ),
-            _metricChip(context, '市场', mkt),
+            _metricChip(context, '开始时间(北京):', formatIsoAsBeijing(s.startedAt)),
+            const SizedBox(width: 10),
+            _metricChip(context, '结束时间(北京):', formatIsoAsBeijing(s.stoppedAt)),
+            const SizedBox(width: 10),
           ]),
           _wrapRow([
-            _metricChip(
-              context,
-              '初期',
-              formatUiInteger(s.initialBalance),
-            ),
+            _metricChip(context, '开始资金：', formatUiInteger(s.initialBalance)),
+            const SizedBox(width: 10),
             if (s.finalBalance != null)
-              _metricChip(
-                context,
-                '期末',
-                formatUiInteger(s.finalBalance!),
-              ),
+              _metricChip(context, '结束资金：', formatUiInteger(s.finalBalance!)),
+            const SizedBox(width: 10),
             if (s.profitAmount != null)
               _metricChip(
                 context,
-                '盈利',
+                '盈利：',
                 s.profitAmount!.toStringAsFixed(1),
                 valueColor: profitColor,
               ),
+            const SizedBox(width: 10),
             if (s.profitPercent != null)
               _metricChip(
                 context,
-                '收益率',
+                '收益率：',
                 formatUiPercentLabel(s.profitPercent!),
                 valueColor: profitColor,
               ),
           ]),
           _wrapRow([
-            _metricChip(context, 'ATR', '—'),
+            _metricChip(context, 'ATR(14天):', '—'),
+            const SizedBox(width: 10),
+            _metricChip(context, '多空获利止盈距离:', '—'),
+            const SizedBox(width: 10),
+            _metricChip(context, '第一次浮亏加仓距离:', '—'),
+            const SizedBox(width: 10),
+            _metricChip(context, '第二次浮亏加仓距离:', '—'),
           ]),
-          _wrapRow([
-            _metricChip(context, '基于ATR·获利', '—'),
-            _metricChip(context, '一加仓', '—'),
-            _metricChip(context, '二加仓', '—'),
-          ]),
-          _wrapRow([
-            _metricChip(
-              context,
-              '历史仓位数',
-              '${agg.count}（赛季内平仓，盈亏合计 ${agg.profitSum.toStringAsFixed(1)}）',
-            ),
-          ]),
-          _positionsExpansion(
-            context,
-            '本赛季历史仓位（${agg.count}）',
-            agg,
-          ),
+          _positionsExpansion(context, '本赛季历史仓位（${agg.count}）', agg),
         ],
       ),
     );
@@ -533,9 +520,14 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
             children: [
               if (active)
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
-                    color: AppFinanceStyle.profitGreenEnd.withValues(alpha: 0.2),
+                    color: AppFinanceStyle.profitGreenEnd.withValues(
+                      alpha: 0.2,
+                    ),
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: Text(
@@ -549,7 +541,10 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
                 )
               else
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.white12,
                     borderRadius: BorderRadius.circular(6),
@@ -568,16 +563,8 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
           ),
           const SizedBox(height: 8),
           _wrapRow([
-            _metricChip(
-              context,
-              '开始',
-              formatIsoAsBeijing(s.startedAt),
-            ),
-            _metricChip(
-              context,
-              '结束',
-              formatIsoAsBeijing(s.stoppedAt),
-            ),
+            _metricChip(context, '开始', formatIsoAsBeijing(s.startedAt)),
+            _metricChip(context, '结束', formatIsoAsBeijing(s.stoppedAt)),
             _metricChip(context, '市场', _marketLabel ?? '—'),
           ]),
           _wrapRow([
@@ -608,11 +595,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
               valueColor: profitColor,
             ),
           ]),
-          _positionsExpansion(
-            context,
-            '历史仓位（${agg.count}）',
-            agg,
-          ),
+          _positionsExpansion(context, '历史仓位（${agg.count}）', agg),
         ],
       ),
     );
@@ -628,8 +611,8 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
               child: DropdownButtonFormField<String>(
-                value: _botId != null &&
-                        _bots.any((b) => b.tradingbotId == _botId)
+                value:
+                    _botId != null && _bots.any((b) => b.tradingbotId == _botId)
                     ? _botId
                     : null,
                 decoration: InputDecoration(
@@ -667,10 +650,9 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
               child: Text(
                 '进行中赛季数：$_activeCount（请在「策略启停」使用赛季开始/停止）',
-                style: AppFinanceStyle.labelTextStyle(context).copyWith(
-                      fontSize: 13,
-                      color: AppFinanceStyle.profitGreenEnd,
-                    ),
+                style: AppFinanceStyle.labelTextStyle(
+                  context,
+                ).copyWith(fontSize: 13, color: AppFinanceStyle.profitGreenEnd),
               ),
             ),
           if (_error != null)
@@ -690,73 +672,64 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
                     ),
                   )
                 : _loading
-                    ? const Center(
-                        child: CircularProgressIndicator(
-                          color: AppFinanceStyle.profitGreenEnd,
-                        ),
-                      )
-                    : Builder(
-                        builder: (ctx) {
-                          final hi = _highlightSeason();
-                          final others = _otherSeasons(hi);
-                          return ListView(
-                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                            children: [
-                              if (_seasons.isEmpty)
-                                Padding(
-                                  padding:
-                                      const EdgeInsets.symmetric(vertical: 24),
-                                  child: Text(
-                                    '暂无赛季记录',
-                                    style:
-                                        AppFinanceStyle.labelTextStyle(context),
-                                  ),
-                                )
-                              else ...[
-                                if (hi != null) ...[
-                                  Text(
-                                    hi.isActive == true ? '当前赛季' : '最近赛季',
-                                    style: AppFinanceStyle.labelTextStyle(
-                                      context,
-                                    ).copyWith(
+                ? const Center(
+                    child: CircularProgressIndicator(
+                      color: AppFinanceStyle.profitGreenEnd,
+                    ),
+                  )
+                : Builder(
+                    builder: (ctx) {
+                      final hi = _highlightSeason();
+                      final others = _otherSeasons(hi);
+                      return ListView(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                        children: [
+                          if (_seasons.isEmpty)
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 24),
+                              child: Text(
+                                '暂无赛季记录',
+                                style: AppFinanceStyle.labelTextStyle(context),
+                              ),
+                            )
+                          else ...[
+                            if (hi != null) ...[
+                              Text(
+                                hi.isActive == true ? '当前赛季' : '最近赛季',
+                                style: AppFinanceStyle.labelTextStyle(context)
+                                    .copyWith(
                                       fontSize: 15,
                                       fontWeight: FontWeight.w600,
                                       color: AppFinanceStyle.valueColor,
                                     ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  _buildHighlightCard(
-                                    ctx,
-                                    hi,
-                                    _aggForSeason(hi),
-                                  ),
-                                  const SizedBox(height: 16),
-                                ],
-                                if (others.isNotEmpty) ...[
-                                  Text(
-                                    '历史赛季',
-                                    style: AppFinanceStyle.labelTextStyle(
-                                      context,
-                                    ).copyWith(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w600,
-                                      color: AppFinanceStyle.valueColor,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  ...others.map((s) {
-                                    return Padding(
-                                      padding:
-                                          const EdgeInsets.only(bottom: 10),
-                                      child: _buildPastCard(ctx, s),
-                                    );
-                                  }),
-                                ],
-                              ],
+                              ),
+                              const SizedBox(height: 8),
+                              _buildHighlightCard(ctx, hi, _aggForSeason(hi)),
+                              const SizedBox(height: 16),
                             ],
-                          );
-                        },
-                      ),
+                            if (others.isNotEmpty) ...[
+                              Text(
+                                '历史赛季',
+                                style: AppFinanceStyle.labelTextStyle(context)
+                                    .copyWith(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600,
+                                      color: AppFinanceStyle.valueColor,
+                                    ),
+                              ),
+                              const SizedBox(height: 8),
+                              ...others.map((s) {
+                                return Padding(
+                                  padding: const EdgeInsets.only(bottom: 10),
+                                  child: _buildPastCard(ctx, s),
+                                );
+                              }),
+                            ],
+                          ],
+                        ],
+                      );
+                    },
+                  ),
           ),
         ],
       ),
@@ -770,10 +743,9 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
       appBar: AppBar(
         title: Text(
           '赛季',
-          style: AppFinanceStyle.labelTextStyle(context).copyWith(
-                color: AppFinanceStyle.valueColor,
-                fontSize: 18,
-              ),
+          style: AppFinanceStyle.labelTextStyle(
+            context,
+          ).copyWith(color: AppFinanceStyle.valueColor, fontSize: 18),
         ),
         backgroundColor: AppFinanceStyle.backgroundDark,
         foregroundColor: AppFinanceStyle.valueColor,

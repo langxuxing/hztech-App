@@ -60,6 +60,18 @@ def resolve_key_file_path(account_key_file: str) -> Path:
     return _test_account_key().resolve_key_file_path(account_key_file)
 
 
+def okx_sandbox_from_key_file(account_key_file: str) -> bool:
+    """OKX 密钥 JSON 中 api.sandbox 为 true 时返回 True；文件缺失或无法解析时为 False。"""
+    key_name = (account_key_file or "").strip()
+    if not key_name:
+        return False
+    path = resolve_key_file_path(key_name)
+    cfg = _test_account_key().load_config(path)
+    if not cfg:
+        return False
+    return bool(cfg.get("sandbox"))
+
+
 def _parse_enabled(value: object) -> bool:
     return _test_account_key()._parse_enabled(value)
 
@@ -220,7 +232,7 @@ def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None 
 
         if db_module.account_month_open_get(aid, ym) is None:
             db_module.account_month_open_insert_if_absent(
-                aid, ym, total_eq, ts
+                aid, ym, total_eq, ts, open_cash=cash
             )
 
         log.debug(
@@ -393,7 +405,9 @@ def refresh_balance_snapshot_one(
         profit_percent=profit_percent,
     )
     if db_module.account_month_open_get(aid, ym) is None:
-        db_module.account_month_open_insert_if_absent(aid, ym, total_eq, ts)
+        db_module.account_month_open_insert_if_absent(
+            aid, ym, total_eq, ts, open_cash=cash
+        )
 
     log.info(
         "balance_snapshot_one_ok: %s equity=%s cash=%s",
@@ -688,7 +702,7 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
     import exchange.okx as okx_mod
 
     rows = iter_okx_accounts(enabled_only=True)
-    prep: list[tuple[str, str, Any, Any, float, float | None]] = []
+    prep: list[tuple[str, str, Any, Any, float, dict | None]] = []
     for row in rows:
         aid = str(row.get("account_id") or "").strip()
         ex_name = (row.get("exchange_account") or "OKX").strip()
@@ -698,8 +712,7 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
         initial = float(meta_row["initial_capital"]) if meta_row else _initial_capital(row)
         ym = datetime.now(timezone.utc).strftime("%Y-%m")
         month_row = db_module.account_month_open_get(aid, ym)
-        month_open = float(month_row["open_equity"]) if month_row else None
-        prep.append((aid, ex_name, path, snap, initial, month_open))
+        prep.append((aid, ex_name, path, snap, initial, month_row))
 
     live_by_aid: dict[str, dict | None] = {}
     fetch_jobs = [(p[0], p[2]) for p in prep if p[2] is not None]
@@ -715,7 +728,13 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
                 live_by_aid[aid] = live
 
     out: list[dict] = []
-    for aid, ex_name, path, snap, initial, month_open in prep:
+    for aid, ex_name, path, snap, initial, month_row in prep:
+        month_open = float(month_row["open_equity"]) if month_row else None
+        month_open_cash = (
+            float(month_row["open_cash"])
+            if month_row and month_row.get("open_cash") is not None
+            else None
+        )
         live = live_by_aid.get(aid) if path else None
         if live:
             total_eq = float(live.get("equity_usdt") or live.get("total_eq") or 0.0)
@@ -737,6 +756,7 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
                     "balance_usdt": avail_eq,
                     "snapshot_time": snap["snapshot_at"] if snap else None,
                     "month_open_equity": month_open,
+                    "month_open_cash": month_open_cash,
                 }
             )
         elif snap:
@@ -756,6 +776,7 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
                     "balance_usdt": cash,
                     "snapshot_time": snap["snapshot_at"],
                     "month_open_equity": month_open,
+                    "month_open_cash": month_open_cash,
                 }
             )
         else:
@@ -773,6 +794,7 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
                     "balance_usdt": 0,
                     "snapshot_time": None,
                     "month_open_equity": month_open,
+                    "month_open_cash": month_open_cash,
                 }
             )
     return out
@@ -804,6 +826,9 @@ def collect_tradingbots_style_list(strategy_status_fn: Any) -> list[dict]:
                 "is_running": is_running,
                 "can_control": can_ctrl,
                 "enabled": basic.get("enabled", True),
+                "sandbox": okx_sandbox_from_key_file(
+                    str(basic.get("account_key_file") or "")
+                ),
             }
         )
     return out
