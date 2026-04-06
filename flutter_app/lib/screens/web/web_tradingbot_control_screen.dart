@@ -61,15 +61,23 @@ class _WebTradingBotControlScreenState
     return '$mm-$dd $hh:$min';
   }
 
-  /// 展示为「X 天 Y 小时」；不足 1 小时时用分钟。
+  /// 未满 24 小时：「X 分钟」或「X 小时」/「X 小时 Y 分钟」（不显示「0 天」）；
+  /// 满 24 小时及以上：仅「X 天 Y 小时」（按整小时计，零头分钟不计入显示）。
   static String _fmtDaysHours(Duration d) {
     if (d.isNegative) return '—';
-    if (d.inMinutes < 1) return '0 天 0 小时';
-    if (d.inHours < 1) return '0 天 ${d.inMinutes} 分钟';
-    final totalHours = d.inHours;
-    final days = totalHours ~/ 24;
-    final hours = totalHours % 24;
-    return '$days 天 $hours 小时';
+    final tm = d.inMinutes;
+    if (tm < 1) return '0 小时';
+    final totalH = tm ~/ 60;
+    final m = tm % 60;
+    if (totalH < 24) {
+      if (totalH < 1) return '$tm 分钟';
+      if (m == 0) return '$totalH 小时';
+      return '$totalH 小时 $m 分钟';
+    }
+    final days = totalH ~/ 24;
+    final h = totalH % 24;
+    if (h == 0) return '$days 天';
+    return '$days 天 $h 小时';
   }
 
   /// 当前/最近一条赛季的启动时间与运行时长（天+小时）。
@@ -671,8 +679,9 @@ class _WebTradingBotControlScreenState
                                         crossAxisCount: cross,
                                         mainAxisSpacing: 28,
                                         crossAxisSpacing: 28,
-                                        childAspectRatio:
-                                            cross >= 3 ? 0.68 : 0.58,
+                                        childAspectRatio: cross >= 3
+                                            ? 0.68
+                                            : 0.58,
                                       ),
                                   delegate: SliverChildBuilderDelegate((
                                     context,
@@ -692,8 +701,10 @@ class _WebTradingBotControlScreenState
                                       seasons,
                                       running,
                                     );
-                                    final robot =
-                                        _robotRuntime(events, running);
+                                    final robot = _robotRuntime(
+                                      events,
+                                      running,
+                                    );
                                     final openSeason = _hasOpenSeason(seasons);
                                     return _AccountGlassCard(
                                       account: a,
@@ -856,9 +867,9 @@ class _GlobalBotStatsBar extends StatelessWidget {
                 _BotControlSummaryCell(
                   label: '运行中',
                   value: '$running',
-                  valueStyle: v(24).copyWith(
-                    color: AppFinanceStyle.profitGreenEnd,
-                  ),
+                  valueStyle: v(
+                    24,
+                  ).copyWith(color: AppFinanceStyle.profitGreenEnd),
                   trailingLabel: !narrow,
                 ),
                 _BotControlSummaryCell(
@@ -904,9 +915,7 @@ class _GlobalBotStatsBar extends StatelessWidget {
             if (narrow) {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  bulkActions,
-                ],
+                children: [bulkActions],
               );
             }
             return Align(alignment: Alignment.centerRight, child: bulkActions);
@@ -917,7 +926,7 @@ class _GlobalBotStatsBar extends StatelessWidget {
   }
 }
 
-/// 与 dashboard `_SummaryCell` 相同的标签+数值排版。
+/// 与 dashboard `_SummaryCell` 相同的标签+数值排版（基线对齐）。
 class _BotControlSummaryCell extends StatelessWidget {
   const _BotControlSummaryCell({
     required this.label,
@@ -1095,11 +1104,11 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
       color: _labelMuted.withValues(alpha: 0.62),
       fontWeight: FontWeight.w600,
       letterSpacing: 0.4,
-      fontSize: 11.5,
+      fontSize: 16,
     );
 
     final kickoffLabelStyle = labelStyle?.copyWith(
-      fontSize: 11,
+      fontSize: 16,
       fontWeight: FontWeight.w500,
       color: _labelMuted.withValues(alpha: 0.48),
       letterSpacing: 0.2,
@@ -1281,9 +1290,9 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                   ),
                 ],
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 24),
 
-              Text('赛季控制', style: labelStyle),
+              Text('赛季状态', style: labelStyle),
               const SizedBox(height: 6),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.baseline,
@@ -1292,7 +1301,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                   Expanded(
                     child: Row(
                       children: [
-                        Text('启动 ', style: kickoffLabelStyle),
+                        Text('启动时间 ', style: kickoffLabelStyle),
                         Expanded(
                           child: Text(
                             seasonStartShown,
@@ -1319,7 +1328,9 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                   padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
+
                     children: [
+                      SizedBox(height: 12),
                       Text(
                         '赛季控制',
                         style: Theme.of(context).textTheme.labelMedium
@@ -1329,7 +1340,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                               letterSpacing: 0.35,
                             ),
                       ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 24),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
@@ -1367,7 +1378,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                 ),
               ),
 
-              const SizedBox(height: 12),
+              const SizedBox(height: 24),
               Divider(
                 height: 1,
                 thickness: 1,
@@ -1384,7 +1395,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                   Expanded(
                     child: Row(
                       children: [
-                        Text('启动 ', style: kickoffLabelStyle),
+                        Text('启动时间 ', style: kickoffLabelStyle),
                         Expanded(
                           child: Text(
                             robotStartShown,
@@ -1423,6 +1434,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                               letterSpacing: 0.35,
                             ),
                       ),
+                      const SizedBox(height: 24),
                       if (robotBusy) ...[
                         const SizedBox(height: 8),
                         ClipRRect(
@@ -1512,8 +1524,10 @@ class _CyberCircleIconButton extends StatefulWidget {
   final bool isLoading;
   final bool enabled;
   final IconData icon;
+
   /// 描边、底色与光晕。
   final Color accent;
+
   /// 图标与进度环；默认同 [accent]。
   final Color? iconColor;
   final VoidCallback? onTap;
@@ -1575,9 +1589,7 @@ class _CyberCircleIconButtonState extends State<_CyberCircleIconButton> {
               : Icon(
                   widget.icon,
                   size: widget.iconSize,
-                  color: canPress
-                      ? iconTint
-                      : iconTint.withValues(alpha: 0.4),
+                  color: canPress ? iconTint : iconTint.withValues(alpha: 0.4),
                 ),
         ),
       ),

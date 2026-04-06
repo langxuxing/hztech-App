@@ -298,7 +298,7 @@ class _SummaryCell extends StatelessWidget {
     required this.value,
     required this.valueStyle,
 
-    /// 宽屏：数值在上、标签在下，列内右对齐（标签在数值右下）。窄屏：整体左对齐。
+    /// 宽屏：标签与数值同一基线横排；列在 `Expanded` 内水平居中。窄屏：整体左对齐。
     required this.trailingLabel,
   });
 
