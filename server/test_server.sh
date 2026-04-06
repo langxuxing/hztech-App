@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 测试 AWS 服务端接口（可指定 BASE_URL，默认从 deploy-aws.json 读取）
-# 用法：./server/test_server.sh  或  BASE_URL=http://127.0.0.1:8080 ./server/test_server.sh
+# 用法：./server/test_server.sh  或  BASE_URL=http://127.0.0.1:9001 ./server/test_server.sh
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -17,25 +17,26 @@ else
 import json
 c = json.load(open("server/deploy-aws.json"))
 scheme = c.get("scheme", "http")
-port = c.get("web_port", 9000)
+web_port = int(c.get("web_port", 9000))
+api_port = int(c.get("app_port", web_port))
 w, a = c.get("web"), c.get("api")
 if isinstance(w, dict) and w.get("host") and isinstance(a, dict) and a.get("host"):
-    print(f'HOST_URL_WEB="{scheme}://{w["host"]}:{port}"')
-    print(f'HOST_URL_API="{scheme}://{a["host"]}:{port}"')
+    print(f'HOST_URL_WEB="{scheme}://{w["host"]}:{web_port}"')
+    print(f'HOST_URL_API="{scheme}://{a["host"]}:{api_port}"')
 elif isinstance(w, dict) and w.get("host"):
-    u = f'{scheme}://{w["host"]}:{port}'
+    u = f'{scheme}://{w["host"]}:{web_port}'
     print(f'HOST_URL_WEB="{u}"')
     print(f'HOST_URL_API="{u}"')
 else:
     h = c.get("host", "127.0.0.1")
-    u = f"{scheme}://{h}:{port}"
+    u = f"{scheme}://{h}:{api_port}"
     print(f'HOST_URL_WEB="{u}"')
     print(f'HOST_URL_API="{u}"')
 PY
 )"
     HOST_URL="$HOST_URL_API"
   else
-    HOST_URL="http://127.0.0.1:8080"
+    HOST_URL="http://127.0.0.1:9001"
     HOST_URL_WEB="$HOST_URL"
     HOST_URL_API="$HOST_URL"
   fi

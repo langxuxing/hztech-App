@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
+import '../app_update_prompt.dart';
 import '../auth/app_user_role.dart';
 import '../secure/prefs.dart';
 import 'account_profit_screen.dart';
@@ -105,6 +106,12 @@ class _MainScreenState extends State<MainScreen> {
     super.initState();
     _loadRole();
     _loadSharedBots();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
+      final url = await _prefs.backendBaseUrl;
+      if (!mounted) return;
+      await AppUpdatePrompt.checkIfNeeded(context, url);
+    });
     Future<void>.delayed(const Duration(milliseconds: 1500), () {
       if (!mounted || _sharedBots.isNotEmpty) return;
       _loadSharedBots();

@@ -54,6 +54,16 @@ def _ensure_account_schema_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE bot_seasons ADD COLUMN final_cash REAL")
 
 
+def _ensure_users_profile_columns(conn: sqlite3.Connection) -> None:
+    """users 表补列：全名、手机号（与登录 username 独立）。"""
+    cur = conn.execute("PRAGMA table_info(users)")
+    cols = {str(r[1]) for r in cur.fetchall()}
+    if "full_name" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN full_name TEXT")
+    if "phone" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN phone TEXT")
+
+
 def _seed_users_from_json(conn: sqlite3.Connection) -> None:
     """仅当 users 表为空时从 server/users.json 一次性导入；正式用户数据以 DB 为准。"""
     users_json = SERVER_DIR / "users.json"
@@ -221,6 +231,7 @@ def init_db() -> None:
         """)
         conn.commit()
         _ensure_account_schema_columns(conn)
+        _ensure_users_profile_columns(conn)
         conn.commit()
         # 若用户表为空且存在 users.json，则导入
         cur = conn.execute("SELECT COUNT(*) FROM users")
@@ -252,6 +263,8 @@ def user_create(
     *,
     role: str = "trader",
     linked_account_ids: list[str] | None = None,
+    full_name: str | None = None,
+    phone: str | None = None,
 ) -> bool:
     """创建用户，成功返回 True，用户名已存在返回 False。role 须为合法枚举。"""
     rr = str(role).strip().lower()
@@ -259,18 +272,26 @@ def user_create(
         return False
     links = linked_account_ids if linked_account_ids is not None else []
     links_json = json.dumps(links, ensure_ascii=False)
+    fn = (full_name or "").strip()
+    ph = (phone or "").strip()
     conn = get_conn()
     try:
         try:
             conn.execute(
-                "INSERT INTO users (username, password_hash, role, linked_account_ids) VALUES (?, ?, ?, ?)",
-                (username.strip(), password_hash, rr, links_json),
+                "INSERT INTO users (username, password_hash, role, linked_account_ids, full_name, phone) VALUES (?, ?, ?, ?, ?, ?)",
+                (username.strip(), password_hash, rr, links_json, fn, ph),
             )
         except sqlite3.OperationalError:
-            conn.execute(
-                "INSERT INTO users (username, password_hash) VALUES (?, ?)",
-                (username.strip(), password_hash),
-            )
+            try:
+                conn.execute(
+                    "INSERT INTO users (username, password_hash, role, linked_account_ids) VALUES (?, ?, ?, ?)",
+                    (username.strip(), password_hash, rr, links_json),
+                )
+            except sqlite3.OperationalError:
+                conn.execute(
+                    "INSERT INTO users (username, password_hash) VALUES (?, ?)",
+                    (username.strip(), password_hash),
+                )
         conn.commit()
         return True
     except sqlite3.IntegrityError:
@@ -379,29 +400,39 @@ def user_get_linked_account_ids(username: str) -> list[str]:
 
 
 def user_list() -> list[dict]:
-    """返回用户列表（不含 password_hash），含 role、linked_account_ids。"""
+    """返回用户列表（不含 password_hash），含 role、linked_account_ids、full_name、phone。"""
     conn = get_conn()
     try:
         try:
             cur = conn.execute(
-                "SELECT id, username, created_at, role, linked_account_ids FROM users ORDER BY id"
+                "SELECT id, username, created_at, role, linked_account_ids, full_name, phone FROM users ORDER BY id"
             )
             rows = cur.fetchall()
+            wide = True
         except sqlite3.OperationalError:
-            cur = conn.execute(
-                "SELECT id, username, created_at FROM users ORDER BY id"
-            )
-            rows = cur.fetchall()
-            return [
-                {
-                    "id": r[0],
-                    "username": r[1],
-                    "created_at": r[2],
-                    "role": "trader",
-                    "linked_account_ids": [],
-                }
-                for r in rows
-            ]
+            wide = False
+            try:
+                cur = conn.execute(
+                    "SELECT id, username, created_at, role, linked_account_ids FROM users ORDER BY id"
+                )
+                rows = cur.fetchall()
+            except sqlite3.OperationalError:
+                cur = conn.execute(
+                    "SELECT id, username, created_at FROM users ORDER BY id"
+                )
+                rows = cur.fetchall()
+                return [
+                    {
+                        "id": r[0],
+                        "username": r[1],
+                        "created_at": r[2],
+                        "role": "trader",
+                        "linked_account_ids": [],
+                        "full_name": "",
+                        "phone": "",
+                    }
+                    for r in rows
+                ]
         out: list[dict] = []
         for r in rows:
             role = str(r[3] or "trader").strip().lower()
@@ -415,6 +446,8 @@ def user_list() -> list[dict]:
                         links = [str(x).strip() for x in parsed if str(x).strip()]
                 except (TypeError, json.JSONDecodeError):
                     links = []
+            fn = str(r[5] or "").strip() if wide else ""
+            ph = str(r[6] or "").strip() if wide else ""
             out.append(
                 {
                     "id": r[0],
@@ -422,6 +455,8 @@ def user_list() -> list[dict]:
                     "created_at": r[2],
                     "role": role,
                     "linked_account_ids": links,
+                    "full_name": fn,
+                    "phone": ph,
                 }
             )
         return out
@@ -432,6 +467,36 @@ def user_list() -> list[dict]:
 def user_get_by_id(user_id: int) -> dict | None:
     conn = get_conn()
     try:
+        try:
+            cur = conn.execute(
+                "SELECT id, username, created_at, role, linked_account_ids, full_name, phone FROM users WHERE id = ?",
+                (user_id,),
+            )
+            r = cur.fetchone()
+            if not r:
+                return None
+            role = str(r[3] or "trader").strip().lower()
+            if role not in _VALID_USER_ROLES:
+                role = "trader"
+            links: list[str] = []
+            if r[4]:
+                try:
+                    parsed = json.loads(str(r[4]))
+                    if isinstance(parsed, list):
+                        links = [str(x).strip() for x in parsed if str(x).strip()]
+                except (TypeError, json.JSONDecodeError):
+                    links = []
+            return {
+                "id": r[0],
+                "username": r[1],
+                "created_at": r[2],
+                "role": role,
+                "linked_account_ids": links,
+                "full_name": str(r[5] or "").strip(),
+                "phone": str(r[6] or "").strip(),
+            }
+        except sqlite3.OperationalError:
+            pass
         try:
             cur = conn.execute(
                 "SELECT id, username, created_at, role, linked_account_ids FROM users WHERE id = ?",
@@ -452,6 +517,8 @@ def user_get_by_id(user_id: int) -> dict | None:
                 "created_at": r[2],
                 "role": "trader",
                 "linked_account_ids": [],
+                "full_name": "",
+                "phone": "",
             }
         if not r:
             return None
@@ -472,6 +539,8 @@ def user_get_by_id(user_id: int) -> dict | None:
             "created_at": r[2],
             "role": role,
             "linked_account_ids": links,
+            "full_name": "",
+            "phone": "",
         }
     finally:
         conn.close()
@@ -482,8 +551,10 @@ def user_update_profile(
     *,
     role: str | None = None,
     linked_account_ids: list[str] | None = None,
+    full_name: str | None = None,
+    phone: str | None = None,
 ) -> bool:
-    """更新角色与/或客户可见账户；role 须为合法枚举。无有效变更时返回 False。"""
+    """更新角色、客户可见账户、全名、手机；role 须为合法枚举。无有效变更时返回 False。"""
     conn = get_conn()
     try:
         fields: list[str] = []
@@ -497,6 +568,12 @@ def user_update_profile(
         if linked_account_ids is not None:
             fields.append("linked_account_ids = ?")
             args.append(json.dumps(linked_account_ids, ensure_ascii=False))
+        if full_name is not None:
+            fields.append("full_name = ?")
+            args.append(str(full_name).strip())
+        if phone is not None:
+            fields.append("phone = ?")
+            args.append(str(phone).strip())
         if not fields:
             return False
         args.append(user_id)
@@ -805,7 +882,7 @@ def bot_season_update_on_stop(
     try:
         cur = conn.execute(
             """SELECT id, initial_balance, initial_cash FROM bot_seasons
-               WHERE bot_id = ? AND (stopped_at IS NULL OR TRIM(COALESCE(stopped_at,'')) = '')
+               WHERE bot_id = ? AND stopped_at IS NULL
                ORDER BY started_at DESC LIMIT 1""",
             (bot_id,),
         )
@@ -843,7 +920,7 @@ def bot_season_roll_forward(
     try:
         cur = conn.execute(
             """SELECT id, initial_balance, initial_cash FROM bot_seasons
-               WHERE bot_id = ? AND (stopped_at IS NULL OR TRIM(COALESCE(stopped_at,'')) = '')
+               WHERE bot_id = ? AND stopped_at IS NULL
                ORDER BY started_at ASC""",
             (bid,),
         )

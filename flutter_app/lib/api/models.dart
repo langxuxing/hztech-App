@@ -66,6 +66,9 @@ class ManagedUserRow {
   final String createdAt;
   final String role;
   final List<String> linkedAccountIds;
+  /// 展示用全名（与登录 username 独立）
+  final String fullName;
+  final String phone;
 
   ManagedUserRow({
     required this.id,
@@ -73,6 +76,8 @@ class ManagedUserRow {
     required this.createdAt,
     required this.role,
     required this.linkedAccountIds,
+    this.fullName = '',
+    this.phone = '',
   });
 
   factory ManagedUserRow.fromJson(Map<String, dynamic> json) {
@@ -87,6 +92,8 @@ class ManagedUserRow {
       createdAt: json['created_at'] as String? ?? '',
       role: (json['role'] as String? ?? 'trader').toLowerCase(),
       linkedAccountIds: links,
+      fullName: (json['full_name'] as String?)?.trim() ?? '',
+      phone: (json['phone'] as String?)?.trim() ?? '',
     );
   }
 }
@@ -125,6 +132,10 @@ class AccountProfit {
   final double equityUsdt;
   final double balanceUsdt;
   final String? snapshotTime;
+  /// UTC 自然月月初权益（account_month_open）
+  final double? monthOpenEquity;
+  /// UTC 自然月月初现金（account_month_open.open_cash）
+  final double? monthOpenCash;
 
   AccountProfit({
     required this.exchangeAccount,
@@ -137,6 +148,8 @@ class AccountProfit {
     double? balanceUsdt,
     this.snapshotTime,
     String? botId,
+    this.monthOpenEquity,
+    this.monthOpenCash,
   }) : balanceUsdt = balanceUsdt ?? currentBalance,
        botId = botId ?? '';
 
@@ -152,6 +165,8 @@ class AccountProfit {
       equityUsdt: (json['equity_usdt'] as num?)?.toDouble() ?? 0,
       balanceUsdt: (json['balance_usdt'] as num?)?.toDouble(),
       snapshotTime: json['snapshot_time'] as String?,
+      monthOpenEquity: (json['month_open_equity'] as num?)?.toDouble(),
+      monthOpenCash: (json['month_open_cash'] as num?)?.toDouble(),
     );
   }
 }
@@ -541,14 +556,16 @@ class OkxPositionsResponse {
   }
 }
 
-/// 赛季：启停时间、初期金额、盈利、盈利率
+/// 赛季：启停时间、初期权益/现金、盈利、盈利率
 class BotSeason {
   final int id;
   final String botId;
   final String? startedAt;
   final String? stoppedAt;
   final double initialBalance;
+  final double? initialCash;
   final double? finalBalance;
+  final double? finalCash;
   final double? profitAmount;
   final double? profitPercent;
   final bool? isActive;
@@ -560,7 +577,9 @@ class BotSeason {
     this.startedAt,
     this.stoppedAt,
     required this.initialBalance,
+    this.initialCash,
     this.finalBalance,
+    this.finalCash,
     this.profitAmount,
     this.profitPercent,
     this.isActive,
@@ -574,7 +593,9 @@ class BotSeason {
       startedAt: json['started_at'] as String?,
       stoppedAt: json['stopped_at'] as String?,
       initialBalance: (json['initial_balance'] as num?)?.toDouble() ?? 0,
+      initialCash: (json['initial_cash'] as num?)?.toDouble(),
       finalBalance: (json['final_balance'] as num?)?.toDouble(),
+      finalCash: (json['final_cash'] as num?)?.toDouble(),
       profitAmount: (json['profit_amount'] as num?)?.toDouble(),
       profitPercent: (json['profit_percent'] as num?)?.toDouble(),
       isActive: json['is_active'] as bool?,
@@ -687,6 +708,69 @@ class HealthResponse {
       accountSyncIntervalSec: (json['account_sync_interval_sec'] as num?)?.toInt(),
       staticOnly: json['static_only'] as bool? ?? false,
       processStartedAtUtc: json['process_started_at_utc'] as String?,
+    );
+  }
+}
+
+/// GET /api/app-version：单平台版本策略
+class AppStoreVersionInfo {
+  final String minVersion;
+  final String latestVersion;
+  final String? apkFilename;
+  final String? storeUrl;
+
+  AppStoreVersionInfo({
+    this.minVersion = '',
+    this.latestVersion = '',
+    this.apkFilename,
+    this.storeUrl,
+  });
+
+  factory AppStoreVersionInfo.fromJson(
+    Map<String, dynamic>? json, {
+    bool isAndroid = false,
+  }) {
+    if (json == null) {
+      return AppStoreVersionInfo();
+    }
+    return AppStoreVersionInfo(
+      minVersion: (json['min_version'] as String?)?.trim() ?? '',
+      latestVersion: (json['latest_version'] as String?)?.trim() ?? '',
+      apkFilename: isAndroid
+          ? ((json['apk_filename'] as String?)?.trim())
+          : null,
+      storeUrl: !isAndroid
+          ? ((json['store_url'] as String?)?.trim())
+          : null,
+    );
+  }
+}
+
+/// GET /api/app-version
+class AppVersionConfigResponse {
+  final bool success;
+  final AppStoreVersionInfo android;
+  final AppStoreVersionInfo ios;
+
+  AppVersionConfigResponse({
+    required this.success,
+    required this.android,
+    required this.ios,
+  });
+
+  factory AppVersionConfigResponse.fromJson(Map<String, dynamic> json) {
+    final a = json['android'];
+    final i = json['ios'];
+    return AppVersionConfigResponse(
+      success: json['success'] as bool? ?? false,
+      android: AppStoreVersionInfo.fromJson(
+        a is Map<String, dynamic> ? a : null,
+        isAndroid: true,
+      ),
+      ios: AppStoreVersionInfo.fromJson(
+        i is Map<String, dynamic> ? i : null,
+        isAndroid: false,
+      ),
     );
   }
 }

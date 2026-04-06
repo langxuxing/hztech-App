@@ -111,11 +111,11 @@ class ApiClient {
     final resp = await _postWithRetry(uri, _headers, body: body);
     final raw = resp.body.trim();
     if (raw.isEmpty) {
-      throw FormatException('后端返回空内容，请检查后端地址是否为 API 服务（如 http://localhost:8080/）');
+      throw FormatException('后端返回空内容，请检查后端地址是否为 API 服务（如 http://127.0.0.1:9001/）');
     }
     if (raw.toLowerCase().startsWith('<')) {
       throw FormatException(
-        '后端返回了网页而非接口数据。请将「后端地址」改为服务根地址（如 http://localhost:8080/），路径为 /api/...；不要填错误端口。',
+        '后端返回了网页而非接口数据。请将「后端地址」改为 API 根地址（如 http://127.0.0.1:9001/），路径为 /api/...；Web 前端端口多为 9000，勿与 API 混淆。',
       );
     }
     final map = jsonDecode(resp.body) as Map<String, dynamic>;
@@ -147,11 +147,15 @@ class ApiClient {
     int userId, {
     String? role,
     List<String>? linkedAccountIds,
+    String? fullName,
+    String? phone,
   }) async {
     final uri = Uri.parse('${_normalizedBase}api/users/$userId');
     final body = <String, dynamic>{};
     if (role != null) body['role'] = role;
     if (linkedAccountIds != null) body['linked_account_ids'] = linkedAccountIds;
+    if (fullName != null) body['full_name'] = fullName;
+    if (phone != null) body['phone'] = phone;
     final resp =
         await http.patch(uri, headers: _headers, body: jsonEncode(body)).timeout(_timeout);
     return _parsePatchUserRequired(resp);
@@ -163,6 +167,8 @@ class ApiClient {
     required String password,
     String role = 'trader',
     List<String>? linkedAccountIds,
+    String? fullName,
+    String? phone,
   }) async {
     final uri = Uri.parse('${_normalizedBase}api/users');
     final body = <String, dynamic>{
@@ -172,6 +178,14 @@ class ApiClient {
     };
     if (linkedAccountIds != null) {
       body['linked_account_ids'] = linkedAccountIds;
+    }
+    final fn = fullName?.trim();
+    if (fn != null && fn.isNotEmpty) {
+      body['full_name'] = fn;
+    }
+    final ph = phone?.trim();
+    if (ph != null && ph.isNotEmpty) {
+      body['phone'] = ph;
     }
     final resp =
         await _postWithRetry(uri, _headers, body: jsonEncode(body));
@@ -378,6 +392,21 @@ class ApiClient {
     final resp = await http.get(uri, headers: _headersPublic).timeout(_timeout);
     final map = jsonDecode(resp.body) as Map<String, dynamic>;
     return HealthResponse.fromJson(map);
+  }
+
+  /// GET /api/app-version（无需登录）；解析失败或 HTTP 非 200 时返回 null
+  Future<AppVersionConfigResponse?> getAppVersionConfig() async {
+    try {
+      final uri = Uri.parse('${_normalizedBase}api/app-version');
+      final resp = await _getWithRetry(uri, _headersPublic);
+      if (resp.statusCode != 200) return null;
+      final raw = resp.body.trim();
+      if (raw.isEmpty || raw.toLowerCase().startsWith('<')) return null;
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      return AppVersionConfigResponse.fromJson(map);
+    } on Exception {
+      return null;
+    }
   }
 
   /// GET /api/status

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
+import '../auth/app_user_role.dart';
 import '../secure/prefs.dart';
 import '../theme/finance_style.dart';
 import '../utils/number_display_format.dart';
@@ -56,9 +57,12 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
   Future<void> _refreshLatestData() async {
     if (!mounted || _loading) return;
     final list = _bots.isNotEmpty ? _bots : widget.sharedBots;
+    final role = await _prefs.getAppUserRole();
+    final isCustomer = role == AppUserRole.customer;
     final botId = _selectedBotId ??
         (list.isNotEmpty ? list.first.tradingbotId : null) ??
-        _defaultBotId;
+        (isCustomer ? null : _defaultBotId);
+    if (botId == null || botId.isEmpty) return;
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
@@ -94,6 +98,9 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
       final token = await _prefs.authToken;
       final api = ApiClient(baseUrl, token: token);
 
+      final role = await _prefs.getAppUserRole();
+      final isCustomer = role == AppUserRole.customer;
+
       // 优先 MainScreen 下发的列表；否则本页拉取（与账户管理同源）
       List<UnifiedTradingBot> bots = List.from(widget.sharedBots);
       if (bots.isEmpty) {
@@ -101,9 +108,9 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
         bots = botsResp.botList;
       }
       final initial = widget.initialBotId?.trim();
-      if (initial != null && initial.isNotEmpty) {
-        final has = bots.any((b) => b.tradingbotId == initial);
-        if (!has) {
+      if (initial != null && initial.isNotEmpty && !bots.any((b) => b.tradingbotId == initial)) {
+        // 客户不得以 URL/参数注入未绑定账户；交易员/管理员可临时查看指定 id
+        if (!isCustomer) {
           bots = [
             UnifiedTradingBot(
               tradingbotId: initial,
@@ -115,9 +122,16 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
           ];
         }
       }
-      final botId = (initial != null && initial.isNotEmpty)
-          ? initial
-          : (bots.isNotEmpty ? bots.first.tradingbotId : _defaultBotId);
+      final String? botId;
+      if (initial != null &&
+          initial.isNotEmpty &&
+          bots.any((b) => b.tradingbotId == initial)) {
+        botId = initial;
+      } else if (bots.isNotEmpty) {
+        botId = bots.first.tradingbotId;
+      } else {
+        botId = isCustomer ? null : _defaultBotId;
+      }
 
       if (!mounted) return;
       // 阶段一：一有账户列表就结束全屏 loading，下拉框可立即显示
@@ -129,13 +143,15 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
 
       // 阶段二：账户收益 + 历史（不经过 OKX 直连，通常较快）
       try {
-        final phase2 = await Future.wait([
-          api.getAccountProfit(),
-          api.getBotProfitHistory(botId, limit: 500),
-        ]);
+        final profitResp = await api.getAccountProfit();
+        final historyResp = (botId != null && botId.isNotEmpty)
+            ? await api.getBotProfitHistory(botId, limit: 500)
+            : BotProfitHistoryResponse(
+                success: true,
+                botId: '',
+                snapshots: const [],
+              );
         if (!mounted) return;
-        final profitResp = phase2[0] as AccountProfitResponse;
-        final historyResp = phase2[1] as BotProfitHistoryResponse;
         setState(() {
           _accounts = profitResp.accounts ?? [];
           _snapshots = historyResp.snapshots;

@@ -5,6 +5,7 @@ import 'package:local_auth/local_auth.dart';
 import 'dart:async';
 
 import '../api/client.dart';
+import '../app_update_prompt.dart';
 import '../debug_ingest_log.dart';
 import '../secure/prefs.dart';
 import '../widgets/water_background.dart';
@@ -20,6 +21,14 @@ const double _formWidth = 320;
 
 /// 副标题诗句（保留原文案）
 const String _tagline = '知空守拙，细水长流；顺势扬帆，乘风破浪';
+
+/// 登录页隐藏入口：后端 API 基址预设（端口 9001；Web 静态站多为 9000）。
+const List<({String label, String apiBaseUrl})> _kBackendPresets = [
+  (label: '开发环境[本东]', apiBaseUrl: 'http://127.0.0.1:9001/'),
+  (label: '开发环境', apiBaseUrl: 'http://192.168.3.41:9001/'),
+  (label: 'AWS-Alpha', apiBaseUrl: 'http://54.66.108.150:9001/'),
+  (label: 'AWS-Defi', apiBaseUrl: 'http://54.252.181.151:9001/'),
+];
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({
@@ -42,6 +51,8 @@ class _LoginScreenState extends State<LoginScreen> {
   final _backendUrlCtrl = TextEditingController();
   bool _loading = false;
   bool _obscurePassword = true;
+  Timer? _logoTapResetTimer;
+  int _logoSecretTapCount = 0;
 
   @override
   void initState() {
@@ -63,15 +74,168 @@ class _LoginScreenState extends State<LoginScreen> {
       if (mounted && _backendUrlCtrl.text.isEmpty) {
         _backendUrlCtrl.text = url;
       }
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        AppUpdatePrompt.checkIfNeeded(context, url);
+      });
     });
   }
 
   @override
   void dispose() {
+    _logoTapResetTimer?.cancel();
     _usernameCtrl.dispose();
     _passwordCtrl.dispose();
     _backendUrlCtrl.dispose();
     super.dispose();
+  }
+
+  /// 预设项副标题：host:port（与下拉展示一致）
+  String _presetHostPort(String apiBaseUrl) {
+    try {
+      final u = Uri.parse(apiBaseUrl);
+      if (u.hasPort) return '${u.host}:${u.port}';
+      return u.host;
+    } catch (_) {
+      return apiBaseUrl;
+    }
+  }
+
+  void _onLogoSecretTap() {
+    _logoTapResetTimer?.cancel();
+    _logoSecretTapCount += 1;
+    if (_logoSecretTapCount >= 5) {
+      _logoSecretTapCount = 0;
+      _showBackendUrlSettingsDialog();
+      return;
+    }
+    _logoTapResetTimer = Timer(const Duration(seconds: 2), () {
+      _logoSecretTapCount = 0;
+    });
+  }
+
+  void _showBackendUrlSettingsDialog() {
+    final currentNorm = _normalizeBaseUrl(_backendUrlCtrl.text);
+    var selectedIndex = -1;
+    for (var i = 0; i < _kBackendPresets.length; i++) {
+      if (_normalizeBaseUrl(_kBackendPresets[i].apiBaseUrl) == currentNorm) {
+        selectedIndex = i;
+        break;
+      }
+    }
+    final customCtrl = TextEditingController(
+      text: _backendUrlCtrl.text.trim().isEmpty
+          ? _kBackendPresets.first.apiBaseUrl
+          : _backendUrlCtrl.text.trim(),
+    );
+
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('后端 API 地址'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'API 服务端口为 9001；浏览器访问 Web 前端一般为 9000。',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.shade700,
+                        height: 1.35,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    InputDecorator(
+                      decoration: const InputDecoration(
+                        labelText: '环境',
+                        border: OutlineInputBorder(),
+                      ),
+                      child: DropdownButtonHideUnderline(
+                        child: DropdownButton<int>(
+                          isExpanded: true,
+                          value: selectedIndex >= 0 ? selectedIndex : null,
+                          hint: const Text('选择预设或下方手动填写'),
+                          items: [
+                            for (var i = 0; i < _kBackendPresets.length; i++)
+                              DropdownMenuItem<int>(
+                                value: i,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(_kBackendPresets[i].label),
+                                    Text(
+                                      _presetHostPort(
+                                        _kBackendPresets[i].apiBaseUrl,
+                                      ),
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.grey.shade600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                          ],
+                          onChanged: (i) {
+                            setDialogState(() {
+                              selectedIndex = i ?? -1;
+                              if (i != null) {
+                                customCtrl.text = _kBackendPresets[i].apiBaseUrl;
+                              }
+                            });
+                          },
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: customCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'API 根地址',
+                        hintText: 'http://主机:9001/',
+                        border: OutlineInputBorder(),
+                      ),
+                      keyboardType: TextInputType.url,
+                      autocorrect: false,
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('取消'),
+                ),
+                FilledButton(
+                  onPressed: () async {
+                    final migrated =
+                        migrateLegacyBackendApiPort(customCtrl.text);
+                    final norm = _normalizeBaseUrl(migrated);
+                    if (norm.isEmpty) {
+                      _showSnack('请输入有效的 API 地址');
+                      return;
+                    }
+                    await _prefs.setBackendBaseUrl(norm);
+                    if (!mounted) return;
+                    if (!dialogContext.mounted) return;
+                    setState(() => _backendUrlCtrl.text = norm);
+                    Navigator.of(dialogContext).pop();
+                    _showSnack('已保存后端地址');
+                  },
+                  child: const Text('保存'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    ).then((_) => customCtrl.dispose());
   }
 
   String _normalizeBaseUrl(String raw) {
@@ -96,7 +260,7 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _loading = true);
     try {
       final normalizedInput = _normalizeBaseUrl(rawUrl);
-      final baseUrl = migrateLocalBackendPort9000To8080(rawUrl);
+      final baseUrl = migrateLegacyBackendApiPort(rawUrl);
       if (mounted && baseUrl != normalizedInput) {
         _backendUrlCtrl.text = baseUrl;
       }
@@ -137,8 +301,8 @@ class _LoginScreenState extends State<LoginScreen> {
             s.contains('Failed to fetch') || s.contains('ClientException');
         if (kIsWeb && looksUnreachable) {
           msg =
-              '无法连接后端 $rawUrl。请先在本机项目根目录执行 ./server/run_local.sh（默认端口 8080 提供 /api），'
-              '或执行 flutter build web 后用浏览器打开 http://127.0.0.1:8080/ 与接口同源。';
+              '无法连接后端 $rawUrl。请确认 API 服务已启动（端口 9001，例如 ./server/run_local.sh），'
+              '并填写 API 根地址（如 http://127.0.0.1:9001/）；浏览器访问 Web 前端多为 9000 端口。';
         } else {
           msg = '网络异常: $e';
         }
@@ -271,7 +435,7 @@ class _LoginScreenState extends State<LoginScreen> {
         foregroundColor: Colors.white,
       ),
       body: WaterBackground(
-        // 背景图在上方单独区域显示、不透明 80%，登录表单在下方不遮挡背景
+        // 上半区书法图；下半区半透明叠层，透出底层水纹与底色
         child: Column(
           children: [
             // 上半区：知空守拙背景图，向上对齐、80% 不透明，不被登录遮挡
@@ -296,15 +460,19 @@ class _LoginScreenState extends State<LoginScreen> {
                 ],
               ),
             ),
-            // 下半区：登录表单，带浅色渐变保证可读
+            // 下半区：登录表单，半透明渐变（底部略加深以兼顾页脚可读）
             Expanded(
               child: Container(
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                    colors: [Color(0xE6001a24), Color(0xF2000000), _deepBlue],
-                    stops: [0.0, 0.5, 1.0],
+                    colors: [
+                      Color(0x73001a24),
+                      Color(0x85000000),
+                      Color(0xA60A1628),
+                    ],
+                    stops: [0.0, 0.55, 1.0],
                   ),
                 ),
                 child: SafeArea(
@@ -469,13 +637,17 @@ class _LoginScreenState extends State<LoginScreen> {
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                Image.asset(
-                                  'images/hztech_logo.png',
-                                  width: 140,
-                                  height: 56,
-                                  fit: BoxFit.contain,
-                                  errorBuilder: (_, __, ___) =>
-                                      const SizedBox.shrink(),
+                                GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onTap: _onLogoSecretTap,
+                                  child: Image.asset(
+                                    'images/hztech_logo.png',
+                                    width: 140,
+                                    height: 56,
+                                    fit: BoxFit.contain,
+                                    errorBuilder: (_, __, ___) =>
+                                        const SizedBox.shrink(),
+                                  ),
                                 ),
                                 const SizedBox(height: 12),
                                 Text(

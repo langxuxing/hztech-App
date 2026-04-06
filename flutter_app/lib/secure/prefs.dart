@@ -13,7 +13,7 @@ const _keyFingerprint = 'fingerprint_enabled';
 const _keyUnlockedUntil = 'unlocked_until_ms';
 
 /// 编译期注入后端基址（打包时区分环境）：
-/// `flutter build apk --dart-define=API_BASE_URL=http://192.168.1.10:8080/`
+/// `flutter build apk --dart-define=API_BASE_URL=http://192.168.1.10:9001/`
 /// 或 `flutter build apk --dart-define-from-file=dart_defines/local.json`（在 flutter_app 目录下执行时路径为 dart_defines/...）
 ///
 /// **与构建模式的关系（未注入 [API_BASE_URL] 时）**
@@ -26,11 +26,11 @@ const String _kCompileTimeApiBase = String.fromEnvironment(
   defaultValue: '',
 );
 
-/// 未使用 [API_BASE_URL] 时的线上默认（与 dart_defines/production.json、deploy-aws.json 中 API 主机一致）
-const String _kDefaultProductionApiBase = 'http://54.66.108.150:9000/';
+/// 未使用 [API_BASE_URL] 时的线上默认（API 端口与 deploy-aws.json `app_port` 一致，Web 静态站为 web_port）
+const String _kDefaultProductionApiBase = 'http://54.66.108.150:9001/';
 
-/// 未使用 [API_BASE_URL] 时的本地调试默认（单进程 `run_local.sh` 默认端口 8080）
-const String _kDefaultDebugApiBase = 'http://127.0.0.1:8080/';
+/// 未使用 [API_BASE_URL] 时的本地调试默认（API 统一 9001；浏览器访问 Web 多为 9000，与 AWS 分拆部署一致）
+const String _kDefaultDebugApiBase = 'http://127.0.0.1:9001/';
 
 String _normalizeBackendBaseUrl(String raw) {
   final t = raw.trim();
@@ -39,37 +39,54 @@ String _normalizeBackendBaseUrl(String raw) {
   return u.endsWith('/') ? u : '$u/';
 }
 
-/// 历史本地默认端口为 9000，当前 `run_local.sh` 为 8080；已保存的旧地址自动升级，避免登录仍连 9000。
-String? _migrateLocal9000To8080(String normalizedUrl) {
-  final t = normalizedUrl.trim();
-  if (t.isEmpty) return null;
-  Uri uri;
-  try {
-    uri = Uri.parse(t);
-  } catch (_) {
-    return null;
-  }
-  if (!uri.hasPort || uri.port != 9000) return null;
-  final h = uri.host.toLowerCase();
-  if (h != '127.0.0.1' && h != 'localhost') return null;
-  return uri.replace(port: 8080).toString();
+bool _isLocalDevHost(String host) {
+  final h = host.toLowerCase();
+  return h == '127.0.0.1' ||
+      h == 'localhost' ||
+      h == '10.0.2.2' ||
+      h.startsWith('192.168.');
 }
 
-/// 本机 `127.0.0.1` / `localhost` 端口 9000 → 8080。登录框与存储共用；含字符串兜底，避免 Web 上 Uri 与迁移未命中时仍请求 :9000。
-String migrateLocalBackendPort9000To8080(String raw) {
+bool _isAwsPresetHost(String host) {
+  final h = host.toLowerCase();
+  return h == '54.66.108.150' || h == '54.252.181.151';
+}
+
+/// 将历史保存的「Web 口 / 旧 API 口」迁到当前约定的 API 口 9001（本机与局域网 8080/9000；AWS 旧默认 9000）。
+String migrateLegacyBackendApiPort(String raw) {
   final normalized = _normalizeBackendBaseUrl(raw);
   if (normalized.isEmpty) return normalized;
-  final viaUri = _migrateLocal9000To8080(normalized);
-  if (viaUri != null) {
-    final next = _normalizeBackendBaseUrl(viaUri);
-    if (next != normalized) return next;
+  Uri uri;
+  try {
+    uri = Uri.parse(normalized);
+  } catch (_) {
+    return _migrateLegacyBackendApiPortStringFallback(normalized);
   }
+  if (!uri.hasPort) return normalized;
+  final h = uri.host.toLowerCase();
+  final p = uri.port;
+  int? newPort;
+  if (_isLocalDevHost(h) && (p == 8080 || p == 9000)) {
+    newPort = 9001;
+  } else if (_isAwsPresetHost(h) && p == 9000) {
+    newPort = 9001;
+  }
+  if (newPort == null) return normalized;
+  final next = _normalizeBackendBaseUrl(uri.replace(port: newPort).toString());
+  return next == normalized ? normalized : next;
+}
+
+String _migrateLegacyBackendApiPortStringFallback(String normalized) {
   var s = normalized;
-  if (s.contains('127.0.0.1:9000')) {
-    s = s.replaceAll('127.0.0.1:9000', '127.0.0.1:8080');
-  }
-  if (s.contains('localhost:9000')) {
-    s = s.replaceAll('localhost:9000', 'localhost:8080');
+  for (final entry in <MapEntry<String, String>>[
+    MapEntry('127.0.0.1:8080', '127.0.0.1:9001'),
+    MapEntry('127.0.0.1:9000', '127.0.0.1:9001'),
+    MapEntry('localhost:8080', 'localhost:9001'),
+    MapEntry('localhost:9000', 'localhost:9001'),
+    MapEntry('54.66.108.150:9000', '54.66.108.150:9001'),
+    MapEntry('54.252.181.151:9000', '54.252.181.151:9001'),
+  ]) {
+    s = s.replaceAll(entry.key, entry.value);
   }
   return _normalizeBackendBaseUrl(s);
 }
@@ -77,8 +94,8 @@ String migrateLocalBackendPort9000To8080(String raw) {
 /// 安装后首次打开时的默认后端基址（用户可在设置里修改并持久化）。
 ///
 /// 优先级：编译期 `API_BASE_URL` > Debug 构建默认本机 > 非 Debug（Release/Profile）默认 AWS。
-/// 真机连本机请用 `--dart-define=API_BASE_URL=http://<电脑局域网IP>:8080/`；
-/// Android 模拟器连本机可用 `http://10.0.2.2:8080/`。
+/// 真机连本机请用 `--dart-define=API_BASE_URL=http://<电脑局域网IP>:9001/`；
+/// Android 模拟器连本机可用 `http://10.0.2.2:9001/`。
 String get defaultBackendUrl {
   if (_kCompileTimeApiBase.trim().isNotEmpty) {
     return _normalizeBackendBaseUrl(_kCompileTimeApiBase);
@@ -126,7 +143,7 @@ class SecurePrefs {
     final v = await _storage.read(key: _keyBackendUrl);
     final raw = v ?? defaultBackendUrl;
     final normalized = _normalizeBackendBaseUrl(raw);
-    final next = migrateLocalBackendPort9000To8080(raw);
+    final next = migrateLegacyBackendApiPort(raw);
     // #region agent log
     Uri? pu;
     try {
@@ -159,7 +176,7 @@ class SecurePrefs {
       unawaited(
         debugIngestLog(
           location: 'prefs.dart:backendBaseUrl',
-          message: 'migrated_9000_to_8080',
+          message: 'migrated_legacy_api_port',
           hypothesisId: 'H1',
           data: <String, Object?>{
             'next': next,

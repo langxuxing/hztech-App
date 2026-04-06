@@ -52,6 +52,33 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     _reload();
   }
 
+  /// 深色对话框内的客户账户多选：避免默认 Chip 浅色底与浅色字对比度不足。
+  Widget _customerAccountFilterChip({
+    required String id,
+    required bool selected,
+    required ValueChanged<bool> onSelected,
+  }) {
+    return FilterChip(
+      label: Text(
+        id,
+        style: TextStyle(
+          fontSize: 12,
+          color: selected
+              ? AppFinanceStyle.profitGreenEnd
+              : AppFinanceStyle.valueColor,
+        ),
+      ),
+      selected: selected,
+      onSelected: onSelected,
+      backgroundColor: const Color(0xFF2a2a36),
+      selectedColor: AppFinanceStyle.profitGreenEnd.withValues(alpha: 0.22),
+      checkmarkColor: AppFinanceStyle.profitGreenEnd,
+      side: BorderSide(color: Colors.white.withValues(alpha: 0.12)),
+      surfaceTintColor: Colors.transparent,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+  }
+
   Future<void> _reload() async {
     setState(() {
       _loading = true;
@@ -82,6 +109,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   Future<void> _addUser() async {
     var role = AppUserRole.trader;
     final userCtrl = TextEditingController();
+    final fullNameCtrl = TextEditingController();
+    final phoneCtrl = TextEditingController();
     final passCtrl = TextEditingController();
     final pass2Ctrl = TextEditingController();
     var selected = <String>{};
@@ -101,15 +130,56 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Text('用户名', style: AppFinanceStyle.labelTextStyle(context)),
+                    Text('登录名（用户名）', style: AppFinanceStyle.labelTextStyle(context)),
                     const SizedBox(height: 6),
                     TextField(
                       controller: userCtrl,
+                      style: const TextStyle(color: AppFinanceStyle.valueColor),
+                      autocorrect: false,
+                      decoration: InputDecoration(
+                        filled: true,
+                        fillColor: Colors.white.withValues(alpha: 0.06),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                        hintText: '用于登录，不可与已有账号重复',
+                        hintStyle: TextStyle(
+                          color: AppFinanceStyle.labelColor.withValues(alpha: 0.55),
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text('全名', style: AppFinanceStyle.labelTextStyle(context)),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: fullNameCtrl,
                       style: const TextStyle(color: AppFinanceStyle.valueColor),
                       decoration: InputDecoration(
                         filled: true,
                         fillColor: Colors.white.withValues(alpha: 0.06),
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                        hintText: '选填，用于列表展示',
+                        hintStyle: TextStyle(
+                          color: AppFinanceStyle.labelColor.withValues(alpha: 0.55),
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text('手机号', style: AppFinanceStyle.labelTextStyle(context)),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: phoneCtrl,
+                      keyboardType: TextInputType.phone,
+                      style: const TextStyle(color: AppFinanceStyle.valueColor),
+                      decoration: InputDecoration(
+                        filled: true,
+                        fillColor: Colors.white.withValues(alpha: 0.06),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                        hintText: '选填',
+                        hintStyle: TextStyle(
+                          color: AppFinanceStyle.labelColor.withValues(alpha: 0.55),
+                          fontSize: 13,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 12),
@@ -189,16 +259,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                           runSpacing: 8,
                           children: _accountChoices.map((id) {
                             final on = selected.contains(id);
-                            return FilterChip(
-                              label: Text(
-                                id,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: on
-                                      ? AppFinanceStyle.profitGreenEnd
-                                      : AppFinanceStyle.valueColor,
-                                ),
-                              ),
+                            return _customerAccountFilterChip(
+                              id: id,
                               selected: on,
                               onSelected: (v) {
                                 setLocal(() {
@@ -232,9 +294,13 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
       },
     );
     final newUsername = userCtrl.text.trim();
+    final newFullName = fullNameCtrl.text.trim();
+    final newPhone = phoneCtrl.text.trim();
     final newPassword = passCtrl.text;
     final newPassword2 = pass2Ctrl.text;
     userCtrl.dispose();
+    fullNameCtrl.dispose();
+    phoneCtrl.dispose();
     passCtrl.dispose();
     pass2Ctrl.dispose();
     if (ok != true || !mounted) return;
@@ -270,6 +336,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
         role: role.apiValue,
         linkedAccountIds:
             role == AppUserRole.customer ? links : null,
+        fullName: newFullName.isEmpty ? null : newFullName,
+        phone: newPhone.isEmpty ? null : newPhone,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -332,6 +400,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
   Future<void> _editUser(ManagedUserRow row) async {
     var role = AppUserRole.fromApi(row.role);
     var selected = Set<String>.from(row.linkedAccountIds);
+    final fullNameCtrl = TextEditingController(text: row.fullName);
+    final phoneCtrl = TextEditingController(text: row.phone);
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) {
@@ -348,6 +418,50 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    Text(
+                      '登录名不可在此修改；全名与手机号仅用于展示与联系。',
+                      style: TextStyle(
+                        color: AppFinanceStyle.labelColor.withValues(alpha: 0.85),
+                        fontSize: 12,
+                        height: 1.35,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text('全名', style: AppFinanceStyle.labelTextStyle(context)),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: fullNameCtrl,
+                      style: const TextStyle(color: AppFinanceStyle.valueColor),
+                      decoration: InputDecoration(
+                        filled: true,
+                        fillColor: Colors.white.withValues(alpha: 0.06),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                        hintText: '选填',
+                        hintStyle: TextStyle(
+                          color: AppFinanceStyle.labelColor.withValues(alpha: 0.55),
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text('手机号', style: AppFinanceStyle.labelTextStyle(context)),
+                    const SizedBox(height: 6),
+                    TextField(
+                      controller: phoneCtrl,
+                      keyboardType: TextInputType.phone,
+                      style: const TextStyle(color: AppFinanceStyle.valueColor),
+                      decoration: InputDecoration(
+                        filled: true,
+                        fillColor: Colors.white.withValues(alpha: 0.06),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                        hintText: '选填',
+                        hintStyle: TextStyle(
+                          color: AppFinanceStyle.labelColor.withValues(alpha: 0.55),
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
                     Text('角色', style: AppFinanceStyle.labelTextStyle(context)),
                     const SizedBox(height: 4),
                     Text(
@@ -398,16 +512,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                           runSpacing: 8,
                           children: _accountChoices.map((id) {
                             final on = selected.contains(id);
-                            return FilterChip(
-                              label: Text(
-                                id,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: on
-                                      ? AppFinanceStyle.profitGreenEnd
-                                      : AppFinanceStyle.valueColor,
-                                ),
-                              ),
+                            return _customerAccountFilterChip(
+                              id: id,
                               selected: on,
                               onSelected: (v) {
                                 setLocal(() {
@@ -440,6 +546,10 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
         );
       },
     );
+    final editedFullName = fullNameCtrl.text.trim();
+    final editedPhone = phoneCtrl.text.trim();
+    fullNameCtrl.dispose();
+    phoneCtrl.dispose();
     if (ok != true || !mounted) return;
     try {
       final base = await _prefs.backendBaseUrl;
@@ -450,6 +560,8 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
         row.id,
         role: role.apiValue,
         linkedAccountIds: role == AppUserRole.customer ? links : [],
+        fullName: editedFullName,
+        phone: editedPhone,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -580,8 +692,16 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                                       ),
                                     ),
                                     subtitle: Text(
-                                      '${AppUserRole.label(AppUserRole.fromApi(u.role))}'
-                                      '${u.linkedAccountIds.isNotEmpty ? ' · ${u.linkedAccountIds.length} 个绑定账户' : ''}',
+                                      () {
+                                        final parts = <String>[
+                                          AppUserRole.label(AppUserRole.fromApi(u.role)),
+                                          if (u.fullName.isNotEmpty) u.fullName,
+                                          if (u.phone.isNotEmpty) u.phone,
+                                          if (u.linkedAccountIds.isNotEmpty)
+                                            '${u.linkedAccountIds.length} 个绑定账户',
+                                        ];
+                                        return parts.join(' · ');
+                                      }(),
                                       style: TextStyle(
                                         color: AppFinanceStyle.labelColor.withValues(alpha: 0.95),
                                         fontSize: 13,
@@ -591,7 +711,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                                       mainAxisSize: MainAxisSize.min,
                                       children: [
                                         IconButton(
-                                          tooltip: '编辑角色与可见账户',
+                                          tooltip: '编辑资料、角色与可见账户',
                                           icon: const Icon(Icons.edit_outlined,
                                               color: AppFinanceStyle.labelColor),
                                           onPressed: () => _editUser(u),

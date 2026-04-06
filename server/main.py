@@ -9,19 +9,20 @@ App 所需 API（与 QtraderApi.kt 一致）：
   POST /api/login                 登录，Body: {username, password}，返回 {success, token}
   GET  /api/account-profit        账户盈亏（需 Bearer token）
   GET  /api/tradingbots           交易账户列表（需 Bearer token）
-  POST /api/tradingbots/{id}/start|stop|restart|season-start|season-stop（需 Bearer token；赛季操作需 script 支持 season-start/stop）
+  POST /api/tradingbots/{id}/start|stop|restart|season-start|season-stop（需 Bearer token；赛季脚本成功后由服务端写 bot_seasons：新赛季与上一赛季同一时刻衔接；stop 写当前未结赛季止期及期末权益/现金）
   GET  /api/tradingbots/{id}/pending-orders | /ticker  当前委托、行情（不入库；id 可为 Account_List 的 account_id）
   GET  /api/tradingbots/{id}/strategy-daily-efficiency  策略效能：account_snapshots 或 bot_profit_snapshots 日权益→现金收益率%/能效（?inst_id=&days=）
   GET  /kline/<file>.json  PEPE 等 1m 标记价格 K 线 JSON（写入 flutter_app/web/kline；夜间定时补历史）
   GET  /api/tradingbots/{id}/tradingbot-events  账户启停事件（需 Bearer token）
   GET  /api/logs                  日志查询（需 Bearer token，?limit=100&level=&source=）
-  GET  /api/users                 用户列表（仅管理员，含 role、linked_account_ids）
-  POST /api/users                 新建用户（仅管理员）Body: {username, password, role?, linked_account_ids?}
+  GET  /api/users                 用户列表（仅管理员，含 role、linked_account_ids、full_name、phone）
+  POST /api/users                 新建用户（仅管理员）Body: {username, password, role?, linked_account_ids?, full_name?, phone?}
   DELETE /api/users/<id>          删除用户（仅管理员，不可删自己）
-  PATCH /api/users/<id>           更新角色/客户绑定账户（仅管理员）
+  PATCH /api/users/<id>           更新角色/客户绑定/全名/手机（仅管理员）
   POST /api/strategy-analyst/auto-net-test  自动收网测试桩（交易员/管理员/策略分析师，客户不可用）
   GET  /api/me                    当前用户 role、linked_account_ids
   GET  /api/health                服务存活（无需登录，供负载均衡探测）
+  GET  /api/app-version           移动端版本策略（无需登录；HZTECH_APP_* 环境变量）
   GET  /api/status                同步状态与周期说明（需登录）
   GET  /api/tradingbots/{id}/position-history  历史仓位分页（入库数据，需登录）
   POST /api/tradingbots/{id}/position-history/sync  手动拉取该账户 OKX 历史仓位（仅管理员）
@@ -104,6 +105,8 @@ app = Flask(__name__)
 
 # 双机部署：Web 节点仅托管 Flutter Web + APK，API 在另一台 EC2；由 server_mgr 设置 HZTECH_STATIC_ONLY=1
 STATIC_ONLY = os.environ.get("HZTECH_STATIC_ONLY", "0").strip() == "1"
+# 本机/ API 节点：仅提供 /api/*、/kline/* 等，静态站由另一进程（如 9000）提供；设置 HZTECH_API_ONLY=1
+API_ONLY = os.environ.get("HZTECH_API_ONLY", "0").strip() == "1"
 
 # Account_List → account_snapshots / account_positions_history 同步周期（秒），默认 300（5 分钟）
 try:
@@ -227,6 +230,29 @@ def _static_only_block_api():
     """静态站点节点不处理 /api/*（真实 API 在 deploy-aws.json 的 api 主机）。"""
     if STATIC_ONLY and request.path.startswith("/api"):
         return jsonify({"error": "not_found", "hint": "API is on the API host"}), 404
+
+
+@app.before_request
+def _api_only_block_static():
+    """API 专用进程不托管 SPA/APK 等静态入口，避免与 Web 端口（如 9000）重复。"""
+    if not API_ONLY:
+        return
+    if request.method == "OPTIONS":
+        return
+    p = request.path or "/"
+    if p.startswith("/api/") or p == "/api":
+        return
+    if p.startswith("/kline/"):
+        return
+    return (
+        jsonify(
+            {
+                "error": "not_found",
+                "hint": "Web 与静态资源在 Web 端口（本机默认 9000）；API 仅提供 /api/* 与 /kline/*",
+            }
+        ),
+        404,
+    )
 
 
 # 项目根目录（部署根，如 /home/ec2-user/hztechapp）
@@ -672,6 +698,38 @@ def api_health():
     return jsonify(payload)
 
 
+@app.route("/api/app-version", methods=["GET"])
+def api_app_version():
+    """无需登录：iOS/Android 客户端拉取最低/最新版本号与下载信息。
+
+    环境变量（均为可选；未设置 latest 时客户端不提示「可升级」）：
+    - HZTECH_APP_ANDROID_MIN / HZTECH_APP_ANDROID_LATEST
+    - HZTECH_APP_ANDROID_APK：APK 文件名，默认 禾正量化-release.apk
+    - HZTECH_APP_IOS_MIN / HZTECH_APP_IOS_LATEST
+    - HZTECH_APP_IOS_STORE_URL：App Store / TestFlight 公开链接
+    """
+    apk_name = os.environ.get("HZTECH_APP_ANDROID_APK", "").strip()
+    if not apk_name:
+        apk_name = "禾正量化-release.apk"
+    return jsonify(
+        {
+            "success": True,
+            "android": {
+                "min_version": os.environ.get("HZTECH_APP_ANDROID_MIN", "").strip(),
+                "latest_version": os.environ.get(
+                    "HZTECH_APP_ANDROID_LATEST", ""
+                ).strip(),
+                "apk_filename": apk_name,
+            },
+            "ios": {
+                "min_version": os.environ.get("HZTECH_APP_IOS_MIN", "").strip(),
+                "latest_version": os.environ.get("HZTECH_APP_IOS_LATEST", "").strip(),
+                "store_url": os.environ.get("HZTECH_APP_IOS_STORE_URL", "").strip(),
+            },
+        }
+    )
+
+
 @app.route("/api/status", methods=["GET"])
 @require_auth
 def api_status():
@@ -773,6 +831,8 @@ def api_users():
             return jsonify(
                 {"success": False, "message": "username 与 password 必填"}
             ), 400
+        full_name = str(data.get("full_name") or "").strip()[:128] or None
+        phone = str(data.get("phone") or "").strip()[:32] or None
         pwd_hash = hashlib.sha256(password.encode()).hexdigest()
         links_for_db: list[str] = []
         if role_s == "customer":
@@ -782,6 +842,8 @@ def api_users():
             pwd_hash,
             role=role_s,
             linked_account_ids=links_for_db,
+            full_name=full_name or None,
+            phone=phone or None,
         )
         if not ok:
             return jsonify({"success": False, "message": "创建失败或用户名已存在"}), 409
@@ -819,7 +881,9 @@ def api_users_patch(user_id: int):
     data = request.get_json(silent=True) or {}
     new_role = data.get("role")
     new_links = data.get("linked_account_ids")
-    if new_role is None and new_links is None:
+    has_full_name = "full_name" in data
+    has_phone = "phone" in data
+    if new_role is None and new_links is None and not has_full_name and not has_phone:
         return jsonify({"success": False, "message": "无有效字段"}), 400
     role_s = str(new_role).strip().lower() if new_role is not None else None
     links_list: list[str] | None = None
@@ -827,6 +891,12 @@ def api_users_patch(user_id: int):
         if not isinstance(new_links, list):
             return jsonify({"success": False, "message": "linked_account_ids 须为数组"}), 400
         links_list = [str(x).strip() for x in new_links if str(x).strip()]
+    full_name_upd: str | None = None
+    if has_full_name:
+        full_name_upd = str(data.get("full_name") or "").strip()[:128]
+    phone_upd: str | None = None
+    if has_phone:
+        phone_upd = str(data.get("phone") or "").strip()[:32]
     if new_role is not None and role_s is not None:
         ex_role = str(row.get("role") or "").strip().lower()
         if ex_role == "admin" and role_s != "admin":
@@ -838,7 +908,11 @@ def api_users_patch(user_id: int):
                     }
                 ), 400
     ok = _db.user_update_profile(
-        user_id, role=role_s, linked_account_ids=links_list
+        user_id,
+        role=role_s,
+        linked_account_ids=links_list,
+        full_name=full_name_upd,
+        phone=phone_upd,
     )
     if not ok:
         return jsonify({"success": False, "message": "更新失败或数据未变"}), 400
@@ -1737,7 +1811,24 @@ def api_bot_tradingbot_events(bot_id):
 # ---------- API：策略（Web 管控用，需 query bot_id=simpleserver-lhg|simpleserver-hztech） ----------
 @app.route("/api/strategy/status", methods=["GET"])
 def api_strategy_status():
-    return jsonify(strategy_status())
+    """未带 token 时返回全部 bot 状态（兼容监控/旧测试）；Bearer 为客户时仅返回其 linked_account_ids 对应项。"""
+    payload = strategy_status()
+    auth = request.headers.get("Authorization") or ""
+    token = auth.replace("Bearer ", "").strip() if auth else ""
+    if token:
+        username = _verify_token(token)
+        if username and _db.user_get_role(username) == "customer":
+            allowed = set(_db.user_get_linked_account_ids(username))
+            bots = payload.get("bots") or {}
+            payload = {
+                **payload,
+                "bots": (
+                    {k: v for k, v in bots.items() if k in allowed}
+                    if allowed
+                    else {}
+                ),
+            }
+    return jsonify(payload)
 
 
 @app.route("/api/strategy/start", methods=["POST", "GET"])
@@ -2082,8 +2173,12 @@ def serve_flutter_web(spa_path: str):
             "<title>禾正量化</title></head>"
             "<body style=\"font-family:system-ui,sans-serif;padding:2rem;max-width:560px;line-height:1.5;\">"
             "<h1>Flutter Web 未构建</h1>"
-            "<p>REST API 仍可通过 <code>/api/</code> 访问（与移动端共用）。</p>"
-            "<p>构建 Web 端：</p><pre style=\"background:#f4f4f5;padding:1rem;border-radius:8px;\">"
+            + (
+                "<p>本机 API 默认在端口 <strong>9001</strong>；请在 App 登录（连点 Logo×5）中填写 API 基址。</p>"
+                if STATIC_ONLY
+                else "<p>REST API 仍可通过 <code>/api/</code> 访问（与移动端共用）。</p>"
+            )
+            + "<p>构建 Web 端：</p><pre style=\"background:#f4f4f5;padding:1rem;border-radius:8px;\">"
             "cd flutter_app && flutter build web</pre>"
             "<p>或通过环境变量 <code>FLUTTER_WEB_ROOT</code> 指定已构建目录。</p>"
             "</body></html>"
@@ -2113,6 +2208,6 @@ if __name__ == "__main__":
         atexit.register(_app_on_stop)
         signal.signal(signal.SIGTERM, lambda *_a: sys.exit(0))
         signal.signal(signal.SIGINT, lambda *_a: sys.exit(0))
-    # 端口由环境变量 PORT 指定（默认 8080）；双机时 Web 节点仅静态，API 节点提供 /api/*
-    port = int(os.environ.get("PORT", 8080))
+    # 端口由环境变量 PORT 指定（默认 9001，与 Flutter API 预设一致）；双机时 Web 节点仅静态，API 节点提供 /api/*
+    port = int(os.environ.get("PORT", 9001))
     app.run(host="0.0.0.0", port=port, debug=os.environ.get("FLASK_DEBUG", "0") == "1")

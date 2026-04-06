@@ -4,7 +4,7 @@
 AWS API 服务测试程序：对远程 API（或本地）发真实 HTTP 请求，校验各接口。
 用法：
   python test/test_aws_api.py
-  BASE_URL=http://54.252.181.151:9000 python test/test_aws_api.py
+  BASE_URL=http://54.66.108.150:9001 python test/test_aws_api.py
   python test/test_aws_api.py -v
   python test/test_aws_api.py --user admin --password i23321
 不指定 BASE_URL 时从 server/deploy-aws.json 读取。
@@ -38,9 +38,10 @@ def load_base_url() -> str:
             host = api["host"]
         else:
             host = c.get("host", "127.0.0.1")
-        port = c.get("web_port", 9000)
+        # API 服务端口 9001；web_port(9000) 仅用于浏览器访问 Web
+        port = int(c.get("app_port", c.get("web_port", 9001)))
         return f"{scheme}://{host}:{port}"
-    return "http://127.0.0.1:8080"
+    return "http://127.0.0.1:9001"
 
 
 def request(
@@ -157,7 +158,7 @@ def main() -> int:
         print("\n  未获取到 token，跳过需登录接口。")
         if failed > 0:
             print(
-                "  提示: 502/连接失败通常表示服务未启动或端口不对（本机 ./server/run_local.sh 默认 8080）。"
+                "  提示: 502/连接失败通常表示 API 未启动或端口不对（本机 ./server/run_local.sh 默认 9001；浏览器 Web 多为 9000）。"
                 "到 EC2 执行: cd /home/ec2-user/hztechapp && bash server/install_on_aws.sh"
             )
         print(f"=== 完成：{failed} 项失败 ===")

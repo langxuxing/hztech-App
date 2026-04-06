@@ -19,18 +19,14 @@ _tmp = tempfile.mkdtemp(prefix="hztech_test_")
 db.DB_PATH = os.path.join(_tmp, "test.db")
 db.init_db()
 _pwd = hashlib.sha256(b"i23321").hexdigest()
-db.user_create("admin", _pwd)
-db.user_create("trader", _pwd)
-db.user_create(
-    "analyst",
-    _pwd,
-    role="strategy_analyst",
-)
+# init_db 可能已从 users.json 导入用户，其 password_hash 与测试口令不一致；统一清空后创建测试账号
 _conn = db.get_conn()
-_conn.execute("UPDATE users SET role = 'admin' WHERE username = 'admin'")
-_conn.execute("UPDATE users SET role = 'trader' WHERE username = 'trader'")
+_conn.execute("DELETE FROM users")
 _conn.commit()
 _conn.close()
+assert db.user_create("admin", _pwd, role="admin")
+assert db.user_create("trader", _pwd, role="trader")
+assert db.user_create("analyst", _pwd, role="strategy_analyst")
 
 from main import app  # noqa: E402
 

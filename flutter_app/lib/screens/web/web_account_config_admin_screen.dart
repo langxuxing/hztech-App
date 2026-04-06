@@ -9,6 +9,57 @@ import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
 import '../../widgets/water_background.dart';
 
+/// 最近一次「测连 OKX」结果，用于卡片展示（内存态，刷新页面后清空）。
+class _AccountTestSummary {
+  const _AccountTestSummary({
+    required this.at,
+    required this.connectionOk,
+    required this.configurationOk,
+    this.message,
+    this.instId,
+    this.targetLeverage,
+    this.balanceSummary,
+    this.okxUid,
+  });
+
+  final DateTime at;
+  final bool connectionOk;
+  final bool configurationOk;
+  final String? message;
+  final String? instId;
+  final String? targetLeverage;
+  final String? balanceSummary;
+  final String? okxUid;
+
+  static _AccountTestSummary fromApiMap(Map<String, dynamic> m) {
+    final ok = m['success'] == true;
+    if (!ok) {
+      return _AccountTestSummary(
+        at: DateTime.now(),
+        connectionOk: false,
+        configurationOk: false,
+        message: m['message']?.toString(),
+      );
+    }
+    final cfgOk = m['configuration_ok'] == true;
+    String? uid;
+    final ac = m['account_config'];
+    if (ac is Map) {
+      final u = ac['uid'];
+      if (u != null && '$u'.trim().isNotEmpty) uid = '$u';
+    }
+    return _AccountTestSummary(
+      at: DateTime.now(),
+      connectionOk: true,
+      configurationOk: cfgOk,
+      instId: m['inst_id_checked']?.toString(),
+      targetLeverage: m['target_leverage']?.toString(),
+      balanceSummary: m['balance_summary']?.toString(),
+      okxUid: uid,
+    );
+  }
+}
+
 /// 管理员维护 Account_List.json（侧栏「账号管理」）。
 class WebAccountConfigAdminScreen extends StatefulWidget {
   const WebAccountConfigAdminScreen({super.key, this.embedInShell = false});
@@ -26,6 +77,7 @@ class _WebAccountConfigAdminScreenState
   List<AccountConfigRow> _accounts = [];
   bool _loading = true;
   String? _error;
+  final Map<String, _AccountTestSummary> _testSummaryByAccountId = {};
 
   Future<void> _load() async {
     setState(() {
@@ -213,6 +265,68 @@ class _WebAccountConfigAdminScreenState
     }
   }
 
+  Widget _infoLine(BuildContext context, String label, String? value) {
+    final v = value?.trim();
+    if (v == null || v.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Text.rich(
+        TextSpan(
+          style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 12),
+          children: [
+            TextSpan(text: '$label：'),
+            TextSpan(
+              text: v,
+              style: TextStyle(color: AppFinanceStyle.valueColor),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _testSummaryBody(BuildContext context, _AccountTestSummary s) {
+    final base = AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 12);
+    if (!s.connectionOk) {
+      return Text(
+        s.message ?? '连接失败',
+        style: base.copyWith(color: Colors.red.shade200),
+      );
+    }
+    final cfgText = s.configurationOk ? '通过' : '未通过';
+    final cfgColor = s.configurationOk
+        ? AppFinanceStyle.profitGreenEnd
+        : Colors.orange.shade200;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text.rich(
+          TextSpan(
+            style: base,
+            children: [
+              const TextSpan(text: '连接：'),
+              TextSpan(
+                text: '成功',
+                style: TextStyle(color: AppFinanceStyle.profitGreenEnd),
+              ),
+              const TextSpan(text: '　配置检查：'),
+              TextSpan(text: cfgText, style: TextStyle(color: cfgColor)),
+            ],
+          ),
+        ),
+        if (s.instId != null && s.instId!.isNotEmpty)
+          Text(
+            '标的：${s.instId}　杠杆：${s.targetLeverage ?? '—'}x',
+            style: base,
+          ),
+        if (s.balanceSummary != null && s.balanceSummary!.isNotEmpty)
+          Text('余额：${s.balanceSummary}', style: base),
+        if (s.okxUid != null && s.okxUid!.isNotEmpty)
+          Text('OKX uid：${s.okxUid}', style: base),
+      ],
+    );
+  }
+
   InputDecoration _dec(BuildContext context, String label) {
     return InputDecoration(
       labelText: label,
@@ -230,6 +344,10 @@ class _WebAccountConfigAdminScreenState
       final api = ApiClient(baseUrl, token: token);
       final m = await api.adminTestAccountConnection(row.accountId);
       if (!mounted) return;
+      final summary = _AccountTestSummary.fromApiMap(m);
+      setState(() {
+        _testSummaryByAccountId[row.accountId] = summary;
+      });
       final ok = m['success'] == true;
       final cfgOk = m['configuration_ok'] == true;
       final warns = m['configuration_warnings'];
@@ -385,6 +503,11 @@ class _WebAccountConfigAdminScreenState
                     itemCount: _accounts.length,
                     itemBuilder: (ctx, i) {
                       final a = _accounts[i];
+                      final sum = _testSummaryByAccountId[a.accountId];
+                      final name = a.accountName?.trim();
+                      final titleLine = (name != null && name.isNotEmpty)
+                          ? '$name (${a.accountId})'
+                          : a.accountId;
                       return Padding(
                         padding: const EdgeInsets.only(bottom: 10),
                         child: FinanceCard(
@@ -393,54 +516,100 @@ class _WebAccountConfigAdminScreenState
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Expanded(
                                     child: Text(
-                                      a.accountId,
+                                      titleLine,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
                                       style: TextStyle(
                                         color: AppFinanceStyle.valueColor,
                                         fontWeight: FontWeight.w700,
+                                        fontSize: 15,
                                       ),
                                     ),
                                   ),
                                   if (!a.enabled)
-                                    Text(
-                                      '已禁用',
-                                      style: TextStyle(
-                                        color: AppFinanceStyle.labelColor,
-                                        fontSize: 12,
+                                    Padding(
+                                      padding: const EdgeInsets.only(left: 8),
+                                      child: Text(
+                                        '已禁用',
+                                        style: TextStyle(
+                                          color: AppFinanceStyle.labelColor,
+                                          fontSize: 12,
+                                        ),
                                       ),
                                     ),
                                 ],
                               ),
-                              if (a.accountName != null &&
-                                  a.accountName!.isNotEmpty)
-                                Text(
-                                  a.accountName!,
-                                  style: AppFinanceStyle.labelTextStyle(
-                                    context,
-                                  ),
-                                ),
-                              const SizedBox(height: 8),
+                              const SizedBox(height: 10),
                               Text(
-                                '${a.symbol} · ${a.accountKeyFile ?? ''}',
+                                '基本信息',
                                 style: AppFinanceStyle.labelTextStyle(
                                   context,
-                                ).copyWith(fontSize: 12),
+                                ).copyWith(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: 0.3,
+                                ),
                               ),
-                              const SizedBox(height: 10),
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
+                              const SizedBox(height: 4),
+                              _infoLine(context, '标的', a.symbol),
+                              _infoLine(context, '密钥文件', a.accountKeyFile),
+                              _infoLine(context, '脚本', a.scriptFile),
+                              _infoLine(context, '策略', a.tradingStrategy),
+                              _infoLine(
+                                context,
+                                '初始资金',
+                                a.initialCapital != null
+                                    ? '${a.initialCapital}'
+                                    : null,
+                              ),
+                              _infoLine(context, '交易所', a.exchangeAccount),
+                              if (sum != null) ...[
+                                const SizedBox(height: 10),
+                                Divider(
+                                  height: 1,
+                                  color: AppFinanceStyle.cardBorder
+                                      .withValues(alpha: 0.6),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  '测连验证（${sum.at.hour.toString().padLeft(2, '0')}:${sum.at.minute.toString().padLeft(2, '0')}）',
+                                  style: AppFinanceStyle.labelTextStyle(
+                                    context,
+                                  ).copyWith(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                _testSummaryBody(context, sum),
+                              ] else
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 6),
+                                  child: Text(
+                                    '尚未测连；点击下方「测连 OKX」后在此显示验证摘要',
+                                    style: AppFinanceStyle.labelTextStyle(
+                                      context,
+                                    ).copyWith(fontSize: 12),
+                                  ),
+                                ),
+                              const SizedBox(height: 12),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.center,
                                 children: [
                                   TextButton(
                                     onPressed: () => _openEditor(existing: a),
                                     child: const Text('编辑'),
                                   ),
+                                  const Spacer(),
                                   TextButton(
                                     onPressed: () => _test(a),
                                     child: const Text('测连 OKX'),
                                   ),
+                                  const SizedBox(width: 4),
                                   TextButton(
                                     onPressed: () => _delete(a),
                                     child: Text(

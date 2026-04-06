@@ -90,6 +90,39 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   final TextEditingController _noDropdownAccountController =
       TextEditingController();
 
+  String? get _trimmedInitialBotId {
+    final s = widget.initialBotId?.trim();
+    if (s == null || s.isEmpty) return null;
+    return s;
+  }
+
+  /// 若 [initialBotId] 不在列表中则前置占位项，保证下拉框 value 合法且与仪表盘点入的账户一致。
+  List<UnifiedTradingBot> _mergeInitialPlaceholder(
+    List<UnifiedTradingBot> bots,
+  ) {
+    final initial = _trimmedInitialBotId;
+    if (initial == null) return List<UnifiedTradingBot>.from(bots);
+    if (bots.any((b) => b.tradingbotId == initial)) {
+      return List<UnifiedTradingBot>.from(bots);
+    }
+    return [
+      UnifiedTradingBot(
+        tradingbotId: initial,
+        status: '',
+        canControl: false,
+        isTest: false,
+      ),
+      ...bots,
+    ];
+  }
+
+  String _pickBotIdForLoad(List<UnifiedTradingBot> bots) {
+    final initial = _trimmedInitialBotId;
+    if (initial != null) return initial;
+    if (bots.isNotEmpty) return bots.first.tradingbotId;
+    return _defaultBotId;
+  }
+
   /// 保持当前选中账户，拉取最新收益、曲线、持仓与赛季（用于定时刷新与下拉切换后的全量刷新）
   Future<void> _refreshLatestData() async {
     if (!mounted || _loading) return;
@@ -148,29 +181,14 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
       final api = ApiClient(baseUrl, token: token);
 
       // 优先 MainScreen 下发的列表；否则本页拉取（与账户管理同源）
-      List<UnifiedTradingBot> bots = List.from(widget.sharedBots);
+      List<UnifiedTradingBot> bots = _mergeInitialPlaceholder(
+        List.from(widget.sharedBots),
+      );
       if (bots.isEmpty) {
         final botsResp = await api.getTradingBots();
-        bots = botsResp.botList;
+        bots = _mergeInitialPlaceholder(botsResp.botList);
       }
-      final initial = widget.initialBotId?.trim();
-      if (initial != null && initial.isNotEmpty) {
-        final has = bots.any((b) => b.tradingbotId == initial);
-        if (!has) {
-          bots = [
-            UnifiedTradingBot(
-              tradingbotId: initial,
-              status: '',
-              canControl: false,
-              isTest: false,
-            ),
-            ...bots,
-          ];
-        }
-      }
-      final botId = (initial != null && initial.isNotEmpty)
-          ? initial
-          : (bots.isNotEmpty ? bots.first.tradingbotId : _defaultBotId);
+      final botId = _pickBotIdForLoad(bots);
 
       if (!mounted) return;
       // 阶段一：一有账户列表就结束全屏 loading，下拉框可立即显示
@@ -276,10 +294,10 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   @override
   void initState() {
     super.initState();
-    // 若父级已下发列表则先展示，再异步拉取收益等
+    // 若父级已下发列表则先展示，再异步拉取收益等（选中项与 initialBotId 对齐，避免先闪第一个账号）
     if (widget.sharedBots.isNotEmpty) {
-      _bots = List.from(widget.sharedBots);
-      _selectedBotId = _bots.first.tradingbotId;
+      _bots = _mergeInitialPlaceholder(List.from(widget.sharedBots));
+      _selectedBotId = _pickBotIdForLoad(_bots);
     }
     _load();
     _syncAutoRefreshTimer();
@@ -313,13 +331,13 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         _syncOkxTickerSubscription();
       }
     }
-    // MainScreen 异步加载完 bots 后下发，同步到本页以显示下拉框
+    // MainScreen 异步加载完 bots 后下发，同步到本页；须保留 initialBotId 占位，否则会退回第一个账号
     if (widget.sharedBots.isNotEmpty &&
         widget.sharedBots.length != _bots.length) {
-      _bots = List.from(widget.sharedBots);
+      _bots = _mergeInitialPlaceholder(List.from(widget.sharedBots));
       if (_selectedBotId == null ||
           !_bots.any((b) => b.tradingbotId == _selectedBotId)) {
-        _selectedBotId = _bots.first.tradingbotId;
+        _selectedBotId = _pickBotIdForLoad(_bots);
       }
       setState(() {});
     }

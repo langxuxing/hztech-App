@@ -290,6 +290,37 @@ class TestUsersApi:
         assert r2.status_code == 200
         assert r2.get_json().get("success") is True
 
+    def test_users_post_full_name_phone(self, client, auth_headers):
+        r = client.post(
+            "/api/users",
+            headers=auth_headers,
+            json={
+                "username": "tmp_user_profile_1",
+                "password": "secret12",
+                "role": "trader",
+                "full_name": "测试全名",
+                "phone": "13800138000",
+            },
+            content_type="application/json",
+        )
+        assert r.status_code == 200
+        u = (r.get_json() or {}).get("user") or {}
+        assert u.get("full_name") == "测试全名"
+        assert u.get("phone") == "13800138000"
+        uid = u.get("id")
+        assert uid
+        r2 = client.patch(
+            f"/api/users/{uid}",
+            headers=auth_headers,
+            json={"full_name": "新名字", "phone": ""},
+            content_type="application/json",
+        )
+        assert r2.status_code == 200
+        u2 = (r2.get_json() or {}).get("user") or {}
+        assert u2.get("full_name") == "新名字"
+        assert u2.get("phone") == ""
+        client.delete(f"/api/users/{uid}", headers=auth_headers)
+
     def test_users_cannot_demote_last_admin(self, client, auth_headers):
         r = client.get("/api/users", headers=auth_headers)
         aid = next(
@@ -390,6 +421,71 @@ class TestCustomerScope:
         bots = r.get_json().get("bots") or []
         ids = {b.get("tradingbot_id") for b in bots}
         assert ids == {"simpleserver-lhg"}
+
+    def test_customer_account_profit_filtered(self, client):
+        import hashlib
+
+        import db as tdb
+
+        tdb.user_create("cust_profit", hashlib.sha256(b"x").hexdigest())
+        conn = tdb.get_conn()
+        conn.execute(
+            "UPDATE users SET role = ?, linked_account_ids = ? WHERE LOWER(username) = LOWER(?)",
+            ("customer", '["simpleserver-lhg"]', "cust_profit"),
+        )
+        conn.commit()
+        conn.close()
+        lr = client.post(
+            "/api/login",
+            json={"username": "cust_profit", "password": "x"},
+            content_type="application/json",
+        )
+        assert lr.status_code == 200
+        tok = lr.get_json()["token"]
+        h = {"Authorization": f"Bearer {tok}"}
+        r = client.get("/api/account-profit", headers=h)
+        assert r.status_code == 200
+        data = r.get_json()
+        assert data.get("success") is True
+        accounts = data.get("accounts") or []
+        ids = {
+            (a.get("bot_id") or a.get("account_id") or "").strip() for a in accounts
+        }
+        ids.discard("")
+        assert ids <= {"simpleserver-lhg"}
+
+    def test_customer_strategy_status_filtered_when_authenticated(self, client):
+        import hashlib
+
+        import db as tdb
+
+        tdb.user_create("cust_st", hashlib.sha256(b"x").hexdigest())
+        conn = tdb.get_conn()
+        conn.execute(
+            "UPDATE users SET role = ?, linked_account_ids = ? WHERE LOWER(username) = LOWER(?)",
+            ("customer", '["simpleserver-lhg"]', "cust_st"),
+        )
+        conn.commit()
+        conn.close()
+        lr = client.post(
+            "/api/login",
+            json={"username": "cust_st", "password": "x"},
+            content_type="application/json",
+        )
+        assert lr.status_code == 200
+        tok = lr.get_json()["token"]
+        h = {"Authorization": f"Bearer {tok}"}
+        r0 = client.get("/api/strategy/status")
+        assert r0.status_code == 200
+        full_bots = set((r0.get_json() or {}).get("bots") or {})
+        r = client.get("/api/strategy/status", headers=h)
+        assert r.status_code == 200
+        data = r.get_json()
+        cust_bots = set(data.get("bots") or {})
+        assert cust_bots <= full_bots
+        assert cust_bots <= {"simpleserver-lhg"}
+        if "simpleserver-hztech" in full_bots:
+            assert "simpleserver-hztech" not in cust_bots
 
 
 class TestCustomerAccountSetupApi:

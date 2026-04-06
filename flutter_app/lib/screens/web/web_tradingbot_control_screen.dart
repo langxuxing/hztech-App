@@ -1290,9 +1290,9 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                   ),
                 ],
               ),
-              const SizedBox(height: 24),
+              const SizedBox(height: 18),
 
-              Text('赛季状态', style: labelStyle),
+              Text('赛季状态', style: labelStyle), //赛季控制
               const SizedBox(height: 6),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.baseline,
@@ -1330,7 +1330,6 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                     crossAxisAlignment: CrossAxisAlignment.start,
 
                     children: [
-                      SizedBox(height: 12),
                       Text(
                         '赛季控制',
                         style: Theme.of(context).textTheme.labelMedium
@@ -1340,7 +1339,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                               letterSpacing: 0.35,
                             ),
                       ),
-                      const SizedBox(height: 24),
+                      const SizedBox(height: 18),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [

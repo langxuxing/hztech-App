@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# 本地启动：单进程同时提供 REST API（/api/*）与 Flutter Web 静态站（默认端口 8080）
+# 本地启动（默认与线上一致）：
+#   · API 进程：9001，HZTECH_API_ONLY=1（/api/*、/kline/*）
+#   · Web 进程：9000，HZTECH_STATIC_ONLY=1（Flutter Web、/download、/res 等）
+# 单进程（API+Web 同口）：HZTECH_LOCAL_UNIFIED_PORT=1，端口由 PORT / WEB_PORT（默认 9001）
 # 在项目根目录执行：./server/run_local.sh
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -12,8 +15,6 @@ if ! python3 -c "import jwt" 2>/dev/null; then
   python3 -m pip install -r "$SCRIPT_DIR/requirements.txt" || exit 1
 fi
 
-PORT="${PORT:-${WEB_PORT:-8080}}"
-
 _hztech_lan_ip() {
   local ip=""
   if [[ "$(uname -s)" == "Darwin" ]]; then
@@ -25,18 +26,58 @@ _hztech_lan_ip() {
 }
 _LAN=$(_hztech_lan_ip)
 
-echo "=== 本地启动（API + Flutter Web，端口 $PORT）==="
-echo "  【浏览器 / 本机 Web】打开: http://127.0.0.1:$PORT/"
-echo "  【手机 App 连本机 API】与浏览器不同 — 127.0.0.1 在手机上指手机自身："
-echo "      · Android 模拟器: http://10.0.2.2:$PORT/"
-if [[ -n "$_LAN" ]]; then
-  echo "      · 真机（同一局域网）: http://${_LAN}:$PORT/"
-else
-  echo "      · 真机（同一局域网）: http://<电脑局域网IP>:$PORT/"
+UNIFIED="${HZTECH_LOCAL_UNIFIED_PORT:-0}"
+API_PORT="${HZTECH_LOCAL_API_PORT:-9001}"
+WEB_PORT="${HZTECH_LOCAL_WEB_PORT:-9000}"
+
+if [[ "$UNIFIED" == "1" ]]; then
+  PORT="${PORT:-${WEB_PORT:-9001}}"
+  echo "=== 本地启动（单进程 API + Web，端口 $PORT）==="
+  echo "  【浏览器 / 本机 Web】http://127.0.0.1:$PORT/"
+  echo "  【App API 基址】http://127.0.0.1:$PORT/（与同端口）"
+  echo "      · Android 模拟器: http://10.0.2.2:$PORT/"
+  if [[ -n "$_LAN" ]]; then
+    echo "      · 真机: http://${_LAN}:$PORT/"
+  else
+    echo "      · 真机: http://<电脑局域网IP>:$PORT/"
+  fi
+  echo "  按 Ctrl+C 停止"
+  echo ""
+  exec env PORT="$PORT" python3 server/main.py
 fi
-echo "  App 内「设置」或登录前可填上述地址；路径仍为 /api/..."
-echo "  若未执行过 flutter build web，首页会提示构建命令；API 仍可用。"
-echo "  按 Ctrl+C 停止"
+
+_API_PID=""
+_WEB_PID=""
+cleanup() {
+  [[ -n "$_API_PID" ]] && kill "$_API_PID" 2>/dev/null || true
+  [[ -n "$_WEB_PID" ]] && kill "$_WEB_PID" 2>/dev/null || true
+}
+trap 'cleanup; exit 130' INT TERM
+trap cleanup EXIT
+
+echo "=== 本地启动（API $API_PORT + Web $WEB_PORT，与 AWS 分拆一致）==="
+echo "  【浏览器 / Flutter Web】http://127.0.0.1:$WEB_PORT/"
+echo "  【App / 登录 API 基址】http://127.0.0.1:$API_PORT/"
+echo "      · Android 模拟器 API: http://10.0.2.2:$API_PORT/"
+if [[ -n "$_LAN" ]]; then
+  echo "      · 真机 API: http://${_LAN}:$API_PORT/"
+else
+  echo "      · 真机 API: http://<电脑局域网IP>:$API_PORT/"
+fi
+echo "  单进程模式: HZTECH_LOCAL_UNIFIED_PORT=1 $0"
+echo "  按 Ctrl+C 停止两个进程"
 echo ""
 
-exec env PORT=$PORT python3 server/main.py
+env HZTECH_API_ONLY=1 PORT="$API_PORT" python3 server/main.py &
+_API_PID=$!
+
+env HZTECH_STATIC_ONLY=1 PORT="$WEB_PORT" python3 server/main.py &
+_WEB_PID=$!
+
+set +e
+wait "$_API_PID"
+_API_ST=$?
+wait "$_WEB_PID"
+_WEB_ST=$?
+set -e
+exit $((_API_ST || _WEB_ST))

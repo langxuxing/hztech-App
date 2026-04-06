@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# 本地部署：1) 构建 Flutter APK 与 Web  2) 启动单进程服务（API + Flutter Web，默认 8080）
+# 本地部署：1) 构建 Flutter APK 与 Web  2) 启动单进程服务（API + Flutter Web，默认 9001，与 App API 约定一致；AWS 分拆时 Web 为 9000）
 # 依赖：Flutter/Android 环境（构建 APK 时需要）；无 AWS/SSH
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR"
 cd "$PROJECT_ROOT"
 
-export PORT="${PORT:-${WEB_PORT:-8080}}"
+# run_local.sh 默认双进程 API 9001 + Web 9000；若需单进程可 export HZTECH_LOCAL_UNIFIED_PORT=1
+export HZTECH_LOCAL_API_PORT="${HZTECH_LOCAL_API_PORT:-${PORT:-9001}}"
+export HZTECH_LOCAL_WEB_PORT="${HZTECH_LOCAL_WEB_PORT:-9000}"
 # 本地 release 包默认连本机 API（与 ./server/run_local.sh 端口一致）；可覆盖或改用 HZTECH_API_BASE_URL=
 export FLUTTER_DART_DEFINE_FILE="${FLUTTER_DART_DEFINE_FILE:-flutter_app/dart_defines/local.json}"
 
@@ -40,14 +42,14 @@ _hztech_lan_ip() {
 _LAN=$(_hztech_lan_ip)
 
 echo ""
-echo "=== 4/4 启动服务（端口 $PORT：/api/* + /）==="
-echo "  【浏览器 / 本机 Web】http://127.0.0.1:${PORT}/"
-echo "  【手机 App 后端基址】勿填 127.0.0.1（在手机上不是电脑）："
-echo "      · Android 模拟器: http://10.0.2.2:${PORT}/"
+echo "=== 4/4 启动服务（API ${HZTECH_LOCAL_API_PORT} + Web ${HZTECH_LOCAL_WEB_PORT}）==="
+echo "  【浏览器 / Flutter Web】http://127.0.0.1:${HZTECH_LOCAL_WEB_PORT}/"
+echo "  【手机 App API 基址】勿填 127.0.0.1（在手机上不是电脑）："
+echo "      · Android 模拟器: http://10.0.2.2:${HZTECH_LOCAL_API_PORT}/"
 if [[ -n "$_LAN" ]]; then
-  echo "      · 真机: http://${_LAN}:${PORT}/"
+  echo "      · 真机: http://${_LAN}:${HZTECH_LOCAL_API_PORT}/"
 else
-  echo "      · 真机: http://<本机局域网IP>:${PORT}/"
+  echo "      · 真机: http://<本机局域网IP>:${HZTECH_LOCAL_API_PORT}/"
 fi
 echo "  按 Ctrl+C 停止"
 echo "  调试：已开启 FLASK_DEBUG 与 LOG_LEVEL=DEBUG"

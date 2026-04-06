@@ -1,16 +1,46 @@
-# OKX API 凭证，勿提交
+# =============================================================================
+# 敏感数据与本地持久化（勿提交）
+# =============================================================================
 **/okx.json
 src/res/okx.json
-# 后台账号 API 配置（server/Accounts/ 下敏感文件）
 server/Accounts/account_api.json
-# shell 策略 PID（由 tradingbot_ctrl 写入）
 server/Accounts/.bot_run/
+server/sqlite/
+server/data.db
 
-# Android
+# =============================================================================
+# Python（server、test）
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+.env
+.env.*
+!.env.example
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+*.egg-info/
+.eggs/
+dist/
+
+# =============================================================================
+# Flutter / Android（仓库内任意路径）
+# =============================================================================
 *.iml
 .gradle/
 local.properties
-.idea/
 build/
 *.apk
 *.aab
@@ -18,14 +48,14 @@ build/
 *.dex
 .keychain
 
-# 通用
-.DS_Store
-*.log
-.temp-cursor/
 # Flutter web：OKX 1m 标记价格 K 线同步 JSON（由 server kline_web_sync 生成）
 flutter_app/web/kline/*.json
 
-# 服务端 sqlite 持久化（用户/配置/日志）
-server/sqlite/
-# 已废弃，现用 server/sqlite/tradingbots.db
-server/data.db
+# =============================================================================
+# 通用
+# =============================================================================
+.DS_Store
+Thumbs.db
+*.log
+.temp-cursor/
+.idea/

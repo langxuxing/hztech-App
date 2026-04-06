@@ -990,6 +990,6 @@ if __name__ == "__main__":
     atexit.register(_app_on_stop)
     signal.signal(signal.SIGTERM, _app_on_stop_signal)
     signal.signal(signal.SIGINT, _app_on_stop_signal)
-    # 单进程同时提供 /api/* 与 Flutter Web 静态资源；端口由环境变量 PORT 指定（默认 8080）
-    port = int(os.environ.get("PORT", 8080))
+    # 单进程同时提供 /api/* 与 Flutter Web 静态资源；端口由环境变量 PORT 指定（默认 9001）
+    port = int(os.environ.get("PORT", 9001))
     app.run(host="0.0.0.0", port=port, debug=os.environ.get("FLASK_DEBUG", "0") == "1")
