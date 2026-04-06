@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Ops 一键部署：1) 构建 Flutter Android APK +（macOS）iOS IPA  2) 同步 webserver + apk/ + ipa/ + Web 到 AWS  3) 重启 AWS 后台服务
-# 依赖：server/deploy-aws.json、本机可 SSH 到 AWS、Flutter/Android 环境；IPA 需 macOS + Xcode（失败不阻断，以 APK 成功为准；可 export HZTECH_SKIP_IOS_BUILD=1 跳过 IPA）
+# Ops 一键部署：1) 默认同时构建 Flutter Android release APK 与（macOS 上）iOS release IPA
+#             2) 同步 webserver + apk/ + ipa/ + Web 到 AWS  3) 重启 AWS 后台服务
+# 依赖：server/deploy-aws.json、本机可 SSH 到 AWS、Flutter/Android；IPA 需 macOS + Xcode + 签名
+# 默认：在 macOS 上 APK 与 IPA 均须成功，脚本才会继续；仅打 Android 时：export HZTECH_SKIP_IOS_BUILD=1
 #
 # 双机 AWS（密钥路径见 server/deploy-aws.json）：
 #   API 后端  54.66.108.150  /home/ec2-user/Apiserver   密钥 hztech.pem

@@ -76,13 +76,38 @@ def _parse_enabled(value: object) -> bool:
     return _test_account_key()._parse_enabled(value)
 
 
+def _account_row_enabled(row: dict) -> bool:
+    """与 test_account_key.account_row_is_enabled 一致：优先 enbaled，其次 enabled。"""
+    return _test_account_key().account_row_is_enabled(row)
+
+
+def okx_account_disabled_exchange_reason(account_id: str) -> str | None:
+    """
+    Account_List 中该 account_id 若为 OKX 且 enbaled=false，返回说明文案；
+    各定时任务与实时接口据此拒绝访问 OKX（测连、持仓、委托、余额等）。
+    未出现在列表或非 OKX 行则返回 None。
+    """
+    aid = str(account_id or "").strip()
+    if not aid:
+        return None
+    for row in load_account_list():
+        if str(row.get("account_id") or "").strip() != aid:
+            continue
+        if (row.get("exchange_account") or "").strip().upper() != "OKX":
+            return None
+        if not _account_row_enabled(row):
+            return "账户已在 Account_List 中禁用（enbaled/enabled 为 false），不进行 OKX 请求"
+        return None
+    return None
+
+
 def iter_okx_accounts(*, enabled_only: bool = True) -> list[dict]:
     """OKX 账户行（来自 Account_List），含 account_id、account_name、symbol、密钥文件名等。"""
     rows: list[dict] = []
     for row in load_account_list():
         if (row.get("exchange_account") or "").strip().upper() != "OKX":
             continue
-        if enabled_only and not _parse_enabled(row.get("enbaled")):
+        if enabled_only and not _account_row_enabled(row):
             continue
         aid = str(row.get("account_id") or "").strip()
         if not aid:
@@ -151,7 +176,7 @@ def account_basic_dict(row: dict) -> dict[str, Any]:
         "trading_strategy": (row.get("trading_strategy") or "").strip(),
         "account_key_file": (row.get("account_key_file") or "").strip(),
         "script_file": (row.get("script_file") or "").strip(),
-        "enabled": _parse_enabled(row.get("enbaled")),
+        "enabled": _account_row_enabled(row),
     }
 
 
@@ -261,6 +286,9 @@ def backfill_account_snapshots_from_okx_bills(
     aid = str(account_id or "").strip()
     if not aid:
         return 0, "缺少 account_id"
+    br = okx_account_disabled_exchange_reason(aid)
+    if br:
+        return 0, br
     path = resolve_okx_config_path(aid)
     if not path or not path.is_file():
         return 0, "无密钥"
@@ -370,6 +398,9 @@ def refresh_balance_snapshot_one(
     aid = str(account_id or "").strip()
     if not aid:
         return False, "缺少 account_id"
+    br = okx_account_disabled_exchange_reason(aid)
+    if br:
+        return False, br
     path = resolve_okx_config_path(aid)
     if not path or not path.is_file():
         return False, "未找到密钥配置"
@@ -552,7 +583,7 @@ def refresh_all_positions_history(
     db_module: Any, logger: logging.Logger | None = None
 ) -> None:
     """
-    拉取 Account_List 中全部 OKX 账户（含 enbaled=false）的 positions-history：
+    拉取 Account_List 中已启用（enbaled=true）OKX 账户的 positions-history：
     SWAP + FUTURES 合并去重、深分页写入 account_positions_history；
     最后按账户重算 account_daily_close_performance。
     与 refresh_all_snapshots 同周期调用即可（建议每 5 分钟）。
@@ -561,7 +592,7 @@ def refresh_all_positions_history(
     import exchange.okx as okx_mod
 
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    for row in iter_okx_accounts(enabled_only=False):
+    for row in iter_okx_accounts(enabled_only=True):
 
         aid = str(row.get("account_id") or "").strip()
         path = resolve_okx_config_path(aid)
@@ -620,6 +651,9 @@ def refresh_positions_history_one(
     aid = str(account_id or "").strip()
     if not aid:
         return False, "缺少 account_id"
+    br = okx_account_disabled_exchange_reason(aid)
+    if br:
+        return False, br
     path = resolve_okx_config_path(aid)
     if not path:
         return False, "未找到密钥配置"
@@ -663,6 +697,8 @@ def refresh_positions_history_one(
 def fetch_balance_live(account_id: str) -> dict | None:
     import exchange.okx as okx_mod
 
+    if okx_account_disabled_exchange_reason(account_id):
+        return None
     path = resolve_okx_config_path(account_id)
     if not path:
         return None
@@ -672,6 +708,9 @@ def fetch_balance_live(account_id: str) -> dict | None:
 def fetch_positions_live(account_id: str) -> tuple[list[dict], str | None]:
     import exchange.okx as okx_mod
 
+    br = okx_account_disabled_exchange_reason(account_id)
+    if br:
+        return ([], br)
     path = resolve_okx_config_path(account_id)
     if not path:
         return ([], "账户未配置或密钥文件不存在")
@@ -687,6 +726,9 @@ def fetch_ticker_for_inst(inst_id: str) -> float | None:
 def fetch_pending_orders_live(account_id: str) -> tuple[list[dict], str | None]:
     import exchange.okx as okx_mod
 
+    br = okx_account_disabled_exchange_reason(account_id)
+    if br:
+        return ([], br)
     path = resolve_okx_config_path(account_id)
     if not path:
         return ([], "账户未配置或密钥文件不存在")

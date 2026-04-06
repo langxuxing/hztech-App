@@ -280,7 +280,7 @@ def build_ios_flutter() -> bool:
 
     - 非 macOS：跳过（打印说明），返回 False。
     - 设置 HZTECH_SKIP_IOS_BUILD=1 时跳过。
-    - 构建失败（签名等）时返回 False，不中断 Android 流程；由 build 入口统一处理退出码。
+    - 构建失败（签名等）时返回 False。build 入口在 macOS 且未设 HZTECH_SKIP_IOS_BUILD 时与 APK 一并要求成功。
     """
     if os.environ.get("HZTECH_SKIP_IOS_BUILD", "").strip().lower() in (
         "1",
@@ -357,6 +357,26 @@ def build_web_flutter():
         return False
     print("Flutter Web 已生成: %s" % idx)
     return True
+
+
+def run_build_mobile() -> int:
+    """构建 Android release APK +（macOS 默认）iOS release IPA。成功返回 0，失败返回 1。
+
+    仅打 Android：export HZTECH_SKIP_IOS_BUILD=1
+    非 macOS：只校验 APK。
+    """
+    apk_ok = build_apk()
+    ios_skipped = os.environ.get("HZTECH_SKIP_IOS_BUILD", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    ios_ok = build_ios_flutter()
+    if not apk_ok:
+        return 1
+    if sys.platform == "darwin" and not ios_skipped and not ios_ok:
+        return 1
+    return 0
 
 
 def build_apk():
@@ -516,9 +536,7 @@ def deploy_and_start(port=None, start_server=True):
 if __name__ == "__main__":
     cfg = load_config()
     if len(sys.argv) > 1 and sys.argv[1] == "build":
-        apk_ok = build_apk()
-        build_ios_flutter()
-        sys.exit(0 if apk_ok else 1)
+        sys.exit(run_build_mobile())
     if len(sys.argv) > 1 and sys.argv[1] == "build-ios":
         ok = build_ios_flutter()
         sys.exit(0 if ok else 1)
@@ -529,8 +547,9 @@ if __name__ == "__main__":
         start = "--no-start" not in sys.argv
         do_build = "--build" in sys.argv
         if do_build:
-            build_apk()
-            build_ios_flutter()
+            rc = run_build_mobile()
+            if rc != 0:
+                sys.exit(rc)
         if "--build-web" in sys.argv:
             build_web_flutter()
         deploy_and_start(port=int(cfg.get("web_port", cfg.get("port", 9000))), start_server=start)

@@ -987,14 +987,17 @@ class AccountConfigRow {
   });
 
   factory AccountConfigRow.fromJson(Map<String, dynamic> json) {
-    final en = json['enbaled'];
+    dynamic raw = json['enbaled'];
+    if (raw == null && json.containsKey('enabled')) {
+      raw = json['enabled'];
+    }
     bool ev = true;
-    if (en is bool) {
-      ev = en;
-    } else if (en is num) {
-      ev = en != 0;
-    } else if (en is String) {
-      ev = !['false', '0', 'no'].contains(en.toLowerCase());
+    if (raw is bool) {
+      ev = raw;
+    } else if (raw is num) {
+      ev = raw != 0;
+    } else if (raw is String) {
+      ev = !['false', '0', 'no'].contains(raw.toLowerCase());
     }
     return AccountConfigRow(
       accountId: json['account_id'] as String? ?? '',

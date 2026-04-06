@@ -423,6 +423,9 @@ def _okx_account_test_http_response(account_id: str):
     row = _account_list_store.get_account(aid)
     if not row:
         return jsonify({"success": False, "message": "未找到"}), 404
+    dis = _account_mgr.okx_account_disabled_exchange_reason(aid)
+    if dis:
+        return jsonify({"success": False, "message": dis}), 400
     path = _account_mgr.resolve_okx_key_write_path(aid)
     if path is None:
         return (
@@ -569,6 +572,8 @@ def _resolve_okx_config_path(bot_or_account_id: str) -> Path | None:
 
 def _live_equity_cash_for_bot(bot_id: str) -> tuple[float, float]:
     """当前 OKX 权益与可用现金（赛季/停盘写库用）。"""
+    if _account_mgr.okx_account_disabled_exchange_reason(bot_id):
+        return 0.0, 0.0
     path = _resolve_okx_config_path(bot_id)
     if not path or not path.is_file():
         return 0.0, 0.0
@@ -960,7 +965,7 @@ def _collect_accounts_profit() -> list[dict]:
     fetch_extra: list[tuple[str, Path]] = []
     for _b, bid in extras:
         cp = _bot_okx_config_path(bid)
-        if cp:
+        if cp and not _account_mgr.okx_account_disabled_exchange_reason(bid):
             fetch_extra.append((bid, cp))
     if fetch_extra:
 
@@ -1474,6 +1479,16 @@ def api_bot_positions(bot_id):
         "H1",
     )
     # #endregion
+    dis = _account_mgr.okx_account_disabled_exchange_reason(bot_id)
+    if dis:
+        return jsonify(
+            {
+                "success": True,
+                "bot_id": bot_id,
+                "positions": [],
+                "positions_error": dis,
+            }
+        )
     config_path = _resolve_okx_config_path(bot_id)
     # #region agent log
     _debug_log(
@@ -1611,6 +1626,9 @@ def api_bot_balance_snapshot_sync(bot_id):
     if denied:
         return denied
     bid = (bot_id or "").strip()
+    dis = _account_mgr.okx_account_disabled_exchange_reason(bid)
+    if dis:
+        return jsonify({"success": False, "bot_id": bid, "message": dis}), 400
     path = _resolve_okx_config_path(bid)
     if not path or not path.is_file():
         return (
@@ -1701,6 +1719,16 @@ def api_bot_pending_orders(bot_id):
     denied = _customer_bot_forbidden(bot_id)
     if denied:
         return denied
+    dis = _account_mgr.okx_account_disabled_exchange_reason(bot_id)
+    if dis:
+        return jsonify(
+            {
+                "success": True,
+                "bot_id": bot_id,
+                "orders": [],
+                "orders_error": dis,
+            }
+        )
     config_path = _resolve_okx_config_path(bot_id)
     if not config_path:
         return jsonify(
@@ -1731,7 +1759,7 @@ def api_bot_ticker(bot_id):
         return denied
     inst_id = (request.args.get("inst_id") or "").strip()
     if not inst_id:
-        for row in _account_mgr.iter_okx_accounts(enabled_only=False):
+        for row in _account_mgr.iter_okx_accounts(enabled_only=True):
             if str(row.get("account_id") or "").strip() == bot_id:
                 inst_id = (row.get("symbol") or "").strip()
                 break

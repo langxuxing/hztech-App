@@ -32,10 +32,25 @@ def _parse_enabled(value: object) -> bool:
     if value is False or value == 0:
         return False
     if isinstance(value, str):
-        return value.strip().lower() in ("true", "1", "yes")
+        s = value.strip().lower()
+        if s in ("false", "0", "no", ""):
+            return False
+        return s in ("true", "1", "yes")
     if value is None:
         return True
     return bool(value)
+
+
+def account_row_is_enabled(row: dict) -> bool:
+    """
+    Account_List 单行是否视为启用。
+    优先读 enbaled（历史拼写），否则读 enabled；两键均未出现时视为 True（兼容老数据）。
+    """
+    if "enbaled" in row:
+        return _parse_enabled(row.get("enbaled"))
+    if "enabled" in row:
+        return _parse_enabled(row.get("enabled"))
+    return True
 
 
 def load_account_list() -> list[dict]:
@@ -91,7 +106,7 @@ def iter_okx_test_jobs(
         aid = str(row.get("account_id") or "").strip()
         if want_id and aid != want_id:
             continue
-        if enabled_only and not _parse_enabled(row.get("enbaled")):
+        if enabled_only and not account_row_is_enabled(row):
             continue
         key_name = (row.get("account_key_file") or "").strip()
         if not key_name:

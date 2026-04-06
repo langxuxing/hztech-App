@@ -147,3 +147,34 @@ class TestMainAccountMgrE2E:
                 assert "未找到" in err or "配置" in err or "密钥" in err, (
                     f"aid={aid} expected config error hint, got {data!r}"
                 )
+
+    def test_disabled_okx_account_positions_skips_exchange(
+        self, client, auth_headers
+    ):
+        """enbaled=false 的 Account_List OKX 账户：持仓接口不访问 OKX，返回禁用说明。"""
+        from Accounts import AccountMgr as am
+
+        disabled_id = None
+        for row in am.load_account_list():
+            if (row.get("exchange_account") or "").strip().upper() != "OKX":
+                continue
+            en = row.get("enbaled")
+            if en is False or (
+                isinstance(en, str) and en.strip().lower() in ("false", "0", "no")
+            ):
+                disabled_id = str(row.get("account_id") or "").strip() or None
+                break
+        if not disabled_id:
+            pytest.skip("Account_List 中无禁用的 OKX 账户")
+
+        enc = quote(disabled_id, safe="")
+        r = client.get(
+            f"/api/tradingbots/{enc}/positions",
+            headers=auth_headers,
+        )
+        assert r.status_code == 200
+        data = r.get_json()
+        assert data.get("success") is True
+        assert data.get("positions") == []
+        err = data.get("positions_error") or ""
+        assert "禁用" in err
