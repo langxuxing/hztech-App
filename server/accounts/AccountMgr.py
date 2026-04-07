@@ -7,11 +7,13 @@
 positions / profit-history / ticker / pending-orders 等通过本模块解析密钥与账户元数据。
 
 定时任务由 main 每 5 分钟调用，写入 SQLite：
-- 现金余额（avail_eq）、权益（total_eq）→ account_balance_snapshots（Account_List）；tradingbots.json → tradingbot_profit_snapshots
+- account_balance_snapshots：cash_balance=USDT 资产余额(cashBal)，available_margin=可用保证金(availEq)，used_margin=占用；equity_usdt=权益
+- （已弃用 tradingbots.json；盈亏快照以 account_balance_snapshots 为准）
 - OKX 当前持仓（每合约一行：多/空各计一条仓位腿 open_leg_count，张数与分项/合计未实现盈亏）→ account_open_positions_snapshots
-- 管理员「余额同步」可对缺日调用 OKX bills-archive（USDT bal）补全 account_balance_snapshots；权益按最近快照 equity/cash 比例估算
+- 定时余额写入后：按账户节流（默认至多每小时）检测近 92 日 UTC 是否缺日，若有则调 OKX bills-archive（USDT bal）补全 account_balance_snapshots；权益按最近快照 equity/可用保证金 比例估算；补全插入后重算相关账户的 account_daily_performance
 - 多时点快照经 strategy_efficiency.daily_cash_delta_by_utc_day 汇总为 UTC 自然日现金增量，再算现金收益率%、策略能效
-- OKX 历史仓位 → account_positions_history（SWAP+FUTURES 合并去重，深分页；自库内最大 uTime 起向前重叠 60s 增量拉取）；
+- OKX 历史仓位 → account_positions_history（SWAP+FUTURES 合并去重，深分页；自库内最大 uTime 起向前重叠 60s 增量拉取；
+  统计口径与接口一致：时间用 uTime 平仓/更新时刻，非 cTime；净盈亏优先 realizedPnl）；
   再汇总写入 account_daily_performance（按 UTC 日平仓净盈亏、权益口径日收益率%、对标合约 TR 的策略能效）
 - 各账户静态字段（与 SQLite account_list 同步）；UTC 每月 1 日 00:10 定时任务写入 account_month_open（不再由余额同步顺带插入）
 """
@@ -19,6 +21,7 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -32,6 +35,9 @@ ACCOUNTS_DIR = Path(__file__).resolve().parent
 _LOG_ACCOUNT_COL_WIDTH = 20
 # 历史仓位增量拉取：以库内最大 uTime 为基准再向前重叠，避免漏单与重复全量分页
 _POSITIONS_HISTORY_OVERLAP_MS = 60_000
+_BILLS_BACKFILL_MIN_INTERVAL_SEC = 3600.0
+_BILLS_BACKFILL_LOOKBACK_DAYS = 92
+_last_okx_bills_backfill_monotonic: dict[str, float] = {}
 
 
 def _fmt_log_account_id(account_id: str, width: int = _LOG_ACCOUNT_COL_WIDTH) -> str:
@@ -186,6 +192,33 @@ def _initial_capital(row: dict) -> float:
         return 0.0
 
 
+def _okx_balance_amounts(live: dict) -> tuple[float, float, float, float]:
+    """OKX 聚合：权益、USDT 资产余额 cashBal、可用保证金 availEq、占用。"""
+    eq = float(live.get("equity_usdt") or live.get("total_eq") or 0.0)
+    cash_bal = float(live.get("cash_balance") or 0.0)
+    avail = float(live.get("available_margin") or live.get("avail_eq") or 0.0)
+    used = float(live.get("used_margin") or 0.0)
+    return eq, cash_bal, avail, used
+
+
+def profit_vs_initial(initial: float, equity_usdt: float) -> tuple[float, float]:
+    """权益相对期初 account_list.initial_capital：收益额、收益率%。"""
+    ini = float(initial)
+    pa = float(equity_usdt) - ini
+    if abs(ini) <= 1e-18:
+        return pa, 0.0
+    return pa, pa / ini * 100.0
+
+
+def cash_profit_vs_initial(initial: float, cash_balance: float) -> tuple[float, float]:
+    """USDT 资产余额（OKX cashBal）相对期初：收益额、收益率%。"""
+    ini = float(initial)
+    pa = float(cash_balance) - ini
+    if abs(ini) <= 1e-18:
+        return pa, 0.0
+    return pa, pa / ini * 100.0
+
+
 def account_basic_dict(row: dict) -> dict[str, Any]:
     """账户静态信息（不含密钥）。"""
     aid = str(row.get("account_id") or "").strip()
@@ -218,7 +251,7 @@ def account_list_row_by_id(account_id: str) -> dict[str, Any] | None:
 
 
 def is_account_disabled_in_account_list(account_id: str) -> bool:
-    """若在 Account_List 中存在且 enbaled/enabled/enable 为关闭，则 True（用于合并 tradingbots.json 时排除）。"""
+    """若在 Account_List 中存在且 enbaled/enabled/enable 为关闭，则 True。"""
     row = account_list_row_by_id(account_id)
     if row is None:
         return False
@@ -287,31 +320,37 @@ def run_account_month_open_rollover(
                 },
             )
             continue
-        total_eq = float(live.get("equity_usdt") or live.get("total_eq") or 0.0)
-        cash = float(live.get("cash_balance") or live.get("avail_eq") or 0.0)
+        total_eq, cash_bal, avail_eq, used_m = _okx_balance_amounts(live)
         db_module.account_month_open_upsert(
-            aid, ym, total_eq, ts, open_cash=cash
+            aid, ym, total_eq, ts, initial_balance=cash_bal
         )
         log.info(
-            "account_month_open: %s ym=%s equity=%s cash=%s",
+            "account_month_open: %s ym=%s equity=%s cash_bal=%s avail=%s used=%s",
             _fmt_log_account_id(aid),
             ym,
             int(round(total_eq)),
-            int(round(cash)),
+            int(round(cash_bal)),
+            int(round(avail_eq)),
+            int(round(used_m)),
         )
 
 
 def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None = None) -> None:
     """
     拉取各 OKX 账户余额并写入 account_balance_snapshots。
-    当月月初 open_equity/open_cash 由 UTC 每月 1 日 00:10 定时任务写入 account_month_open。
+    当月月初 open_equity / initial_balance（原 open_cash）由 UTC 每月 1 日 00:10 定时任务写入 account_month_open。
     应在定时器内调用（建议每 5 分钟）。
+
+    每个成功拉取余额的账户：至多每小时检测近 92 个 UTC 自然日是否缺快照行；有缺则调
+    bills-archive 补全。若某账户本次补全有新插入，周期末会对这些账户重算
+    account_daily_performance（同一周期内后续 refresh_all_positions_history 仍会全量重建 ADP，结果一致）。
     """
     log = logger or logging.getLogger(__name__)
     import exchange.okx as okx_mod
 
     sync_account_list_from_json(db_module)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    accounts_adp: set[str] = set()
 
     for row in iter_okx_accounts(enabled_only=True):
         aid = str(row.get("account_id") or "").strip()
@@ -336,26 +375,60 @@ def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None 
             )
             continue
 
-        total_eq = float(live.get("equity_usdt") or live.get("total_eq") or 0.0)
-        cash = float(live.get("cash_balance") or live.get("avail_eq") or 0.0)
-        profit_amount = total_eq - initial
-        profit_percent = (profit_amount / initial * 100.0) if initial else 0.0
+        total_eq, cash_bal, avail_eq, used_m = _okx_balance_amounts(live)
+        profit_amount, profit_percent = profit_vs_initial(initial, total_eq)
+        cash_profit_amount, cash_profit_percent = cash_profit_vs_initial(
+            initial, cash_bal
+        )
 
         db_module.account_snapshot_insert(
             account_id=aid,
             snapshot_at=ts,
-            cash_balance=cash,
+            cash_balance=cash_bal,
             equity_usdt=total_eq,
             profit_amount=profit_amount,
             profit_percent=profit_percent,
+            available_margin=avail_eq,
+            used_margin=used_m,
+            cash_profit_amount=cash_profit_amount,
+            cash_profit_percent=cash_profit_percent,
         )
 
         log.debug(
-            "账户快照: %s \t权益=%d \t现金=%d",
+            "账户快照: %s \t权益:=%d \t资产:=%d \t可用:=%d \t占用:=%d",
             _fmt_log_account_id(aid),
             int(round(total_eq)),
-            int(round(cash)),
+            int(round(cash_bal)),
+            int(round(avail_eq)),
+            int(round(used_m)),
         )
+
+        try:
+            now_mono = time.monotonic()
+            last = _last_okx_bills_backfill_monotonic.get(aid)
+            if last is not None and (now_mono - last) < _BILLS_BACKFILL_MIN_INTERVAL_SEC:
+                pass
+            else:
+                if not db_module.account_balance_snapshots_has_gap_in_recent_utc_days(
+                    aid, _BILLS_BACKFILL_LOOKBACK_DAYS
+                ):
+                    _last_okx_bills_backfill_monotonic[aid] = now_mono
+                else:
+                    _last_okx_bills_backfill_monotonic[aid] = now_mono
+                    n_b, _bf = backfill_account_snapshots_from_okx_bills(
+                        db_module, aid, log, days=_BILLS_BACKFILL_LOOKBACK_DAYS
+                    )
+                    if n_b > 0:
+                        accounts_adp.add(aid)
+        except Exception as e:
+            log.warning(
+                "balance_snapshots_bills_backfill_failed: %s %s",
+                _fmt_log_account_id(aid),
+                e,
+            )
+
+    if accounts_adp:
+        rebuild_account_daily_performance_safe(db_module, sorted(accounts_adp), log)
 
 
 def backfill_account_snapshots_from_okx_bills(
@@ -455,12 +528,16 @@ def backfill_account_snapshots_from_okx_bills(
         cash_b = float(filled_bal[cur_d])
         cutoff = f"{day_s}T23:59:58.000000Z"
         prev = db_module.account_snapshot_last_before_instant(aid, cutoff)
-        cash_prev = float(prev["cash_balance"]) if prev else 0.0
+        avail_prev = float(prev["available_margin"]) if prev else 0.0
+        if avail_prev <= 1e-12 and prev is not None:
+            avail_prev = float(prev.get("cash_balance") or 0.0)
         eq_prev = float(prev["equity_usdt"]) if prev else 0.0
-        ratio = (eq_prev / cash_prev) if cash_prev > 1e-12 else 1.0
+        ratio = (eq_prev / avail_prev) if avail_prev > 1e-12 else 1.0
         equity = cash_b * ratio
-        profit_amount = equity - initial
-        profit_percent = (profit_amount / initial * 100.0) if initial else 0.0
+        profit_amount, profit_percent = profit_vs_initial(initial, equity)
+        cash_profit_amount, cash_profit_percent = cash_profit_vs_initial(
+            initial, cash_b
+        )
         snap_at = f"{day_s}T23:59:59.000000Z"
         db_module.account_snapshot_insert(
             account_id=aid,
@@ -469,6 +546,10 @@ def backfill_account_snapshots_from_okx_bills(
             equity_usdt=equity,
             profit_amount=profit_amount,
             profit_percent=profit_percent,
+            available_margin=0.0,
+            used_margin=0.0,
+            cash_profit_amount=cash_profit_amount,
+            cash_profit_percent=cash_profit_percent,
         )
         inserted += 1
         cur_d = cur_d + timedelta(days=1)
@@ -480,7 +561,7 @@ def refresh_balance_snapshot_one(
     db_module: Any, account_id: str, logger: logging.Logger | None = None
 ) -> tuple[bool, str]:
     """
-    从 OKX 拉取单账户余额，写入 account_balance_snapshots（现金 availEq、权益）。
+    从 OKX 拉取单账户余额，写入 account_balance_snapshots（资产余额、可用保证金、占用、权益）。
     当月月初 account_month_open 由定时任务写入；本函数不写入月初表。
     供管理员手动同步；策略效能日现金增量依赖此表多时点快照。
     """
@@ -512,29 +593,36 @@ def refresh_balance_snapshot_one(
     if not live:
         return False, "OKX 余额拉取失败"
 
-    total_eq = float(live.get("equity_usdt") or live.get("total_eq") or 0.0)
-    cash = float(live.get("cash_balance") or live.get("avail_eq") or 0.0)
-    profit_amount = total_eq - initial
-    profit_percent = (profit_amount / initial * 100.0) if initial else 0.0
+    total_eq, cash_bal, avail_eq, used_m = _okx_balance_amounts(live)
+    profit_amount, profit_percent = profit_vs_initial(initial, total_eq)
+    cash_profit_amount, cash_profit_percent = cash_profit_vs_initial(
+        initial, cash_bal
+    )
 
     db_module.account_snapshot_insert(
         account_id=aid,
         snapshot_at=ts,
-        cash_balance=cash,
+        cash_balance=cash_bal,
         equity_usdt=total_eq,
         profit_amount=profit_amount,
         profit_percent=profit_percent,
+        available_margin=avail_eq,
+        used_margin=used_m,
+        cash_profit_amount=cash_profit_amount,
+        cash_profit_percent=cash_profit_percent,
     )
 
     log.info(
-        "balance_snapshot_one_ok: %s equity=%s cash=%s",
+        "balance_snapshot_one_ok: %s equity=%s cash_bal=%s avail=%s used=%s",
         _fmt_log_account_id(aid),
         int(round(total_eq)),
-        int(round(cash)),
+        int(round(cash_bal)),
+        int(round(avail_eq)),
+        int(round(used_m)),
     )
     try:
         n_b, _bf = backfill_account_snapshots_from_okx_bills(
-            db_module, aid, log, days=40
+            db_module, aid, log, days=_BILLS_BACKFILL_LOOKBACK_DAYS
         )
     except Exception as e:
         log.warning(
@@ -544,29 +632,23 @@ def refresh_balance_snapshot_one(
         )
         n_b = 0
     if n_b > 0:
-        return True, f"已写入 account_balance_snapshots；OKX 账单已补全 {n_b} 个缺日"
+        rebuild_account_daily_performance_safe(db_module, [aid], log)
+        return True, (
+            "已写入 account_balance_snapshots；OKX 账单已补全 "
+            f"{n_b} 个缺日并已重算 account_daily_performance"
+        )
     return True, "已写入 account_balance_snapshots"
 
 
 def _load_tradingbots_json_bots() -> list[dict]:
-    """accounts/tradingbots.json 中的 bot 列表（无文件则空列表）。"""
-    import json
-
-    path = ACCOUNTS_DIR / "tradingbots.json"
-    if not path.is_file():
-        return []
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, list) else []
-    except Exception:
-        return []
+    """已弃用 accounts/tradingbots.json；账户仅以 Account_List.json 为准。"""
+    return []
 
 
 def fetch_and_save_tradingbot_snapshots(
     db_module: Any, logger: logging.Logger | None = None
 ) -> None:
-    """读取 tradingbots.json 中有 account_api_file 的 OKX 机器人余额，写入 tradingbot_profit_snapshots。"""
+    """兼容入口：原 tradingbots.json 路径已弃用，此函数不再写入数据。"""
     log = logger or logging.getLogger(__name__)
     import exchange.okx as okx_mod
 
@@ -622,7 +704,7 @@ def refresh_tradingbot_balance_snapshot_one(
     config_path: Path,
     logger: logging.Logger | None = None,
 ) -> tuple[bool, str]:
-    """对仅存在于 tradingbots.json 的 bot：拉 OKX 余额写入 tradingbot_profit_snapshots。"""
+    """遗留：原 tradingbots-only bot 的余额写入 tradingbot_profit_snapshots（当前无数据源）。"""
     log = logger or logging.getLogger(__name__)
     import exchange.okx as okx_mod
 
@@ -665,6 +747,33 @@ def _account_benchmark_inst_map() -> dict[str, str]:
     }
 
 
+def rebuild_account_daily_performance_safe(
+    db_module: Any,
+    account_ids: list[str],
+    logger: logging.Logger | None = None,
+) -> None:
+    """按 account_positions_history 重算给定账户的 account_daily_performance；失败仅记录日志。"""
+    log = logger or logging.getLogger(__name__)
+    ids = [str(i).strip() for i in (account_ids or []) if str(i).strip()]
+    if not ids:
+        return
+    try:
+        db_module.account_daily_performance_rebuild_for_accounts(
+            ids, _account_benchmark_inst_map()
+        )
+    except Exception as ex:
+        log.warning("account_daily_performance 重建失败: %s", ex)
+        try:
+            db_module.log_insert(
+                "WARN",
+                "account_daily_performance_rebuild_failed",
+                source="account_mgr",
+                extra={"error": str(ex), "account_ids": ids[:30]},
+            )
+        except Exception:
+            pass
+
+
 def refresh_all_positions_history(
     db_module: Any, logger: logging.Logger | None = None
 ) -> None:
@@ -705,7 +814,7 @@ def refresh_all_positions_history(
             continue
         n = db_module.account_positions_history_insert_batch(aid, hist, ts)
         log.debug(
-            "持仓历史: %s \t接口行=%d \t写入=%d",
+            "持仓历史: %s \t读取行:=%d \t写入行：=%d",
             _fmt_log_account_id(aid),
             len(hist),
             n,
@@ -820,17 +929,24 @@ def aggregate_open_positions_by_inst(positions: list[dict]) -> list[dict]:
                 "short_pos_size": 0.0,
                 "long_upl": 0.0,
                 "short_upl": 0.0,
+                "long_cost_notional": 0.0,
+                "short_cost_notional": 0.0,
                 "mark_px": 0.0,
                 "last_px": 0.0,
             }
         g = by_inst[inst]
         abs_pos = abs(pos)
+        avg_px = float(p.get("avg_px") or 0)
         if side == "long":
             g["long_pos_size"] += abs_pos
             g["long_upl"] += upl
+            if avg_px > 0 and abs_pos > _OPEN_LEG_EPS:
+                g["long_cost_notional"] += abs_pos * avg_px
         else:
             g["short_pos_size"] += abs_pos
             g["short_upl"] += upl
+            if avg_px > 0 and abs_pos > _OPEN_LEG_EPS:
+                g["short_cost_notional"] += abs_pos * avg_px
         if mark_px > 0:
             g["mark_px"] = mark_px
         if last_px > 0:
@@ -840,6 +956,10 @@ def aggregate_open_positions_by_inst(positions: list[dict]) -> list[dict]:
         g["total_upl"] = float(g["long_upl"]) + float(g["short_upl"])
         lp = float(g["long_pos_size"])
         sp = float(g["short_pos_size"])
+        lc = float(g.get("long_cost_notional") or 0)
+        sc = float(g.get("short_cost_notional") or 0)
+        g["long_avg_px"] = lc / lp if lp > _OPEN_LEG_EPS else 0.0
+        g["short_avg_px"] = sc / sp if sp > _OPEN_LEG_EPS else 0.0
         g["open_leg_count"] = (1 if lp > _OPEN_LEG_EPS else 0) + (
             1 if sp > _OPEN_LEG_EPS else 0
         )
@@ -864,7 +984,7 @@ def refresh_all_open_positions_snapshots(
         path = resolve_okx_config_path(aid)
         if not path:
             log.debug(
-                "当前持仓快照跳过: %s 无密钥文件",
+                "持仓快照跳过: %s 无密钥文件",
                 _fmt_log_account_id(aid),
             )
             continue
@@ -885,7 +1005,7 @@ def refresh_all_open_positions_snapshots(
         sum_short = sum(float(g.get("short_pos_size") or 0) for g in agg)
         n_legs = sum(int(g.get("open_leg_count") or 0) for g in agg)
         log.debug(
-            "当前持仓快照: %s \t产品=%d \t仓位腿=%d \t多=%.6g \t空=%.6g \t写入行=%d",
+            "当前持仓: %s \t产品：=%d \t仓位腿：=%d \t多:=%.6g \t空:=%.6g \t写入行：=%d",
             _fmt_log_account_id(aid),
             len(agg),
             n_legs,
@@ -1018,17 +1138,18 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
     for aid, ex_name, path, snap, initial, month_row in prep:
         month_open = float(month_row["open_equity"]) if month_row else None
         month_open_cash = (
-            float(month_row["open_cash"])
-            if month_row and month_row.get("open_cash") is not None
+            float(month_row["initial_balance"])
+            if month_row and month_row.get("initial_balance") is not None
             else None
         )
         live = live_by_aid.get(aid) if path else None
         if live:
-            total_eq = float(live.get("equity_usdt") or live.get("total_eq") or 0.0)
-            avail_eq = float(live.get("cash_balance") or live.get("avail_eq") or 0.0)
+            total_eq, cash_bal, avail_eq, used_m = _okx_balance_amounts(live)
             upl = float(live.get("upl") or 0.0)
-            profit_amount = total_eq - initial
-            profit_percent = (profit_amount / initial * 100.0) if initial else 0.0
+            profit_amount, profit_percent = profit_vs_initial(initial, total_eq)
+            cash_profit_amount, cash_profit_percent = cash_profit_vs_initial(
+                initial, cash_bal
+            )
             out.append(
                 {
                     "bot_id": aid,
@@ -1038,9 +1159,14 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
                     "current_balance": total_eq,
                     "profit_amount": profit_amount,
                     "profit_percent": profit_percent,
+                    "cash_profit_amount": cash_profit_amount,
+                    "cash_profit_percent": cash_profit_percent,
                     "floating_profit": upl,
                     "equity_usdt": total_eq,
-                    "balance_usdt": avail_eq,
+                    "balance_usdt": cash_bal,
+                    "cash_balance": cash_bal,
+                    "available_margin": avail_eq,
+                    "used_margin": used_m,
                     "snapshot_time": snap["snapshot_at"] if snap else None,
                     "month_open_equity": month_open,
                     "month_open_cash": month_open_cash,
@@ -1048,7 +1174,17 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
             )
         elif snap:
             eq = float(snap["equity_usdt"])
-            cash = float(snap["cash_balance"])
+            cash_bal = float(snap.get("cash_balance") or 0.0)
+            avail_eq = float(snap.get("available_margin") or 0.0)
+            used_m = float(snap.get("used_margin") or 0.0)
+            if avail_eq <= 1e-12:
+                avail_eq = cash_bal
+            cpa = snap.get("cash_profit_amount")
+            cpp = snap.get("cash_profit_percent")
+            if cpa is None or cpp is None:
+                cpa, cpp = cash_profit_vs_initial(initial, cash_bal)
+            else:
+                cpa, cpp = float(cpa), float(cpp)
             out.append(
                 {
                     "bot_id": aid,
@@ -1058,9 +1194,14 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
                     "current_balance": eq,
                     "profit_amount": float(snap["profit_amount"]),
                     "profit_percent": float(snap["profit_percent"]),
+                    "cash_profit_amount": cpa,
+                    "cash_profit_percent": cpp,
                     "floating_profit": 0.0,
                     "equity_usdt": eq,
-                    "balance_usdt": cash,
+                    "balance_usdt": cash_bal,
+                    "cash_balance": cash_bal,
+                    "available_margin": avail_eq,
+                    "used_margin": used_m,
                     "snapshot_time": snap["snapshot_at"],
                     "month_open_equity": month_open,
                     "month_open_cash": month_open_cash,
@@ -1076,9 +1217,14 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
                     "current_balance": 0,
                     "profit_amount": 0,
                     "profit_percent": 0,
+                    "cash_profit_amount": 0,
+                    "cash_profit_percent": 0,
                     "floating_profit": 0,
                     "equity_usdt": 0,
                     "balance_usdt": 0,
+                    "cash_balance": 0.0,
+                    "available_margin": 0.0,
+                    "used_margin": 0.0,
                     "snapshot_time": None,
                     "month_open_equity": month_open,
                     "month_open_cash": month_open_cash,

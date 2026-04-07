@@ -9,17 +9,8 @@ import '../../theme/finance_style.dart';
 import '../../utils/number_display_format.dart';
 import '../../widgets/water_background.dart';
 
-/// 与 [Account_List.json] 中对比表一致的五列顺序（account_id → 表头简称）
-const List<({String accountId, String columnTitle, String tag})>
-kAccountPerformanceColumns = [
-  (accountId: 'HzTech_MainRepo', columnTitle: '主账户', tag: '对外的门面，颜值担当'),
-  (accountId: 'HzTech_Moneyflow@001', columnTitle: '001', tag: '现金流'),
-  (accountId: 'HzTech_Moneyflow@002', columnTitle: '002', tag: 'Defi项目专属'),
-  (accountId: 'HzTech_Moneyflow@003', columnTitle: '003', tag: '复利'),
-  (accountId: 'HzTech_Moneyflow@004', columnTitle: '004', tag: '董哥专属'),
-];
-
-/// Web：策略分析师多账户持仓（OKX 实时）与选定 UTC 自然月平仓汇总对比。
+/// Web：Account_List 全账户对比；持仓/成本线来自 [account_open_positions_snapshots]。
+/// 对比表中「当前价格 / 多-成本 / 空-成本 / 成本差」为数值 ×1e9 后取整显示。
 class WebAccountPerformanceScreen extends StatefulWidget {
   const WebAccountPerformanceScreen({
     super.key,
@@ -44,10 +35,8 @@ class _WebAccountPerformanceScreenState
   bool _loading = true;
   String? _loadError;
 
-  /// 各列与 [kAccountPerformanceColumns] 顺序一致
   List<_ColumnData> _columns = [];
   double? _refPrice;
-  int? _highlightShortCostIndex;
 
   @override
   void initState() {
@@ -74,6 +63,12 @@ class _WebAccountPerformanceScreenState
     final r = await api.getTradingBots();
     if (!mounted) return;
     setState(() => _bots = r.botList);
+  }
+
+  static String _columnTitle(UnifiedTradingBot b) {
+    final n = (b.tradingbotName ?? '').trim();
+    if (n.isNotEmpty) return n;
+    return b.tradingbotId;
   }
 
   Future<void> _load() async {
@@ -104,26 +99,17 @@ class _WebAccountPerformanceScreenState
           if (a.botId.isNotEmpty) a.botId: a,
       };
 
-      final botIds = {for (final b in _bots) b.tradingbotId};
-      final columnSpecs = kAccountPerformanceColumns
-          .where((s) => botIds.contains(s.accountId))
-          .toList();
+      final sorted = List<UnifiedTradingBot>.from(_bots)
+        ..sort((a, b) => a.tradingbotId.compareTo(b.tradingbotId));
 
-      Future<_ColumnData> loadColumn(
-        ({String accountId, String columnTitle, String tag}) spec,
-      ) async {
-        if (!botIds.contains(spec.accountId)) {
-          return _ColumnData.missing(spec);
-        }
-        final pnl = await api.getDailyRealizedPnl(
-          spec.accountId,
-          _year,
-          _month,
-        );
-        final pos = await api.getTradingbotPositions(spec.accountId);
-        final ap = byBot[spec.accountId];
-        final agg = _aggregatePositions(pos.positions);
-        var posErr = pos.positionsError;
+      Future<_ColumnData> loadColumn(UnifiedTradingBot bot) async {
+        final accountId = bot.tradingbotId;
+        final spec = (accountId: accountId, columnTitle: _columnTitle(bot));
+        final pnl = await api.getDailyRealizedPnl(accountId, _year, _month);
+        final snap = await api.getOpenPositionsSnapshots(accountId);
+        final ap = byBot[accountId];
+        final agg = _aggregateOpenPosSnapshots(snap.rows);
+        var posErr = snap.success ? null : 'open-positions-snapshots 拉取失败';
         if (!pnl.success) {
           final m = pnl.message?.trim();
           if (m != null && m.isNotEmpty) {
@@ -150,9 +136,7 @@ class _WebAccountPerformanceScreenState
         );
       }
 
-      final cols = await Future.wait(
-        columnSpecs.map(loadColumn),
-      );
+      final cols = await Future.wait(sorted.map(loadColumn));
 
       if (!mounted) return;
 
@@ -166,33 +150,9 @@ class _WebAccountPerformanceScreenState
         refPx = marks.reduce(math.max);
       }
 
-      int? hi;
-      final shorts = <double>[];
-      for (var i = 0; i < cols.length; i++) {
-        final s = cols[i].agg?.shortAvgPx ?? 0;
-        if (s > 0) shorts.add(s);
-      }
-      if (shorts.length >= 3) {
-        final sorted = List<double>.from(shorts)..sort();
-        final mid = sorted[sorted.length ~/ 2];
-        var bestI = -1;
-        var bestD = 0.0;
-        for (var i = 0; i < cols.length; i++) {
-          final s = cols[i].agg?.shortAvgPx ?? 0;
-          if (s <= 0) continue;
-          final d = (s - mid).abs();
-          if (d > bestD && d >= 25) {
-            bestD = d;
-            bestI = i;
-          }
-        }
-        if (bestI >= 0) hi = bestI;
-      }
-
       setState(() {
         _columns = cols;
         _refPrice = refPx;
-        _highlightShortCostIndex = hi;
         _loading = false;
       });
     } catch (e, st) {
@@ -225,9 +185,8 @@ class _WebAccountPerformanceScreenState
     _load();
   }
 
-  String _monthTitle() => '$_year年$_month月（UTC 自然月）';
+  String _monthTitle() => '$_year年$_month月';
 
-  /// 数据快照日期（UTC 当天），与对比月份独立。
   String _snapshotDateCompact() {
     final n = DateTime.now().toUtc();
     return '${n.year}'
@@ -253,9 +212,9 @@ class _WebAccountPerformanceScreenState
             child: Align(
               alignment: Alignment.topLeft,
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 1280),
+                constraints: const BoxConstraints(maxWidth: 1600),
                 child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     _MonthToolbar(
                       title: _monthTitle(),
@@ -288,15 +247,14 @@ class _WebAccountPerformanceScreenState
                       )
                     else
                       Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           FinanceCard(
-                            padding: const EdgeInsets.all(20),
+                            padding: const EdgeInsets.all(12),
                             child: _ComparisonGrid(
                               dateCompact: _snapshotDateCompact(),
                               refPrice: _refPrice,
                               columns: _columns,
-                              highlightShortCostIndex: _highlightShortCostIndex,
                               year: _year,
                               month: _month,
                             ),
@@ -311,7 +269,7 @@ class _WebAccountPerformanceScreenState
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    '持仓 / 月度盈亏接口提示',
+                                    '持仓快照提示',
                                     style:
                                         AppFinanceStyle.labelTextStyle(
                                           context,
@@ -428,6 +386,49 @@ class _MonthToolbar extends StatelessWidget {
   }
 }
 
+/// 账户级汇总：取 [rows] 中最新一批 snapshot_at 的各行（按合约），
+/// 成本线为库中 long_avg_px / short_avg_px 的加权平均。
+_PosAgg _aggregateOpenPosSnapshots(List<OpenPositionsSnapshotRow> rows) {
+  if (rows.isEmpty) {
+    return _PosAgg(
+      longQty: 0,
+      shortQty: 0,
+      longAvgPx: 0,
+      shortAvgPx: 0,
+      totalUpl: 0,
+      refMarkPx: null,
+    );
+  }
+  final latest = rows.first.snapshotAt;
+  final batch = rows.where((r) => r.snapshotAt == latest).toList();
+  var lq = 0.0;
+  var sq = 0.0;
+  var lNotional = 0.0;
+  var sNotional = 0.0;
+  var uplSum = 0.0;
+  double? refPx;
+  for (final r in batch) {
+    lq += r.longPosSize;
+    sq += r.shortPosSize;
+    lNotional += r.longPosSize * r.longAvgPx;
+    sNotional += r.shortPosSize * r.shortAvgPx;
+    uplSum += r.totalUpl;
+    final px = r.lastPx > 0 ? r.lastPx : r.markPx;
+    if (px > 0) {
+      final prev = refPx;
+      refPx = prev == null ? px : math.max(prev, px);
+    }
+  }
+  return _PosAgg(
+    longQty: lq,
+    shortQty: sq,
+    longAvgPx: lq > 1e-12 ? lNotional / lq : 0,
+    shortAvgPx: sq > 1e-12 ? sNotional / sq : 0,
+    totalUpl: uplSum,
+    refMarkPx: refPx,
+  );
+}
+
 class _PosAgg {
   _PosAgg({
     required this.longQty,
@@ -446,65 +447,10 @@ class _PosAgg {
   final double? refMarkPx;
 
   double get qtyGap => (shortQty - longQty).abs();
+
+  /// 多-成本线 − 空-成本线
   double get costGap =>
-      shortAvgPx > 0 && longAvgPx > 0 ? shortAvgPx - longAvgPx : double.nan;
-}
-
-_PosAgg _aggregatePositions(List<OkxPosition> positions) {
-  if (positions.isEmpty) {
-    return _PosAgg(
-      longQty: 0,
-      shortQty: 0,
-      longAvgPx: 0,
-      shortAvgPx: 0,
-      totalUpl: 0,
-      refMarkPx: null,
-    );
-  }
-  var lq = 0.0;
-  var sq = 0.0;
-  var lNotional = 0.0;
-  var sNotional = 0.0;
-  var uplSum = 0.0;
-  double? refPx;
-
-  for (final p in positions) {
-    uplSum += p.upl;
-    final px = p.displayPrice;
-    if (px > 0) {
-      final r = refPx;
-      refPx = r == null ? px : math.max(r, px);
-    }
-    final side = p.posSide.toLowerCase();
-    final pos = p.pos;
-    if (side == 'net') {
-      if (pos > 1e-12) {
-        lq += pos;
-        lNotional += pos * p.avgPx;
-      } else if (pos < -1e-12) {
-        final a = pos.abs();
-        sq += a;
-        sNotional += a * p.avgPx;
-      }
-    } else if (side == 'long') {
-      final a = pos.abs();
-      lq += a;
-      lNotional += a * p.avgPx;
-    } else if (side == 'short') {
-      final a = pos.abs();
-      sq += a;
-      sNotional += a * p.avgPx;
-    }
-  }
-
-  return _PosAgg(
-    longQty: lq,
-    shortQty: sq,
-    longAvgPx: lq > 1e-12 ? lNotional / lq : 0,
-    shortAvgPx: sq > 1e-12 ? sNotional / sq : 0,
-    totalUpl: uplSum,
-    refMarkPx: refPx,
-  );
+      longAvgPx > 0 && shortAvgPx > 0 ? longAvgPx - shortAvgPx : double.nan;
 }
 
 class _ColumnData {
@@ -518,21 +464,7 @@ class _ColumnData {
     required this.monthReturnPct,
   });
 
-  factory _ColumnData.missing(
-    ({String accountId, String columnTitle, String tag}) spec,
-  ) {
-    return _ColumnData(
-      spec: spec,
-      profit: null,
-      agg: null,
-      positionsError: '未在交易账户列表中',
-      monthCloseCount: 0,
-      monthPnl: 0,
-      monthReturnPct: double.nan,
-    );
-  }
-
-  final ({String accountId, String columnTitle, String tag}) spec;
+  final ({String accountId, String columnTitle}) spec;
   final AccountProfit? profit;
   final _PosAgg? agg;
   final String? positionsError;
@@ -547,14 +479,20 @@ class _ColumnData {
     return v.toStringAsFixed(2);
   }
 
-  String _fmtPx(double v) {
-    if (!v.isFinite || v <= 0) return '—';
-    return v.round().toString();
-  }
-
   String _fmtGap(double v) {
     if (!v.isFinite) return '—';
     return v.round().toString();
+  }
+
+  /// 成本线数值过小，×1e9 后取整便于对比。
+  String _fmtCostLine1e9(double v) {
+    if (!v.isFinite || v <= 0) return '—';
+    return (v * 1e9).round().toString();
+  }
+
+  String _fmtCostGap1e9(double g) {
+    if (!g.isFinite) return '—';
+    return (g * 1e9).round().toString();
   }
 
   String get _floatRow =>
@@ -566,7 +504,6 @@ class _ComparisonGrid extends StatelessWidget {
     required this.dateCompact,
     required this.refPrice,
     required this.columns,
-    required this.highlightShortCostIndex,
     required this.year,
     required this.month,
   });
@@ -574,410 +511,325 @@ class _ComparisonGrid extends StatelessWidget {
   final String dateCompact;
   final double? refPrice;
   final List<_ColumnData> columns;
-  final int? highlightShortCostIndex;
   final int year;
   final int month;
 
   static const Color _gridColor = Color(0xFF3a3a48);
-  static const Color _tagBlue = Color(0xFF2563EB);
-  static const Color _highlightYellow = Color(0xFFFFF176);
-
-  static const double _labelW = 168;
-  static const double _cellW = 92;
-  static const double _remarkMinW = 200;
+  /// 左侧指标列底色
+  static const Color _labelColumnBg = Color(0xFF1c1c28);
+  /// 右侧账号数据区底色
+  static const Color _accountColumnBg = Color(0xFF13131c);
+  static const double _labelW = 168.0;
+  static const double _minDataColW = 72.0;
 
   @override
   Widget build(BuildContext context) {
     final baseStyle = Theme.of(context).textTheme.bodyMedium?.copyWith(
-      fontSize: 13,
+      fontSize: 14,
       color: AppFinanceStyle.valueColor,
       height: 1.35,
     );
-    final labelStyle = baseStyle?.copyWith(
+    // 左侧「指标」列：粗体、右对齐、字号比数据格再大一号
+    final metricLabelStyle = baseStyle?.copyWith(
       color: AppFinanceStyle.labelColor,
-      fontWeight: FontWeight.w500,
+      fontWeight: FontWeight.w700,
+      fontSize: 15,
     );
 
     final priceText = refPrice != null && refPrice! > 0
-        ? refPrice!.round().toString()
+        ? (refPrice! * 1e9).round().toString()
         : '—';
 
-    final rows = <List<Widget>>[];
-
-    rows.add([
-      _cell(
-        Padding(
-          padding: const EdgeInsets.all(10),
-          child: Text(
-            dateCompact,
-            style: labelStyle?.copyWith(
-              fontWeight: FontWeight.w700,
-              color: AppFinanceStyle.valueColor,
-            ),
-          ),
-        ),
-        _labelW,
-      ),
-      _cell(
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
-          child: Text(
-            '当前价格　$priceText',
-            textAlign: TextAlign.center,
-            style: baseStyle?.copyWith(
-              fontWeight: FontWeight.w600,
-              fontSize: 14,
-            ),
-          ),
-        ),
-        5 * _cellW,
-      ),
-      _flexCell(context, const SizedBox.shrink()),
-    ]);
-
-    rows.add(_headerRow(context));
-    rows.add(_baseRow(context, labelStyle, baseStyle));
-    rows.add(_tagRow(context, labelStyle));
+    final n = columns.length;
+    if (n == 0) {
+      return Text('无列', style: AppFinanceStyle.labelTextStyle(context));
+    }
 
     final metricSpecs =
-        <
-          ({
-            String label,
-            String Function(_ColumnData c, int i) value,
-            bool bold,
-            bool Function(_ColumnData c, int i)? useHighlight,
-          })
-        >[
+        <({String label, String Function(_ColumnData c) value, bool bold})>[
           (
             label: '多-数量',
-            value: (c, _) => c.agg == null ? '—' : c._fmtQty(c.agg!.longQty),
+            value: (c) => c.agg == null ? '—' : c._fmtQty(c.agg!.longQty),
             bold: false,
-            useHighlight: null,
           ),
           (
-            label: '多-成本线',
-            value: (c, _) => c.agg == null ? '—' : c._fmtPx(c.agg!.longAvgPx),
+            label: '多-成本',
+            value: (c) => c.agg == null ? '—' : c._fmtCostLine1e9(c.agg!.longAvgPx),
             bold: false,
-            useHighlight: null,
           ),
           (
             label: '空-数量',
-            value: (c, _) => c.agg == null ? '—' : c._fmtQty(c.agg!.shortQty),
+            value: (c) => c.agg == null ? '—' : c._fmtQty(c.agg!.shortQty),
             bold: false,
-            useHighlight: null,
           ),
           (
-            label: '空-成本线',
-            value: (c, _) => c.agg == null ? '—' : c._fmtPx(c.agg!.shortAvgPx),
+            label: '空-成本',
+            value: (c) => c.agg == null ? '—' : c._fmtCostLine1e9(c.agg!.shortAvgPx),
             bold: false,
-            useHighlight: (c, i) =>
-                highlightShortCostIndex != null && highlightShortCostIndex == i,
           ),
           (
-            label: '数量差距',
-            value: (c, _) => c.agg == null ? '—' : c._fmtGap(c.agg!.qtyGap),
+            label: '数量差',
+            value: (c) => c.agg == null ? '—' : c._fmtGap(c.agg!.qtyGap),
             bold: false,
-            useHighlight: null,
           ),
           (
-            label: '成本差距',
-            value: (c, _) {
-              final g = c.agg?.costGap ?? double.nan;
-              if (!g.isFinite) return '—';
-              return g.round().toString();
-            },
+            label: '成本差',
+            value: (c) =>
+                c._fmtCostGap1e9(c.agg?.costGap ?? double.nan),
             bold: false,
-            useHighlight: null,
           ),
           (
             label: '资产余额',
-            value: (c, _) => formatUiIntegerOpt(c.profit?.currentBalance),
+            value: (c) => formatUiIntegerOpt(
+              c.profit?.cashBalance ?? c.profit?.balanceUsdt,
+            ),
             bold: false,
-            useHighlight: null,
           ),
-          (
-            label: '浮动盈亏(upl)',
-            value: (c, _) => c._floatRow,
-            bold: false,
-            useHighlight: null,
-          ),
+          (label: '浮动盈亏', value: (c) => c._floatRow, bold: false),
           (
             label: '权益金额',
-            value: (c, _) => formatUiIntegerOpt(c.profit?.equityUsdt),
+            value: (c) => formatUiIntegerOpt(c.profit?.equityUsdt),
             bold: false,
-            useHighlight: null,
           ),
           (
-            label: '交割数量-$month月',
-            value: (c, _) => c.monthCloseCount.toString(),
+            label: '成交次数($month月)',
+            value: (c) => c.monthCloseCount.toString(),
             bold: false,
-            useHighlight: null,
           ),
           (
-            label: '收益金额-$month月',
-            value: (c, _) => formatUiSignedUsdt2(c.monthPnl),
+            label: '成交金额-(${month}月)',
+            value: (c) => formatUiSignedUsdt2(c.monthPnl),
             bold: false,
-            useHighlight: null,
           ),
           (
-            label: '收益率-$month月',
-            value: (c, _) => formatUiPercentLabel(c.monthReturnPct),
+            label: '收益率-(${month}月)',
+            value: (c) => formatUiPercentLabel(c.monthReturnPct),
             bold: true,
-            useHighlight: null,
           ),
         ];
 
-    for (final spec in metricSpecs) {
-      rows.add([
-        _cell(
-          Padding(
-            padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
-            child: Text(spec.label, style: labelStyle),
-          ),
-          _labelW,
+    Widget gridAtWidth(double tableWidth) {
+      final dataBlockWidth = math.max(tableWidth - _labelW, n * _minDataColW);
+      return Container(
+        width: tableWidth,
+        decoration: BoxDecoration(
+          border: Border.all(color: _gridColor, width: 1),
         ),
-        ...List.generate(columns.length, (ci) {
-          final c = columns[ci];
-          final hl = spec.useHighlight?.call(c, ci) ?? false;
-          final t = spec.value(c, ci);
-          return _cell(
-            Container(
-              color: hl ? _highlightYellow : null,
-              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
-              alignment: Alignment.center,
-              child: Text(
-                t,
-                textAlign: TextAlign.center,
-                style:
-                    (spec.bold
-                            ? baseStyle?.copyWith(fontWeight: FontWeight.w800)
-                            : baseStyle)
-                        ?.copyWith(
-                          color: hl
-                              ? const Color(0xFF1a1a1a)
-                              : baseStyle?.color,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(
+                    width: _labelW,
+                    child: _cellBorder(
+                      right: true,
+                      bottom: true,
+                      fillColor: _labelColumnBg,
+                      child: Padding(
+                        padding: const EdgeInsets.all(10),
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: Text(
+                            dateCompact,
+                            textAlign: TextAlign.right,
+                            style: metricLabelStyle?.copyWith(
+                              color: AppFinanceStyle.valueColor,
+                            ),
+                          ),
                         ),
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    width: dataBlockWidth,
+                    child: _cellBorder(
+                      right: false,
+                      bottom: true,
+                      fillColor: _accountColumnBg,
+                      child: Center(
+                        child: Text(
+                          '当前价格　$priceText',
+                          style: baseStyle?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 15,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-            _cellW,
-          );
-        }),
-        _flexCell(
-          context,
-          Container(
-            color: spec.label == '空-成本线' && highlightShortCostIndex != null
-                ? _highlightYellow
-                : null,
-            padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
-            alignment: Alignment.centerLeft,
-            child: Text(
-              _remarkForRow(
-                spec.label,
-                showShortCostHint:
-                    spec.label == '空-成本线' && highlightShortCostIndex != null,
+            _tableRow(
+              dataBlockWidth: dataBlockWidth,
+              n: n,
+              labelChild: Padding(
+                padding: const EdgeInsets.all(10),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: Text(
+                    '指标',
+                    textAlign: TextAlign.right,
+                    style: metricLabelStyle,
+                  ),
+                ),
               ),
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                fontSize: 12,
-                color: spec.label == '空-成本线' && highlightShortCostIndex != null
-                    ? const Color(0xFF1a1a1a)
-                    : AppFinanceStyle.valueColor,
-                height: 1.35,
+              dataChildren: (i) => Padding(
+                padding: const EdgeInsets.symmetric(
+                  vertical: 10,
+                  horizontal: 4,
+                ),
+                child: Text(
+                  columns[i].spec.columnTitle,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: baseStyle?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
               ),
             ),
-          ),
+            _tableRow(
+              dataBlockWidth: dataBlockWidth,
+              n: n,
+              labelChild: Padding(
+                padding: const EdgeInsets.all(8),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: Text(
+                    '基数',
+                    textAlign: TextAlign.right,
+                    style: metricLabelStyle,
+                  ),
+                ),
+              ),
+              dataChildren: (i) => Text(
+                formatUiIntegerOpt(columns[i].profit?.initialBalance),
+                textAlign: TextAlign.center,
+                style: baseStyle,
+              ),
+            ),
+            ...metricSpecs.map(
+              (spec) => _tableRow(
+                dataBlockWidth: dataBlockWidth,
+                n: n,
+                labelChild: Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: Text(
+                      spec.label,
+                      textAlign: TextAlign.right,
+                      style: metricLabelStyle,
+                    ),
+                  ),
+                ),
+                dataChildren: (i) {
+                  final c = columns[i];
+                  final t = spec.value(c);
+                  return Text(
+                    t,
+                    textAlign: TextAlign.center,
+                    style: spec.bold
+                        ? baseStyle?.copyWith(fontWeight: FontWeight.w800)
+                        : baseStyle,
+                  );
+                },
+              ),
+            ),
+          ],
         ),
-      ]);
+      );
     }
-
-    final grid = Container(
-      decoration: BoxDecoration(
-        border: Border.all(color: _gridColor, width: 1),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        mainAxisSize: MainAxisSize.min,
-        children: rows.map((cells) {
-          return IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: cells,
-            ),
-          );
-        }).toList(),
-      ),
-    );
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final w = _labelW + columns.length * _cellW + _remarkMinW;
-        if (constraints.maxWidth >= w + 48) return grid;
-        return SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: SizedBox(width: w, child: grid),
+        final minTable = _labelW + n * _minDataColW;
+        final w = math.max(constraints.maxWidth, minTable);
+        final scroll = constraints.maxWidth < minTable - 1;
+        final child = gridAtWidth(w);
+        if (!scroll) return child;
+        return Scrollbar(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: child,
+          ),
         );
       },
     );
   }
 
-  List<Widget> _headerRow(BuildContext context) {
-    return [
-      _cell(
-        Padding(
-          padding: const EdgeInsets.all(10),
-          child: Text(
-            '指标',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              fontSize: 12,
-              color: AppFinanceStyle.labelColor,
-              fontWeight: FontWeight.w700,
+  Widget _tableRow({
+    required double dataBlockWidth,
+    required int n,
+    required Widget labelChild,
+    required Widget Function(int index) dataChildren,
+  }) {
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            width: _labelW,
+            child: _cellBorder(
+              right: true,
+              bottom: true,
+              fillColor: _labelColumnBg,
+              child: labelChild,
             ),
           ),
-        ),
-        _labelW,
-      ),
-      ...columns.map(
-        (c) => _cell(
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
-            child: Text(
-              c.spec.columnTitle,
-              textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                fontSize: 13,
-                color: AppFinanceStyle.valueColor,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-          _cellW,
-        ),
-      ),
-      _flexCell(
-        context,
-        Padding(
-          padding: const EdgeInsets.all(10),
-          child: Text(
-            '备注',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              fontSize: 12,
-              color: AppFinanceStyle.labelColor,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ),
-      ),
-    ];
-  }
-
-  List<Widget> _baseRow(
-    BuildContext context,
-    TextStyle? labelStyle,
-    TextStyle? baseStyle,
-  ) {
-    return [
-      _cell(
-        Padding(
-          padding: const EdgeInsets.all(8),
-          child: Text('基数', style: labelStyle),
-        ),
-        _labelW,
-      ),
-      ...columns.map(
-        (c) => _cell(
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
-            child: Text(
-              formatUiIntegerOpt(c.profit?.initialBalance),
-              textAlign: TextAlign.center,
-              style: baseStyle,
-            ),
-          ),
-          _cellW,
-        ),
-      ),
-      _flexCell(context, const SizedBox.shrink()),
-    ];
-  }
-
-  List<Widget> _tagRow(BuildContext context, TextStyle? labelStyle) {
-    return [
-      _cell(
-        Padding(
-          padding: const EdgeInsets.all(8),
-          child: Text('说明', style: labelStyle),
-        ),
-        _labelW,
-      ),
-      ...columns.map(
-        (c) => _cell(
-          Padding(
-            padding: const EdgeInsets.all(6),
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: _tagBlue,
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 6),
-                child: Text(
-                  c.spec.tag,
-                  textAlign: TextAlign.center,
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    fontSize: 11,
-                    color: Colors.white,
-                    height: 1.25,
+          SizedBox(
+            width: dataBlockWidth,
+            child: Row(
+              children: List.generate(
+                n,
+                (i) => Expanded(
+                  child: _cellBorder(
+                    right: i < n - 1,
+                    bottom: true,
+                    fillColor: _accountColumnBg,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        vertical: 8,
+                        horizontal: 4,
+                      ),
+                      child: Align(
+                        alignment: Alignment.center,
+                        child: dataChildren(i),
+                      ),
+                    ),
                   ),
                 ),
               ),
             ),
           ),
-          _cellW,
-        ),
-      ),
-      _flexCell(context, const SizedBox.shrink()),
-    ];
-  }
-
-  String _remarkForRow(String label, {bool showShortCostHint = false}) {
-    if (label == '空-成本线' && showShortCostHint) {
-      return '空成本偏离各列中位数较多';
-    }
-    if (label.startsWith('交割') ||
-        label.startsWith('收益') ||
-        label.startsWith('收益率')) {
-      return 'UTC $year-${month.toString().padLeft(2, '0')} 平仓汇总';
-    }
-    if (label == '浮动盈亏(upl)') {
-      return 'Σ OKX upl，与持仓接口一致';
-    }
-    return '';
-  }
-
-  Widget _cell(Widget child, double width) {
-    return SizedBox(
-      width: width,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          border: Border(
-            right: BorderSide(color: _gridColor, width: 1),
-            bottom: BorderSide(color: _gridColor, width: 1),
-          ),
-        ),
-        child: child,
+        ],
       ),
     );
   }
 
-  Widget _flexCell(BuildContext context, Widget child) {
-    return Expanded(
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          border: Border(bottom: BorderSide(color: _gridColor, width: 1)),
+  Widget _cellBorder({
+    required bool right,
+    required bool bottom,
+    Color? fillColor,
+    required Widget child,
+  }) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: fillColor,
+        border: Border(
+          right: right
+              ? BorderSide(color: _gridColor, width: 1)
+              : BorderSide.none,
+          bottom: BorderSide(color: _gridColor, width: 1),
         ),
-        child: child,
       ),
+      child: child,
     );
   }
 }

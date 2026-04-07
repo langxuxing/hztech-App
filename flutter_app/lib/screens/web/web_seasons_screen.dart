@@ -9,7 +9,7 @@ import '../../utils/number_display_format.dart';
 import '../../widgets/water_background.dart';
 
 /// 按账户展示赛季列表（与策略启停赛季操作联动）；
-/// 结合历史仓位平仓时间统计每赛季笔数与盈亏（分页拉取直至覆盖最早赛季起点）。
+/// 结合历史仓位统计每赛季笔数与盈亏：时刻取 OKX uTime（与接口一致，非开仓 cTime）。
 class WebSeasonsScreen extends StatefulWidget {
   const WebSeasonsScreen({
     super.key,
@@ -53,6 +53,9 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
   bool _loading = false;
   String? _error;
 
+  /// 无服务端赛季记录时，为 true：按北京时间自然周汇总 [_history]。
+  bool _weeklyFallback = false;
+
   List<UnifiedTradingBot> get _bots => widget.sharedBots;
 
   String? get _effectiveBotId => widget.accountIdFromParent ?? _botId;
@@ -81,6 +84,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
     }
   }
 
+  /// OKX positions-history 的 uTime（仓位更新时间），平仓记录上即平仓相关时刻。
   static DateTime? _rowCloseUtc(PositionHistoryRow r) {
     final ms = r.uTimeMs;
     if (ms == null || ms.isEmpty) return null;
@@ -106,6 +110,89 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
     final endBound = endUtc ?? DateTime.now().toUtc();
     if (ut.isAfter(endBound)) return false;
     return true;
+  }
+
+  /// 平仓时刻对应的北京日历日（UTC DateTime 仅作 y/m/d 容器）。
+  static DateTime _beijingCalendarDateUtc(DateTime utc) {
+    final b = utc.add(const Duration(hours: 8));
+    return DateTime.utc(b.year, b.month, b.day);
+  }
+
+  static DateTime _mondayOfBeijingWeekContaining(DateTime beijingCalDateUtc) {
+    final wd = beijingCalDateUtc.weekday;
+    return beijingCalDateUtc.subtract(Duration(days: wd - 1));
+  }
+
+  /// 北京周一 00:00 对应的 UTC 时刻（区间起点，含）。
+  static DateTime _beijingMondayStartUtc(DateTime mondayCalUtc) {
+    return DateTime.utc(
+      mondayCalUtc.year,
+      mondayCalUtc.month,
+      mondayCalUtc.day,
+    ).subtract(const Duration(hours: 8));
+  }
+
+  /// 下周一北京 00:00 对应的 UTC（区间终点，不含）。
+  static DateTime _nextBeijingMondayStartUtc(DateTime mondayCalUtc) {
+    final next = mondayCalUtc.add(const Duration(days: 7));
+    return DateTime.utc(
+      next.year,
+      next.month,
+      next.day,
+    ).subtract(const Duration(hours: 8));
+  }
+
+  static bool _positionInBeijingWeek(
+    PositionHistoryRow r,
+    DateTime mondayCalUtc,
+  ) {
+    final ut = _rowCloseUtc(r);
+    if (ut == null) return false;
+    final start = _beijingMondayStartUtc(mondayCalUtc);
+    final endEx = _nextBeijingMondayStartUtc(mondayCalUtc);
+    if (ut.isBefore(start)) return false;
+    if (!ut.isBefore(endEx)) return false;
+    return true;
+  }
+
+  static String _beijingWeekRangeLabel(DateTime mondayCalUtc) {
+    final end = mondayCalUtc.add(const Duration(days: 6));
+    String p2(int x) => x.toString().padLeft(2, '0');
+    return '${mondayCalUtc.year}-${p2(mondayCalUtc.month)}-${p2(mondayCalUtc.day)}'
+        ' ~ ${end.year}-${p2(end.month)}-${p2(end.day)}';
+  }
+
+  static bool _isCurrentBeijingWeekMonday(DateTime mondayCalUtc) {
+    final now = DateTime.now().toUtc();
+    final bd = _beijingCalendarDateUtc(now);
+    final thisMon = _mondayOfBeijingWeekContaining(bd);
+    return mondayCalUtc.year == thisMon.year &&
+        mondayCalUtc.month == thisMon.month &&
+        mondayCalUtc.day == thisMon.day;
+  }
+
+  _SeasonAgg _aggForBeijingWeek(DateTime mondayCalUtc) {
+    final rows =
+        _history.where((r) => _positionInBeijingWeek(r, mondayCalUtc)).toList();
+    double sum = 0;
+    for (final r in rows) {
+      final p = _rowPnl(r);
+      if (p != null && p.isFinite) sum += p;
+    }
+    return _SeasonAgg(count: rows.length, profitSum: sum, rows: rows);
+  }
+
+  List<DateTime> _beijingWeekMondaysDescending() {
+    final keys = <DateTime>{};
+    for (final r in _history) {
+      final ut = _rowCloseUtc(r);
+      if (ut == null) continue;
+      final bd = _beijingCalendarDateUtc(ut);
+      keys.add(_mondayOfBeijingWeekContaining(bd));
+    }
+    final list = keys.toList()
+      ..sort((a, b) => b.compareTo(a));
+    return list;
   }
 
   _SeasonAgg _aggForSeason(BotSeason s) {
@@ -180,7 +267,14 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
       final seasons = resp.seasons;
       List<PositionHistoryRow> hist = [];
       final oldest = _oldestSeasonStartUtc(seasons);
-      if (oldest != null) {
+      final weeklyFallback = seasons.isEmpty;
+      if (weeklyFallback) {
+        hist = await _loadHistoryForStats(
+          api,
+          bid,
+          DateTime.now().toUtc().subtract(const Duration(days: 730)),
+        );
+      } else if (oldest != null) {
         hist = await _loadHistoryForStats(api, bid, oldest);
       }
       if (!mounted) return;
@@ -188,6 +282,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
         _seasons = seasons;
         _activeCount = resp.activeSeasonCount;
         _history = hist;
+        _weeklyFallback = weeklyFallback;
         _loading = false;
       });
     } catch (e) {
@@ -342,7 +437,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
         children: [
           if (agg.rows.isEmpty)
             Text(
-              '本赛季无匹配平仓记录（按更新时间在北京时间落在赛季区间内）',
+              '无匹配平仓记录（按 OKX uTime 对应北京时间落在区间内）',
               style: _label(context, fs: 12),
             )
           else ...[
@@ -368,7 +463,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
                 Expanded(
                   flex: 3,
                   child: Text(
-                    '更新(北京)',
+                    '平仓时间(北京)',
                     textAlign: TextAlign.end,
                     style: _label(context, fs: 11),
                   ),
@@ -677,6 +772,146 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
     );
   }
 
+  Widget _buildWeeklyCard(
+    BuildContext context,
+    DateTime mondayCalUtc,
+    _SeasonAgg agg, {
+    required bool highlight,
+    required bool currentWeek,
+  }) {
+    final profitColor = agg.profitSum >= 0
+        ? AppFinanceStyle.profitGreenEnd
+        : const Color(0xFFFF6B6B);
+    final range = _beijingWeekRangeLabel(mondayCalUtc);
+
+    final metricsColumn = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _wrapRow([
+          _metricChip(context, '自然周', range),
+          _metricChip(context, '市场', _marketLabel ?? '—'),
+        ]),
+        _wrapRow([
+          _metricChip(
+            context,
+            '仓位数·盈亏',
+            '${agg.count} · ${agg.profitSum.toStringAsFixed(1)}',
+            valueColor: profitColor,
+          ),
+        ]),
+      ],
+    );
+    final historyExpansion = _positionsExpansion(
+      context,
+      '本周历史仓位（${agg.count}）',
+      agg,
+    );
+
+    return FinanceCard(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              if (highlight && currentWeek)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppFinanceStyle.profitGreenEnd.withValues(
+                      alpha: 0.2,
+                    ),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    '当前周',
+                    style: TextStyle(
+                      color: AppFinanceStyle.profitGreenEnd,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                )
+              else if (highlight)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white12,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    '最近一周',
+                    style: TextStyle(
+                      color: AppFinanceStyle.labelColor,
+                      fontSize: 12,
+                    ),
+                  ),
+                )
+              else
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white12,
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    '自然周',
+                    style: TextStyle(
+                      color: AppFinanceStyle.labelColor,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              const Spacer(),
+              Text(
+                mondayCalUtc.toIso8601String().split('T').first,
+                style: _label(context, fs: 12),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          LayoutBuilder(
+            builder: (ctx, bc) {
+              final wide = bc.maxWidth >= 520;
+              if (!wide) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    metricsColumn,
+                    historyExpansion,
+                  ],
+                );
+              }
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    flex: 5,
+                    child: metricsColumn,
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    flex: 5,
+                    child: historyExpansion,
+                  ),
+                ],
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final column = Column(
@@ -754,6 +989,84 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
                   )
                 : Builder(
                     builder: (ctx) {
+                      if (_weeklyFallback && _seasons.isEmpty) {
+                        final weeks = _beijingWeekMondaysDescending();
+                        final hi = weeks.isNotEmpty ? weeks.first : null;
+                        final others =
+                            weeks.length > 1 ? weeks.sublist(1) : <DateTime>[];
+                        final hiCurrent =
+                            hi != null &&
+                            _isCurrentBeijingWeekMonday(hi);
+                        return ListView(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: Text(
+                                '当前账户未配置赛季，已按北京时间自然周（周一至周日）汇总最近约 2 年的平仓；'
+                                '在「策略启停」使用赛季开始/停止后可改为正式赛季统计。',
+                                style: AppFinanceStyle.labelTextStyle(context)
+                                    .copyWith(fontSize: 13, height: 1.35),
+                              ),
+                            ),
+                            if (hi == null)
+                              Padding(
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 24),
+                                child: Text(
+                                  '暂无历史平仓记录，无法按周汇总',
+                                  style:
+                                      AppFinanceStyle.labelTextStyle(context),
+                                ),
+                              )
+                            else ...[
+                              Text(
+                                hiCurrent ? '当前自然周' : '最近自然周',
+                                style: AppFinanceStyle.labelTextStyle(context)
+                                    .copyWith(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600,
+                                      color: AppFinanceStyle.valueColor,
+                                    ),
+                              ),
+                              const SizedBox(height: 8),
+                              _buildWeeklyCard(
+                                ctx,
+                                hi,
+                                _aggForBeijingWeek(hi),
+                                highlight: true,
+                                currentWeek: hiCurrent,
+                              ),
+                              const SizedBox(height: 16),
+                              if (others.isNotEmpty) ...[
+                                Text(
+                                  '更早自然周',
+                                  style: AppFinanceStyle.labelTextStyle(context)
+                                      .copyWith(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w600,
+                                        color: AppFinanceStyle.valueColor,
+                                      ),
+                                ),
+                                const SizedBox(height: 8),
+                                ...others.map((mon) {
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 10),
+                                    child: _buildWeeklyCard(
+                                      ctx,
+                                      mon,
+                                      _aggForBeijingWeek(mon),
+                                      highlight: false,
+                                      currentWeek: false,
+                                    ),
+                                  );
+                                }),
+                              ],
+                            ],
+                          ],
+                        );
+                      }
+
                       final hi = _highlightSeason();
                       final others = _otherSeasons(hi);
                       return ListView(

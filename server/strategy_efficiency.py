@@ -8,7 +8,8 @@
 也**不是** ATR。经典 ATR(14) 由 ``compute_atr14_wilder_by_day`` 单独从 OHLC 递推（Wilder），供阈值参考。
 
 Account_List 账户的「UTC 自然月月初」资金/权益分母优先用库表 account_month_open（与定时任务一致），无表行时仍可从快照序列推导。
-现金日明细优先来自 account_balance_snapshots；旧版 tradingbots.json 机器人用 tradingbot_profit_snapshots（权益 equity_usdt
+现金日明细优先来自 account_balance_snapshots 的 available_margin（可用保证金；旧行仅误存于 cash_balance）；
+旧版 tradingbots.json 机器人用 tradingbot_profit_snapshots（权益 equity_usdt
 经 normalize_bot_profit_snapshots_for_efficiency 映射为 cash_balance）。对 K 线有、但当日无快照的日期，
 由 fill_cash_by_day_for_market_bars 补齐为「当日无增量」（sod=eod=上一日末现金）；若全程无快照则占位为 0，
 以便仍返回结构化行并由 merge 计算现金收益率%与策略能效（增量为 0 时能效为 0）。
@@ -17,6 +18,20 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any
+
+
+def _snapshot_available_margin_cash_basis(r: dict[str, Any]) -> float:
+    """账户快照「现金」序列：可用保证金（availEq）；旧行仅误存于 cash_balance。"""
+    try:
+        am = r.get("available_margin")
+        if am is not None and str(am).strip() != "":
+            return max(0.0, float(am))
+    except (TypeError, ValueError):
+        pass
+    try:
+        return max(0.0, float(r.get("cash_balance") or 0.0))
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def normalize_bot_profit_snapshots_for_efficiency(
@@ -64,9 +79,8 @@ def _parse_snapshot_ts(raw: str) -> datetime | None:
 
 def daily_cash_delta_by_utc_day(snapshots: list[dict[str, Any]]) -> dict[str, dict[str, float]]:
     """
-    对每个 UTC 日 D：sod_cash = D 开始前最后一条快照的 cash_balance；
-    eod_cash = D 日内（含）最后一条快照的 cash_balance。
-    现金余额（availEq 口径）按非负处理；日变动 cash_delta_usdt = max(0, eod - sod)，
+    对每个 UTC 日 D：sod_cash / eod_cash 使用可用保证金（available_margin，旧行见 _snapshot_available_margin_cash_basis）。
+    按非负处理；日变动 cash_delta_usdt = max(0, eod - sod)，
     不出现负值（仅反映当日余额相对日初的**增加**部分）。
     仅返回当日至少有一条快照的日期。
     """
@@ -75,11 +89,7 @@ def daily_cash_delta_by_utc_day(snapshots: list[dict[str, Any]]) -> dict[str, di
         ts = _parse_snapshot_ts(str(r.get("snapshot_at") or ""))
         if ts is None:
             continue
-        try:
-            cash = float(r.get("cash_balance") or 0.0)
-        except (TypeError, ValueError):
-            cash = 0.0
-        cash = max(0.0, cash)
+        cash = _snapshot_available_margin_cash_basis(r)
         points.append((ts, cash))
     if not points:
         return {}
@@ -330,7 +340,7 @@ def month_start_cash_by_month_from_snapshots(
 ) -> dict[str, float]:
     """
     每个 UTC 自然月 YYYY-MM 对应「月初」资金：
-    该月 1 日 00:00 UTC 之前最后一笔快照的 cash_balance；
+    该月 1 日 00:00 UTC 之前最后一笔快照的可用保证金（与 daily_cash_delta 同源）；
     若该月前无任何快照，则取该月内最早一条快照余额（新户首月）。
     """
     points: list[tuple[datetime, float]] = []
@@ -338,11 +348,7 @@ def month_start_cash_by_month_from_snapshots(
         ts = _parse_snapshot_ts(str(r.get("snapshot_at") or ""))
         if ts is None:
             continue
-        try:
-            cash = float(r.get("cash_balance") or 0.0)
-        except (TypeError, ValueError):
-            cash = 0.0
-        cash = max(0.0, cash)
+        cash = _snapshot_available_margin_cash_basis(r)
         points.append((ts, cash))
     if not points:
         return {}

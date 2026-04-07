@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 在 AWS EC2 上首次安装服务端依赖并启动（在项目部署目录下执行，如 /home/ec2-user/hztechapp）
 # 用法：cd /home/ec2-user/hztechapp && bash server/install_on_aws.sh
+# 默认：API（main.py）+ Flutter Web 静态（serve_web_static.py）双进程，端口与 deploy-aws.json 的 app_port / web_port 一致
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -22,27 +23,33 @@ else
   python3 -m ensurepip --user -q 2>/dev/null || true
   python3 -m pip install --user -r server/requirements.txt -q
 fi
-mkdir -p apk ipa res
+mkdir -p apk ipa res server/sqlite
 
-# 端口约定：单进程同时提供 Flutter Web + /api/*（与 run_local.sh / deploy-aws.json 的 web_port 一致）
+API_PORT="${API_PORT:-9001}"
 WEB_PORT="${WEB_PORT:-9000}"
+WEB_ROOT="${HZTECH_WEB_ROOT:-$PROJECT_ROOT/flutter_app/build/web}"
 export MOBILEAPP_ROOT="$PROJECT_ROOT"
 
 # 停止已有进程
 pkill -f "server/main.py" 2>/dev/null || true
+pkill -f "server/serve_web_static.py" 2>/dev/null || true
 pkill -f "server/simpleserver.py" 2>/dev/null || true
 sleep 1
 
-echo "启动 Flask (端口 $WEB_PORT：Flutter Web + API) ..."
-MOBILEAPP_ROOT="$PROJECT_ROOT" PORT=$WEB_PORT nohup python3 server/main.py >> server.log 2>&1 &
+echo "启动 API Flask (端口 $API_PORT) ..."
+MOBILEAPP_ROOT="$PROJECT_ROOT" PORT=$API_PORT nohup python3 server/main.py >> server.log 2>&1 &
+sleep 1
+
+echo "启动 Web 静态 (端口 $WEB_PORT, HZTECH_WEB_ROOT=$WEB_ROOT) ..."
+HZTECH_WEB_ROOT="$WEB_ROOT" PORT=$WEB_PORT nohup python3 server/serve_web_static.py >> web_static.log 2>&1 &
 sleep 2
 
 if pgrep -f "server/main.py" >/dev/null; then
   IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo 'localhost')
   echo "服务已启动。"
-  echo "  访问: http://$IP:$WEB_PORT  （/api/* 与 Web 同端口）"
-  echo "  日志: tail -f $PROJECT_ROOT/server.log"
+  echo "  API: http://$IP:$API_PORT/  （/api/* 等，日志 tail -f $PROJECT_ROOT/server.log）"
+  echo "  Web: http://$IP:$WEB_PORT/  （Flutter Web，日志 tail -f $PROJECT_ROOT/web_static.log）"
 else
-  echo "启动失败，请查看: cat $PROJECT_ROOT/server.log"
+  echo "API 启动失败，请查看: cat $PROJECT_ROOT/server.log"
   exit 1
 fi

@@ -1,0 +1,6 @@
+-- SQLite / 说明：account_balance_snapshots 区分 USDT 资产余额(cash_balance)、可用保证金(available_margin)、占用(used_margin)。
+-- 旧行中 cash_balance 曾存 availEq；迁移后由程序 init 将 available_margin=cash_balance 并 cash_balance=0，或手工执行：
+-- ALTER TABLE account_balance_snapshots ADD COLUMN available_margin REAL NOT NULL DEFAULT 0;
+-- ALTER TABLE account_balance_snapshots ADD COLUMN used_margin REAL NOT NULL DEFAULT 0;
+-- UPDATE account_balance_snapshots SET available_margin = cash_balance WHERE IFNULL(available_margin, 0) = 0;
+-- UPDATE account_balance_snapshots SET cash_balance = 0;

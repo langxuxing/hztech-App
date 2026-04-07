@@ -273,7 +273,9 @@ class _WebAccountConfigAdminScreenState
       return (avail: '—', total: '—', locked: '—');
     }
     final total = toD(bal['total_eq'] ?? bal['equity_usdt']);
-    final avail = toD(bal['avail_eq'] ?? bal['cash_balance']);
+    final avail = toD(
+      bal['available_margin'] ?? bal['avail_eq'] ?? bal['cash_balance'],
+    );
     var locked = total - avail;
     if (locked < 0) locked = 0;
     return (
@@ -536,6 +538,80 @@ class _WebAccountConfigAdminScreenState
     );
   }
 
+  /// 服务端在 `auto_configure` 请求下的 OKX 写操作步骤（双向持仓 / 全仓 / 多空杠杆）。
+  Widget _autoConfigureSection(BuildContext context, Map<String, dynamic> m) {
+    if (m['auto_configure'] != true) return const SizedBox.shrink();
+    final base = AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 12);
+    final skipped = m['configure_skipped']?.toString().trim() ?? '';
+    if (skipped.isNotEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: SelectableText(
+          '自动配置：已跳过 — $skipped',
+          style: base.copyWith(color: Colors.orange.shade200),
+        ),
+      );
+    }
+    final cr = m['configure_result'];
+    if (cr is! Map) return const SizedBox.shrink();
+    final ok = cr['ok'] == true;
+    final steps = cr['steps'];
+    final errs = cr['errors'];
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '自动配置 OKX（永续 SWAP、双向持仓、全仓、多空杠杆）',
+            style: base.copyWith(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 4),
+          SelectableText(
+            ok ? '执行结果：全部步骤成功' : '执行结果：存在失败步骤',
+            style: TextStyle(
+              color: ok
+                  ? AppFinanceStyle.profitGreenEnd
+                  : Colors.orange.shade200,
+              fontSize: 12,
+            ),
+          ),
+          if (steps is List && steps.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            ...steps.map((s) {
+              if (s is! Map) return const SizedBox.shrink();
+              final name = s['name']?.toString() ?? '';
+              final stepOk = s['ok'] == true;
+              final det = s['detail']?.toString() ?? '';
+              final line = det.isEmpty ? name : '$name — $det';
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 2),
+                child: SelectableText(
+                  '${stepOk ? "✓" : "✗"} $line',
+                  style: base.copyWith(
+                    color: stepOk
+                        ? AppFinanceStyle.labelColor
+                        : Colors.orange.shade200,
+                  ),
+                ),
+              );
+            }),
+          ],
+          if (errs is List && errs.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text('错误摘要', style: base.copyWith(fontWeight: FontWeight.w600)),
+            ...errs.map(
+              (e) => SelectableText(
+                e.toString(),
+                style: base.copyWith(color: Colors.red.shade200),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   Future<void> _showTestAccountResultDialog(
     Map<String, dynamic> m,
     AccountConfigRow row,
@@ -652,6 +728,7 @@ class _WebAccountConfigAdminScreenState
                       ),
                     ),
                   ],
+                  _autoConfigureSection(ctx, m),
                   _warningsSection(ctx, m),
                 ],
               ),
@@ -678,12 +755,18 @@ class _WebAccountConfigAdminScreenState
     );
   }
 
-  Future<void> _test(AccountConfigRow row) async {
+  Future<void> _test(
+    AccountConfigRow row, {
+    bool autoConfigure = false,
+  }) async {
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
       final api = ApiClient(baseUrl, token: token);
-      final m = await api.adminTestAccountConnection(row.accountId);
+      final m = await api.adminTestAccountConnection(
+        row.accountId,
+        autoConfigure: autoConfigure,
+      );
       if (!mounted) return;
       setState(() {
         _testRecordByAccountId[row.accountId] = _AccountTestRecord(
@@ -1010,6 +1093,11 @@ class _WebAccountConfigAdminScreenState
                                   TextButton(
                                     onPressed: () => _test(a),
                                     child: const Text('测试账户'),
+                                  ),
+                                  TextButton(
+                                    onPressed: () =>
+                                        _test(a, autoConfigure: true),
+                                    child: const Text('测试并自动配置'),
                                   ),
                                   TextButton(
                                     onPressed: () => _delete(a),

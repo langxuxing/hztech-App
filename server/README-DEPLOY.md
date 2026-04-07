@@ -51,14 +51,15 @@ python3 server/server_mgr.py deploy --build
 2. **确认服务在跑**  
    SSH 上 EC2 后执行：
    ```bash
-   pgrep -f "server/main.py"
+   pgrep -af "server/main.py"
+   pgrep -af "server/serve_web_static.py"
    curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9000/
    curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9001/
    ```
-   若有 2 个 PID 且两个 curl 都返回 200，说明本机正常，问题在安全组或网络。
+   API 根路径 `/` 应返回 200（JSON）；Web 静态 `/` 在已同步 `flutter build web` 时为 200，未构建时为 503。
 
 3. **若进程没起来**  
-   看日志：`cat /home/ec2-user/hztechapp/server_web.log`、`server_api.log`。若是 `_sqlite3` 等错误，按下一节处理。然后重新执行：  
+   看日志：`cat /home/ec2-user/hztechapp/server.log`、`web_static.log`。若是 `_sqlite3` 等错误，按下一节处理。然后重新执行：  
    `cd /home/ec2-user/hztechapp && bash server/install_on_aws.sh`
 
 ## 若出现 No module named '_sqlite3'
@@ -78,7 +79,7 @@ python3 server/server_mgr.py deploy --build
 cd /home/ec2-user/hztechapp && bash server/install_on_aws.sh
 ```
 
-会安装 `server/requirements.txt`、创建 `apk` 目录（资源在 `server/res/`）并后台启动 Flask 服务。
+会安装 `server/requirements.txt`、创建 `apk` 等目录，并后台启动 **API**（`server/main.py`）与 **Web 静态**（`server/serve_web_static.py`）两个进程。
 
 ## 部署后测试
 
@@ -90,12 +91,12 @@ cd /home/ec2-user/hztechapp && bash server/install_on_aws.sh
 
 或指定地址：`BASE_URL=http://54.252.181.151:9001 ./server/test_server.sh`
 
-会请求首页、`/api/strategy/status`、`/api/login` 及登录后的 `/api/account-profit`。
+会请求 Web 静态根、API 根（JSON）、`/api/strategy/status`、`/api/login` 及登录后的 `/api/account-profit`。
 
 ## 部署后
 
-- Web（浏览器）：`http://54.252.181.151:9000`
-- API（App 后端）：`http://54.252.181.151:9001`
-- APK 下载：Web 首页或 `http://54.252.181.151:9000/download/apk/禾正量化-release.apk`
+- Web（浏览器，Flutter 静态）：`http://54.252.181.151:9000`
+- API（App / Flutter Web 调用的后端）：`http://54.252.181.151:9001`
+- APK 下载（由 API 提供）：`http://54.252.181.151:9001/download/apk/禾正量化-release.apk`
 - 若需 HTTPS：在 EC2 前加 Nginx/Caddy 做 SSL 终结，再在 `deploy-aws.json` 中把 `scheme` 改为 `https`。
-- 日志：`python3 server/server_mgr.py shell` 登录后 `cat /home/ec2-user/hztechapp/server_web.log` 或 `server_api.log`
+- 日志：API `server.log`，Web 静态 `web_static.log`（路径均在部署根目录下）

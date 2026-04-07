@@ -6,6 +6,8 @@ CREATE TABLE IF NOT EXISTS account_daily_performance (
     close_count INTEGER NOT NULL DEFAULT 0,
     equity_base REAL,
     pnl_pct REAL,
+    equity_base_realized_chain REAL,
+    pnl_pct_realized_chain REAL,
     benchmark_inst_id TEXT NOT NULL DEFAULT '',
     market_tr REAL,
     efficiency_ratio REAL,

@@ -391,9 +391,11 @@ class ExchangeManager:
                 "total_eq": float(raw.get("total_eq", 0)),
                 "avail_eq": float(raw.get("avail_eq", 0)),
                 "equity_usdt": float(raw.get("equity_usdt", raw.get("total_eq", 0))),
-                "cash_balance": float(
-                    raw.get("cash_balance", raw.get("avail_eq", 0))
+                "cash_balance": float(raw.get("cash_balance", 0)),
+                "available_margin": float(
+                    raw.get("available_margin", raw.get("avail_eq", 0))
                 ),
+                "used_margin": float(raw.get("used_margin", 0)),
                 "upl": float(raw.get("upl", 0)),
             }
         if not exchange:

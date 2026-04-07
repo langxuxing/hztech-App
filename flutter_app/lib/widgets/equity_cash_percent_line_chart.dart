@@ -4,9 +4,18 @@ import 'package:flutter/material.dart';
 import '../api/models.dart';
 import '../theme/finance_style.dart';
 import '../utils/number_display_format.dart';
+import 'month_end_profit_panel.dart' show dailyPerfChangeMapForMonth;
 
 /// 深色背景上 X 轴日期刻度（与日历无数据格同档可读性）。
 const _kChartAxisDateLabel = Color(0xFFC8C8C8);
+
+/// 与日绩效折线一致：区间内末点相对首点涨跌着色。
+Color _snapshotTrendLineColor(List<FlSpot> spots) {
+  if (spots.isEmpty) return AppFinanceStyle.chartProfit;
+  return spots.last.y >= spots.first.y
+      ? AppFinanceStyle.chartProfit
+      : AppFinanceStyle.chartLoss;
+}
 
 DateTime? _parseSnapshotAt(String raw) {
   if (raw.isEmpty) return null;
@@ -68,18 +77,40 @@ class SnapshotPercentLineChart extends StatelessWidget {
     this.compact = false,
     /// 非空时仅展示该自然月内的快照点（与月度日历/柱图对齐）。
     this.focusedMonth,
+    /// 与 [focusedMonth] 同月时优先使用：`累计(equity_change|cash_change) / 月初分母 * 100`（与 account_daily_performance 一致）。
+    this.dailyPerfDays,
+    /// 权益用月初权益；现金用 `month_initial_balance`（USDT 余额）。
+    this.monthPerformanceDenom,
   });
 
   final List<BotProfitSnapshot> snapshots;
   final SnapshotReturnSeries series;
   final bool compact;
   final DateTime? focusedMonth;
-
-  static const Color _cashLineColor = Color(0xFF7DB7FF);
+  final List<DailyRealizedPnlDayRow>? dailyPerfDays;
+  final double? monthPerformanceDenom;
 
   @override
   Widget build(BuildContext context) {
-    if (snapshots.isEmpty) {
+    final fullSorted = _sortedByTime(snapshots);
+    final pickCh0 = series == SnapshotReturnSeries.equity
+        ? (DailyRealizedPnlDayRow r) => r.equityChange
+        : (DailyRealizedPnlDayRow r) => r.cashChange;
+    final perfEarly = focusedMonth != null &&
+            dailyPerfDays != null &&
+            monthPerformanceDenom != null &&
+            monthPerformanceDenom! > 0
+        ? dailyPerfChangeMapForMonth(
+            dailyPerfDays!,
+            focusedMonth!.year,
+            focusedMonth!.month,
+            pickCh0,
+          )
+        : <int, double>{};
+    /// 无历史快照时，仅在有选中月 + 日绩效 + 月初分母 时仍可画月内折线。
+    final allowEmptySnapshots = focusedMonth != null && perfEarly.isNotEmpty;
+
+    if (fullSorted.isEmpty && !allowEmptySnapshots) {
       return Center(
         child: Text(
           '暂无快照',
@@ -90,9 +121,9 @@ class SnapshotPercentLineChart extends StatelessWidget {
         ),
       );
     }
-    final fullSorted = _sortedByTime(snapshots);
+
     var sorted = fullSorted;
-    if (focusedMonth != null) {
+    if (focusedMonth != null && fullSorted.isNotEmpty) {
       final y = focusedMonth!.year;
       final m = focusedMonth!.month;
       final monthStart = DateTime(y, m, 1);
@@ -103,19 +134,9 @@ class SnapshotPercentLineChart extends StatelessWidget {
         return !d.isBefore(monthStart) && !d.isAfter(monthEnd);
       }).toList();
     }
-    if (fullSorted.isEmpty) {
-      return Center(
-        child: Text(
-          '暂无快照',
-          style: TextStyle(
-            color: AppFinanceStyle.labelColor,
-            fontSize: compact ? 11 : 13,
-          ),
-        ),
-      );
-    }
-    final denom = fullSorted.first.initialBalance;
-    if (denom <= 0) {
+
+    final denom = fullSorted.isNotEmpty ? fullSorted.first.initialBalance : 1.0;
+    if (fullSorted.isNotEmpty && denom <= 0) {
       return Center(
         child: Text(
           '期初为 0',
@@ -134,6 +155,9 @@ class SnapshotPercentLineChart extends StatelessWidget {
 
     int? lastDayInMonth;
     int? monthForAxis;
+    var monthLineFromDailyPerf = false;
+    var monthPerfMapForTip = <int, double>{};
+    var monthLineDenomForTip = 0.0;
     final pick = series == SnapshotReturnSeries.equity
         ? (BotProfitSnapshot s) => s.equityUsdt
         : (BotProfitSnapshot s) => s.currentBalance;
@@ -142,32 +166,59 @@ class SnapshotPercentLineChart extends StatelessWidget {
       final y = focusedMonth!.year;
       final m = focusedMonth!.month;
       monthForAxis = m;
-      lastDayInMonth = DateTime(y, m + 1, 0).day;
-      final beforeFirstDay =
-          DateTime(y, m, 1).subtract(const Duration(microseconds: 1));
-      double? runCarry;
-      final startVal = _snapshotValueAtOrBefore(fullSorted, beforeFirstDay, pick);
-      if (startVal.isFinite) runCarry = startVal;
+      final daysInMonth = DateTime(y, m + 1, 0).day;
+      lastDayInMonth = daysInMonth;
+      final pickCh = series == SnapshotReturnSeries.equity
+          ? (DailyRealizedPnlDayRow r) => r.equityChange
+          : (DailyRealizedPnlDayRow r) => r.cashChange;
+      final perfMap = dailyPerfDays != null &&
+              monthPerformanceDenom != null &&
+              monthPerformanceDenom! > 0
+          ? dailyPerfChangeMapForMonth(dailyPerfDays!, y, m, pickCh)
+          : <int, double>{};
+      final monthDenom = monthPerformanceDenom;
+      final useDailyPerf =
+          perfMap.isNotEmpty && monthDenom != null && monthDenom > 0;
 
-      for (var day = 1; day <= lastDayInMonth; day++) {
-        final end = DateTime(y, m, day, 23, 59, 59, 999);
-        final vRaw = _snapshotValueAtOrBefore(fullSorted, end, pick);
-        late final double v;
-        if (vRaw.isFinite) {
-          runCarry = vRaw;
-          v = vRaw;
-        } else if (runCarry != null) {
-          v = runCarry;
-        } else if (startVal.isFinite) {
-          v = startVal;
-        } else {
-          // 整月无 prior 快照时仍铺满 X 轴，收益率按 0% 水平线展示
-          v = denom;
+      if (useDailyPerf) {
+        monthLineFromDailyPerf = true;
+        monthPerfMapForTip = perfMap;
+        monthLineDenomForTip = monthDenom;
+        var cum = 0.0;
+        for (var day = 1; day <= daysInMonth; day++) {
+          cum += perfMap[day] ?? 0.0;
+          final pct = (cum / monthDenom) * 100;
+          spots.add(FlSpot((day - 1).toDouble(), pct));
+          if (pct < minY) minY = pct;
+          if (pct > maxY) maxY = pct;
         }
-        final pct = (v / denom - 1) * 100;
-        spots.add(FlSpot((day - 1).toDouble(), pct));
-        if (pct < minY) minY = pct;
-        if (pct > maxY) maxY = pct;
+      } else {
+        final beforeFirstDay =
+            DateTime(y, m, 1).subtract(const Duration(microseconds: 1));
+        double? runCarry;
+        final startVal = _snapshotValueAtOrBefore(fullSorted, beforeFirstDay, pick);
+        if (startVal.isFinite) runCarry = startVal;
+
+        for (var day = 1; day <= daysInMonth; day++) {
+          final end = DateTime(y, m, day, 23, 59, 59, 999);
+          final vRaw = _snapshotValueAtOrBefore(fullSorted, end, pick);
+          late final double v;
+          if (vRaw.isFinite) {
+            runCarry = vRaw;
+            v = vRaw;
+          } else if (runCarry != null) {
+            v = runCarry;
+          } else if (startVal.isFinite) {
+            v = startVal;
+          } else {
+            // 整月无 prior 快照时仍铺满 X 轴，收益率按 0% 水平线展示
+            v = denom;
+          }
+          final pct = (v / denom - 1) * 100;
+          spots.add(FlSpot((day - 1).toDouble(), pct));
+          if (pct < minY) minY = pct;
+          if (pct > maxY) maxY = pct;
+        }
       }
     } else {
       for (var i = 0; i < sorted.length; i++) {
@@ -198,9 +249,7 @@ class SnapshotPercentLineChart extends StatelessWidget {
       maxY += 1;
     }
     final pad = (maxY - minY).abs() * 0.08 + 1.0;
-    final lineColor = series == SnapshotReturnSeries.equity
-        ? AppFinanceStyle.profitGreenEnd
-        : _cashLineColor;
+    final lineColor = _snapshotTrendLineColor(spots);
 
     final xSpan = monthMode
         ? ((lastDayInMonth ?? 1) - 1).clamp(0, 999).toDouble()
@@ -225,6 +274,22 @@ class SnapshotPercentLineChart extends StatelessWidget {
                   final day = spot.x.round().clamp(0, lastDayInMonth - 1) + 1;
                   final y = focusedMonth!.year;
                   final mo = focusedMonth!.month;
+                  if (monthLineFromDailyPerf) {
+                    var cumTip = 0.0;
+                    for (var d = 1; d <= day; d++) {
+                      cumTip += monthPerfMapForTip[d] ?? 0.0;
+                    }
+                    final level = monthLineDenomForTip + cumTip;
+                    final amt = formatUiInteger(level);
+                    return LineTooltipItem(
+                      '$day日 $amt（${formatUiInteger(spot.y)}%）',
+                      TextStyle(
+                        color: lineColor,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 11,
+                      ),
+                    );
+                  }
                   final end = DateTime(y, mo, day, 23, 59, 59, 999);
                   final raw = _snapshotValueAtOrBefore(fullSorted, end, pick);
                   final amt =
@@ -365,8 +430,6 @@ class EquityCashPercentLineChart extends StatelessWidget {
 
   final List<BotProfitSnapshot> snapshots;
 
-  static const Color _cashLineColor = Color(0xFF7DB7FF);
-
   @override
   Widget build(BuildContext context) {
     if (snapshots.isEmpty) return const SizedBox.shrink();
@@ -401,6 +464,8 @@ class EquityCashPercentLineChart extends StatelessWidget {
       maxY += 1;
     }
     final pad = (maxY - minY).abs() * 0.08 + 1.0;
+    final eqColor = _snapshotTrendLineColor(spotsEq);
+    final cashColor = _snapshotTrendLineColor(spotsCash);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -419,7 +484,7 @@ class EquityCashPercentLineChart extends StatelessWidget {
                 LineChartBarData(
                   spots: spotsEq,
                   isCurved: true,
-                  color: AppFinanceStyle.profitGreenEnd,
+                  color: eqColor,
                   barWidth: 2.5,
                   isStrokeCapRound: true,
                   dotData: const FlDotData(show: false),
@@ -428,7 +493,7 @@ class EquityCashPercentLineChart extends StatelessWidget {
                 LineChartBarData(
                   spots: spotsCash,
                   isCurved: true,
-                  color: _cashLineColor,
+                  color: cashColor,
                   barWidth: 2.5,
                   isStrokeCapRound: true,
                   dotData: const FlDotData(show: false),
@@ -443,9 +508,9 @@ class EquityCashPercentLineChart extends StatelessWidget {
         Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            _LegendDot(color: AppFinanceStyle.profitGreenEnd, label: '权益收益率'),
+            _LegendDot(color: eqColor, label: '权益收益率'),
             const SizedBox(width: 20),
-            _LegendDot(color: _cashLineColor, label: '现金收益率'),
+            _LegendDot(color: cashColor, label: '现金收益率'),
           ],
         ),
       ],

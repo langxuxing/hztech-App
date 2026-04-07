@@ -115,7 +115,7 @@ class ApiClient {
     }
     if (raw.toLowerCase().startsWith('<')) {
       throw FormatException(
-        '后端返回了网页而非接口数据。请将「后端地址」改为 API 根地址（如 http://127.0.0.1:9001/），路径为 /api/...；Web 前端端口多为 9000，勿与 API 混淆。',
+        '后端返回了网页而非接口数据。请将「后端地址」改为 API 根地址（如 http://127.0.0.1:9001/），路径为 /api/...；勿使用 Flutter Web 静态站端口。',
       );
     }
     final map = jsonDecode(resp.body) as Map<String, dynamic>;
@@ -298,17 +298,23 @@ class ApiClient {
 
   Future<BotProfitHistoryResponse> getBotProfitHistory(
     String botId, {
-    int limit = 500,
+    int limit = 15000,
+    String? since,
   }) async {
     final uri = Uri.parse(
-      '${_normalizedBase}api/tradingbots/$botId/profit-history?limit=$limit',
+      '${_normalizedBase}api/tradingbots/$botId/profit-history',
+    ).replace(
+      queryParameters: {
+        'limit': '$limit',
+        if (since != null && since.isNotEmpty) 'since': since,
+      },
     );
     final resp = await _getWithRetry(uri, _headers);
     final map = jsonDecode(resp.body) as Map<String, dynamic>;
     return BotProfitHistoryResponse.fromJson(map);
   }
 
-  /// 历史平仓按 UTC 自然日汇总（净盈亏、平仓笔数），供月度日历展示。
+  /// 历史平仓按 UTC 自然日汇总（净盈亏、平仓笔数），归属时刻为 OKX uTime（平仓时间），供月度日历展示。
   Future<DailyRealizedPnlResponse> getDailyRealizedPnl(
     String botId,
     int year,
@@ -331,6 +337,20 @@ class ApiClient {
   }
 
   /// 指定 bot 的持仓（数量、持仓成本、当前价、动态盈亏）
+  /// 已入库的当前持仓快照（account_open_positions_snapshots），含多/空成本线。
+  Future<OpenPositionsSnapshotsResponse> getOpenPositionsSnapshots(
+    String botId, {
+    int limit = 500,
+  }) async {
+    final uri = Uri.parse(
+      '${_normalizedBase}api/tradingbots/'
+      '${Uri.encodeComponent(botId)}/open-positions-snapshots?limit=$limit',
+    );
+    final resp = await _getWithRetry(uri, _headers);
+    final map = jsonDecode(resp.body) as Map<String, dynamic>;
+    return OpenPositionsSnapshotsResponse.fromJson(map);
+  }
+
   Future<OkxPositionsResponse> getTradingbotPositions(String botId) async {
     if (kDebugMode && ApiClient.debugPositions) {
       // ignore: avoid_print
@@ -386,7 +406,7 @@ class ApiClient {
     return StrategyDailyEfficiencyResponse.fromJson(map);
   }
 
-  /// 赛季时间区间内历史平仓笔数与净盈亏（`close_count`, `net_realized_pnl_usdt`）。
+  /// 赛季时间区间内历史平仓笔数与净盈亏（`close_count`, `net_realized_pnl_usdt`）；时刻边界为 OKX uTime。
   Future<Map<String, dynamic>> getSeasonPositionsSummary(
     String botId,
     int seasonId,
@@ -513,14 +533,19 @@ class ApiClient {
     return SimpleMessageResponse.fromJson(map);
   }
 
-  /// POST .../test-connection
+  /// POST .../test-connection；[autoConfigure] 为 true 时 Body 带 `auto_configure`，
+  /// 在测连成功后由服务端调用 OKX 设置双向持仓、全仓、按账户 symbol 设多空杠杆并复测。
   Future<Map<String, dynamic>> adminTestAccountConnection(
-    String accountId,
-  ) async {
+    String accountId, {
+    bool autoConfigure = false,
+  }) async {
     final uri = Uri.parse(
       '${_normalizedBase}api/admin/accounts/${Uri.encodeComponent(accountId)}/test-connection',
     );
-    final resp = await _postWithRetry(uri, _headers);
+    final Object? body = autoConfigure
+        ? jsonEncode(<String, dynamic>{'auto_configure': true})
+        : null;
+    final resp = await _postWithRetry(uri, _headers, body: body);
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
@@ -545,14 +570,18 @@ class ApiClient {
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
-  /// POST .../test-connection（客户）
+  /// POST .../test-connection（客户）；[autoConfigure] 同 [adminTestAccountConnection]。
   Future<Map<String, dynamic>> customerTestAccountConnection(
-    String accountId,
-  ) async {
+    String accountId, {
+    bool autoConfigure = false,
+  }) async {
     final uri = Uri.parse(
       '${_normalizedBase}api/me/customer-accounts/${Uri.encodeComponent(accountId)}/test-connection',
     );
-    final resp = await _postWithRetry(uri, _headers);
+    final Object? body = autoConfigure
+        ? jsonEncode(<String, dynamic>{'auto_configure': true})
+        : null;
+    final resp = await _postWithRetry(uri, _headers, body: body);
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 }

@@ -1004,8 +1004,36 @@ class _AccountGlassCard extends StatefulWidget {
 class _AccountGlassCardState extends State<_AccountGlassCard>
     with SingleTickerProviderStateMixin {
   static const _labelMuted = AppFinanceStyle.labelColor;
-  static const _cyanAccent = Color(0xFF2EE6D6);
+  /// 顶部「运行中」角标与脉冲点（略亮以保证可读）
   static const _greenRun = Color(0xFF3DFF9C);
+
+  /// 赛季/策略控制区外层 box：底色与空日历格一致；赛季描边 RGB(32,64,21)，策略描边 RGB(72,33,46)。
+  static BoxDecoration get _seasonControlBoxDecoration => BoxDecoration(
+    color: Colors.white.withValues(alpha: 0.04),
+    borderRadius: BorderRadius.circular(8),
+    border: Border.all(
+      color: const Color.fromRGBO(32, 64, 21, 1),
+      width: 1,
+    ),
+  );
+
+  static BoxDecoration get _strategyControlBoxDecoration => BoxDecoration(
+    color: Colors.white.withValues(alpha: 0.04),
+    borderRadius: BorderRadius.circular(8),
+    border: Border.all(
+      color: const Color.fromRGBO(72, 33, 46, 1),
+      width: 1,
+    ),
+  );
+
+  /// 赛季/策略控制圆钮：与概览区「全部启动/停止」同款——深色实底 + 亮色图标
+  static const _ctrlStartFill = Color(0xFF16352A);
+  static const _ctrlStartIcon = Color(0xFF3DFF9C);
+  static const _ctrlStopFill = Color(0xFF3A1F22);
+  static const _ctrlStopIcon = Color(0xFFFF8A84);
+  static const _ctrlRestartFill = Color(0xFF3A3214);
+  static const _ctrlRestartIcon = Color(0xFFFFD54F);
+  static const _durationMuted = Color(0xFF8FA9A5);
 
   late final AnimationController _pulse;
 
@@ -1096,7 +1124,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
         );
 
     final labelStyle = Theme.of(context).textTheme.labelMedium?.copyWith(
-      color: _labelMuted.withValues(alpha: 0.62),
+      color: const Color.fromARGB(255, 206, 206, 209).withValues(alpha: 0.62),
       fontWeight: FontWeight.w600,
       letterSpacing: 0.4,
       fontSize: 16,
@@ -1119,7 +1147,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
         .copyWith(
           fontWeight: FontWeight.w600,
           fontSize: 16,
-          color: _cyanAccent,
+          color: _durationMuted,
           letterSpacing: 0.5,
           fontFeatures: const [FontFeature.tabularFigures()],
         );
@@ -1147,8 +1175,6 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
       builder: (context, _) {
         return FinanceCard(
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-          statusAccent: _statusAccent,
-          accentGlowT: _running ? glowT : 0,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.max,
@@ -1314,27 +1340,27 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
               ),
               const SizedBox(height: 12),
 
-              DecoratedBox(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(14),
-                  color: Colors.white.withValues(alpha: 0.04),
-                ),
+              Container(
+                decoration: _seasonControlBoxDecoration,
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                  padding: const EdgeInsets.fromLTRB(10, 4, 5, 12),
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Text(
-                        '赛季控制',
-                        style: Theme.of(context).textTheme.labelMedium
-                            ?.copyWith(
-                              color: _cyanAccent.withValues(alpha: 0.9),
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 0.35,
-                            ),
+                      Align(
+                        alignment: Alignment.topRight,
+                        child: Text(
+                          '赛季控制',
+                          style: Theme.of(context).textTheme.labelMedium
+                              ?.copyWith(
+                                color: AppFinanceStyle.labelColor,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.2,
+                                fontSize: 12,
+                              ),
+                        ),
                       ),
-                      const SizedBox(height: 18),
+                      const SizedBox(height: 14),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
@@ -1347,8 +1373,8 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                                 !seasonBusy &&
                                 widget.onSeasonStart != null,
                             icon: Icons.play_circle_outline,
-                            accent: _greenRun,
-                            iconColor: _greenRun,
+                            fillColor: _ctrlStartFill,
+                            iconColor: _ctrlStartIcon,
                             onTap: widget.onSeasonStart,
                           ),
                           _CyberCircleIconButton(
@@ -1361,8 +1387,8 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                                 widget.hasOpenSeason &&
                                 widget.onSeasonStop != null,
                             icon: Icons.stop_circle_outlined,
-                            accent: Colors.red,
-                            iconColor: Colors.red,
+                            fillColor: _ctrlStopFill,
+                            iconColor: _ctrlStopIcon,
                             onTap: widget.onSeasonStop,
                           ),
                         ],
@@ -1407,28 +1433,27 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
               ),
 
               const SizedBox(height: 12),
-              DecoratedBox(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(14),
-                  color: const Color(0xFF3DFF9C).withValues(alpha: 0.05),
-                ),
+              Container(
+                decoration: _strategyControlBoxDecoration,
                 child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                  padding: const EdgeInsets.fromLTRB(10, 4, 5, 12),
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Text(
-                        '策略控制',
-                        style: Theme.of(context).textTheme.labelMedium
-                            ?.copyWith(
-                              color: AppFinanceStyle.profitGreenEnd.withValues(
-                                alpha: 0.95,
+                      Align(
+                        alignment: Alignment.topRight,
+                        child: Text(
+                          '策略控制',
+                          style: Theme.of(context).textTheme.labelMedium
+                              ?.copyWith(
+                                color: AppFinanceStyle.labelColor,
+                                fontWeight: FontWeight.w600,
+                                letterSpacing: 0.2,
+                                fontSize: 12,
                               ),
-                              fontWeight: FontWeight.w700,
-                              letterSpacing: 0.35,
-                            ),
+                        ),
                       ),
-                      const SizedBox(height: 24),
+                      const SizedBox(height: 8),
                       if (robotBusy) ...[
                         const SizedBox(height: 8),
                         ClipRRect(
@@ -1444,7 +1469,9 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                             backgroundColor: Colors.white.withValues(
                               alpha: 0.06,
                             ),
-                            color: _greenRun.withValues(alpha: 0.85),
+                            color: AppFinanceStyle.valueColor.withValues(
+                              alpha: 0.45,
+                            ),
                           ),
                         ),
                       ],
@@ -1459,8 +1486,8 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                               isLoading: robotBusy,
                               enabled: !robotBusy && !_running,
                               icon: Icons.play_circle_outline,
-                              accent: _greenRun,
-                              iconColor: _greenRun,
+                              fillColor: _ctrlStartFill,
+                              iconColor: _ctrlStartIcon,
                               onTap: widget.onStart,
                             ),
                             _CyberCircleIconButton(
@@ -1469,8 +1496,8 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                               isLoading: robotBusy,
                               enabled: !robotBusy && _running,
                               icon: Icons.stop_circle_outlined,
-                              accent: Colors.red,
-                              iconColor: Colors.red,
+                              fillColor: _ctrlStopFill,
+                              iconColor: _ctrlStopIcon,
                               onTap: widget.onStop,
                             ),
                             _CyberCircleIconButton(
@@ -1479,8 +1506,8 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                               isLoading: robotBusy,
                               enabled: !robotBusy,
                               icon: Icons.restart_alt_outlined,
-                              accent: Colors.yellow,
-                              iconColor: Colors.yellow,
+                              fillColor: _ctrlRestartFill,
+                              iconColor: _ctrlRestartIcon,
                               onTap: widget.onRestart,
                             ),
                           ],
@@ -1500,7 +1527,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
   }
 }
 
-/// 极简描边圆钮：悬停/按下反馈 + 线性图标。
+/// 深色实底圆钮 + 亮色图标（与概览区 FilledButton.tonal 同款对比关系）。
 class _CyberCircleIconButton extends StatefulWidget {
   const _CyberCircleIconButton({
     required this.size,
@@ -1508,8 +1535,8 @@ class _CyberCircleIconButton extends StatefulWidget {
     required this.isLoading,
     required this.enabled,
     required this.icon,
-    required this.accent,
-    this.iconColor,
+    required this.fillColor,
+    required this.iconColor,
     required this.onTap,
   });
 
@@ -1519,11 +1546,11 @@ class _CyberCircleIconButton extends StatefulWidget {
   final bool enabled;
   final IconData icon;
 
-  /// 描边、底色与光晕。
-  final Color accent;
+  /// 圆形填充色（不透明深色调）。
+  final Color fillColor;
 
-  /// 图标与进度环；默认同 [accent]。
-  final Color? iconColor;
+  /// 图标、描边与加载环高亮色。
+  final Color iconColor;
   final VoidCallback? onTap;
 
   @override
@@ -1538,10 +1565,27 @@ class _CyberCircleIconButtonState extends State<_CyberCircleIconButton> {
   Widget build(BuildContext context) {
     final canPress =
         widget.enabled && !widget.isLoading && widget.onTap != null;
-    final a = widget.accent;
-    final iconTint = widget.iconColor ?? a;
-    final borderA = canPress ? (_pressed ? 0.95 : (_hover ? 0.75 : 0.4)) : 0.15;
-    final fillA = canPress ? (_pressed ? 0.22 : (_hover ? 0.14 : 0.08)) : 0.04;
+    final fg = widget.iconColor;
+    final base = widget.fillColor;
+
+    Color bgFill;
+    if (!canPress) {
+      bgFill = Color.alphaBlend(
+        base.withValues(alpha: 0.42),
+        const Color(0xFF121212),
+      );
+    } else if (_pressed) {
+      bgFill = Color.lerp(base, fg, 0.22)!;
+    } else if (_hover) {
+      bgFill = Color.lerp(base, fg, 0.12)!;
+    } else {
+      bgFill = base;
+    }
+
+    final borderA = canPress
+        ? (_pressed ? 0.62 : (_hover ? 0.48 : 0.32))
+        : 0.14;
+    final glowA = canPress ? (_pressed ? 0.35 : (_hover ? 0.22 : 0.12)) : 0.0;
 
     return MouseRegion(
       onEnter: (_) => setState(() => _hover = true),
@@ -1559,13 +1603,16 @@ class _CyberCircleIconButtonState extends State<_CyberCircleIconButton> {
           alignment: Alignment.center,
           decoration: BoxDecoration(
             shape: BoxShape.circle,
-            border: Border.all(color: a.withValues(alpha: borderA), width: 1.5),
-            color: a.withValues(alpha: fillA),
-            boxShadow: canPress && (_hover || _pressed)
+            border: Border.all(
+              color: fg.withValues(alpha: borderA),
+              width: canPress ? 1.5 : 1,
+            ),
+            color: bgFill,
+            boxShadow: glowA > 0.01
                 ? [
                     BoxShadow(
-                      color: a.withValues(alpha: _pressed ? 0.35 : 0.22),
-                      blurRadius: _pressed ? 14 : 10,
+                      color: fg.withValues(alpha: glowA),
+                      blurRadius: _pressed ? 10 : 8,
                       spreadRadius: 0,
                     ),
                   ]
@@ -1577,13 +1624,13 @@ class _CyberCircleIconButtonState extends State<_CyberCircleIconButton> {
                   height: widget.iconSize,
                   child: CircularProgressIndicator(
                     strokeWidth: 2,
-                    color: iconTint.withValues(alpha: 0.9),
+                    color: fg.withValues(alpha: 0.95),
                   ),
                 )
               : Icon(
                   widget.icon,
                   size: widget.iconSize,
-                  color: canPress ? iconTint : iconTint.withValues(alpha: 0.4),
+                  color: canPress ? fg : fg.withValues(alpha: 0.38),
                 ),
         ),
       ),

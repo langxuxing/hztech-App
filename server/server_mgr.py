@@ -332,7 +332,7 @@ def build_ios_flutter() -> bool:
 
 
 def build_web_flutter():
-    """flutter build web，供 Flask 托管 flutter_app/build/web。"""
+    """flutter build web；产物由 serve_web_static 或 CDN 托管，不再由 main.py 提供。"""
     if not FLUTTER_APP.is_dir():
         return False
     env = dict(os.environ)
@@ -430,20 +430,25 @@ def _remote_install_requirements_sh(remote_path: str) -> str:
     return "cd %s && %s" % (remote_path, pip3_or_mod)
 
 
+def _api_listen_port(cfg: dict) -> int:
+    """API 进程监听端口：优先 app_port，与 deploy-aws.json 顶层一致。"""
+    return int(cfg.get("app_port", cfg.get("web_port", 9001)))
+
+
 def remote_restart_api():
-    """在 API 主机上启动完整后端（/api/* + DB + 定时任务）。"""
+    """在 API 主机上启动完整后端（/api/*、/kline、/download 等 + DB + 定时任务）。"""
     c = target_config("api")
     remote_path = c["remote_path"]
-    web_port = c.get("web_port", 9000)
+    api_port = _api_listen_port(c)
     host = c["host"]
-    print("Restarting API server on %s (port=%s) ..." % (host, web_port))
+    print("Restarting API server on %s (port=%s) ..." % (host, api_port))
     run_ssh(
         f"cd {remote_path} && pkill -f server/main.py 2>/dev/null || true", check=False, cfg=c
     )
     run_ssh(f"cd {remote_path} && mkdir -p apk server/sqlite", check=True, cfg=c)
     run_ssh(_remote_install_requirements_sh(remote_path), cfg=c)
     run_ssh(
-        f"cd {remote_path} && unset HZTECH_STATIC_ONLY; MOBILEAPP_ROOT={remote_path} PORT={web_port} "
+        f"cd {remote_path} && MOBILEAPP_ROOT={remote_path} PORT={api_port} "
         f"nohup python3 server/main.py >> server.log 2>&1 & sleep 1",
         cfg=c,
     )
@@ -451,43 +456,60 @@ def remote_restart_api():
 
 
 def remote_restart_web():
-    """在 Web 主机上启动仅静态站点（Flutter Web + APK + /res；API 在另一台机器）。"""
+    """在 Web 主机上启动 Flutter Web 静态站（server/serve_web_static.py）；API 在另一台机器。"""
     c = target_config("web")
     remote_path = c["remote_path"]
-    web_port = c.get("web_port", 9000)
+    web_port = int(c.get("web_port", 9000))
     host = c["host"]
-    print("Restarting Web (static) on %s (port=%s) ..." % (host, web_port))
+    web_root = f"{remote_path}/flutter_app/build/web"
+    print(
+        "Restarting Web (Flutter static) on %s (port=%s, root=%s) ..."
+        % (host, web_port, web_root)
+    )
     run_ssh(
-        f"cd {remote_path} && pkill -f server/main.py 2>/dev/null || true", check=False, cfg=c
+        f"cd {remote_path} && pkill -f server/serve_web_static.py 2>/dev/null || true",
+        check=False,
+        cfg=c,
     )
     run_ssh(f"cd {remote_path} && mkdir -p apk res", check=True, cfg=c)
     run_ssh(_remote_install_requirements_sh(remote_path), cfg=c)
     run_ssh(
-        f"cd {remote_path} && HZTECH_STATIC_ONLY=1 MOBILEAPP_ROOT={remote_path} PORT={web_port} "
-        f"nohup python3 server/main.py >> server.log 2>&1 & sleep 1",
+        f"cd {remote_path} && HZTECH_WEB_ROOT={web_root} PORT={web_port} "
+        f"nohup python3 server/serve_web_static.py >> web_static.log 2>&1 & sleep 1",
         cfg=c,
     )
-    print("Web server restarted. Log: %s/server.log" % remote_path)
+    print("Web static server restarted. Log: %s/web_static.log" % remote_path)
 
 
 def remote_restart_single():
-    """单主机部署：REST API + Flutter Web 同一进程。"""
+    """单主机部署：API（main.py）+ Flutter Web 静态（serve_web_static.py）双进程。"""
     c = target_config("web")
     remote_path = c["remote_path"]
-    web_port = c.get("web_port", 9000)
+    web_port = int(c.get("web_port", 9000))
+    api_port = _api_listen_port(c)
+    web_root = f"{remote_path}/flutter_app/build/web"
     print(
-        "Restarting server on %s (port=%s, API+Web) ..." % (c["host"], web_port)
+        "Restarting API+Web on %s (API port=%s, Web port=%s) ..."
+        % (c["host"], api_port, web_port)
     )
-    run_ssh(f"cd {remote_path} && pkill -f server/main.py 2>/dev/null || true", check=False)
-    run_ssh(f"cd {remote_path} && mkdir -p apk res")
+    run_ssh(
+        "cd %s && pkill -f server/main.py 2>/dev/null || true; "
+        "pkill -f server/serve_web_static.py 2>/dev/null || true" % remote_path,
+        check=False,
+    )
+    run_ssh(f"cd {remote_path} && mkdir -p apk res server/sqlite")
     run_ssh(_remote_install_requirements_sh(remote_path))
     run_ssh(
-        f"cd {remote_path} && unset HZTECH_STATIC_ONLY; MOBILEAPP_ROOT={remote_path} PORT={web_port} "
+        f"cd {remote_path} && MOBILEAPP_ROOT={remote_path} PORT={api_port} "
         f"nohup python3 server/main.py >> server.log 2>&1 & sleep 1"
     )
+    run_ssh(
+        f"cd {remote_path} && HZTECH_WEB_ROOT={web_root} PORT={web_port} "
+        f"nohup python3 server/serve_web_static.py >> web_static.log 2>&1 & sleep 1"
+    )
     print(
-        "Server restarted. URL: port %s (/api/* + Flutter Web). Log: %s/server.log"
-        % (web_port, remote_path)
+        "Server restarted. API: port %s (server.log)  Web: port %s (web_static.log)  root=%s"
+        % (api_port, web_port, web_root)
     )
 
 
@@ -519,17 +541,19 @@ def deploy_and_start(port=None, start_server=True):
         print("Sync done. Skip start. Run: python server/server_mgr.py deploy --no-start")
         return
     remote_restart()
-    web_port = c.get("web_port", 9000)
+    web_port = int(c.get("web_port", 9000))
+    api_port = _api_listen_port(c)
     rp = get_remote_path()
     scheme = c.get("scheme", "http")
     if has_dual_deploy():
         capi = target_config("api")
         print(
-            "Deploy done. API: %s://%s:%s/api/  Web: %s://%s:%s/  (logs: API %s/server.log, Web %s/server.log)"
+            "Deploy done. API: %s://%s:%s/api/  Web: %s://%s:%s/  "
+            "(logs: API %s/server.log, Web %s/web_static.log)"
             % (
                 scheme,
                 capi["host"],
-                web_port,
+                api_port,
                 scheme,
                 cweb["host"],
                 web_port,
@@ -539,8 +563,18 @@ def deploy_and_start(port=None, start_server=True):
         )
     else:
         print(
-            "Deploy done. Base URL: %s://%s:%s  ( /api/* + / )  Log: %s/server.log"
-            % (scheme, cweb["host"], web_port, rp)
+            "Deploy done. API: %s://%s:%s/api/  Web: %s://%s:%s/  "
+            "(logs: %s/server.log, %s/web_static.log)"
+            % (
+                scheme,
+                cweb["host"],
+                api_port,
+                scheme,
+                cweb["host"],
+                web_port,
+                rp,
+                rp,
+            )
         )
 
 

@@ -18,9 +18,6 @@ def test_job_fetch_account_and_save_snapshots_updates_sync_steps(monkeypatch):
         m._account_mgr, "refresh_all_balance_snapshots", MagicMock()
     )
     monkeypatch.setattr(
-        m._account_mgr, "fetch_and_save_tradingbot_snapshots", MagicMock()
-    )
-    monkeypatch.setattr(
         m._account_mgr, "refresh_all_positions_history", MagicMock()
     )
     monkeypatch.setattr(
@@ -38,7 +35,6 @@ def test_job_fetch_account_and_save_snapshots_updates_sync_steps(monkeypatch):
     assert snap.get("last_loop_error") is None
     steps = snap.get("steps") or {}
     assert steps.get("balance_snapshots", {}).get("ok") is True
-    assert steps.get("tradingbot_snapshots", {}).get("ok") is True
     assert steps.get("positions_history", {}).get("ok") is True
     assert steps.get("open_positions_snapshots", {}).get("ok") is True
     assert snap.get("last_run_completed_at")
@@ -55,6 +51,7 @@ def test_api_status_includes_open_positions_sync_step(client, auth_headers):
     assert "open_positions_snapshots" in steps
     doc = data.get("sync_documentation") or ""
     assert "account_open_positions_snapshots" in doc
+    assert "account_daily_performance" in doc
 
 
 def _utc_yesterday_iso() -> str:
@@ -106,7 +103,9 @@ def test_e2e_sync_job_writes_balance_and_open_positions_snapshots(
             "equity_usdt": 10000.0,
             "total_eq": 10000.0,
             "cash_balance": 8000.0,
-            "avail_eq": 8000.0,
+            "available_margin": 7500.0,
+            "used_margin": 2500.0,
+            "avail_eq": 7500.0,
             "upl": -50.0,
         }
 
@@ -141,6 +140,8 @@ def test_e2e_sync_job_writes_balance_and_open_positions_snapshots(
     assert bal is not None
     assert abs(float(bal["equity_usdt"]) - 10000.0) < 1e-4
     assert abs(float(bal["cash_balance"]) - 8000.0) < 1e-4
+    assert abs(float(bal["available_margin"]) - 7500.0) < 1e-4
+    assert abs(float(bal["used_margin"]) - 2500.0) < 1e-4
 
     pos_rows = db.account_open_positions_snapshots_query_by_account(aid, limit=10)
     assert len(pos_rows) >= 1

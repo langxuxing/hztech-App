@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS account_month_open (
     account_id TEXT NOT NULL,
     year_month TEXT NOT NULL,
     open_equity REAL NOT NULL,
-    open_cash REAL,
+    initial_balance REAL,
     recorded_at TEXT NOT NULL,
     PRIMARY KEY (account_id, year_month)
 );

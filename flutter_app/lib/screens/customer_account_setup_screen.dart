@@ -145,12 +145,18 @@ class _CustomerAccountSetupScreenState extends State<CustomerAccountSetupScreen>
     }
   }
 
-  Future<void> _test(String accountId) async {
+  Future<void> _test(
+    String accountId, {
+    bool autoConfigure = false,
+  }) async {
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
       final api = ApiClient(baseUrl, token: token);
-      final m = await api.customerTestAccountConnection(accountId);
+      final m = await api.customerTestAccountConnection(
+        accountId,
+        autoConfigure: autoConfigure,
+      );
       if (!mounted) return;
       final ok = m['success'] == true;
       final cfgOk = m['configuration_ok'] == true;
@@ -205,6 +211,34 @@ class _CustomerAccountSetupScreenState extends State<CustomerAccountSetupScreen>
       if (warns is List && warns.isNotEmpty) {
         buf.write('\n\n【警告与说明】\n');
         buf.writeAll(warns.map((e) => e.toString()), '\n');
+      }
+      if (m['auto_configure'] == true) {
+        buf.write('\n\n【自动配置 OKX】\n');
+        final sk = m['configure_skipped']?.toString().trim() ?? '';
+        if (sk.isNotEmpty) {
+          buf.write('已跳过: $sk\n');
+        }
+        final cr = m['configure_result'];
+        if (cr is Map) {
+          buf.write('全部成功: ${cr['ok'] == true}\n');
+          final steps = cr['steps'];
+          if (steps is List) {
+            for (final s in steps) {
+              if (s is Map) {
+                final nm = s['name'] ?? '';
+                final skOk = s['ok'] == true;
+                final det = '${s['detail'] ?? ''}'.trim();
+                final tail = det.isNotEmpty ? ' — $det' : '';
+                buf.write('  ${skOk ? "✓" : "✗"} $nm$tail\n');
+              }
+            }
+          }
+          final errs = cr['errors'];
+          if (errs is List && errs.isNotEmpty) {
+            buf.write('错误:\n');
+            buf.writeAll(errs.map((e) => e.toString()), '\n');
+          }
+        }
       }
       await showDialog<void>(
         context: context,
@@ -339,6 +373,15 @@ class _CustomerAccountSetupScreenState extends State<CustomerAccountSetupScreen>
                                       onPressed:
                                           missing ? null : () => _test(aid),
                                       child: const Text('测试连接与配置'),
+                                    ),
+                                    TextButton(
+                                      onPressed: missing
+                                          ? null
+                                          : () => _test(
+                                                aid,
+                                                autoConfigure: true,
+                                              ),
+                                      child: const Text('测试并自动配置'),
                                     ),
                                   ],
                                 ),

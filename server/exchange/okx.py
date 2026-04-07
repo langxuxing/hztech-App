@@ -542,28 +542,32 @@ def _okx_sum_details_eq_avail_like_qtrader(account: dict) -> tuple[float, float]
     return total, available
 
 
-def _okx_equity_and_cash_from_usdt_detail(
-    usdt: dict, account: dict
-) -> tuple[float, float]:
-    """与 QTrader-web ``account_profit_collector`` 一致：USDT 行权益用 ``eq``，可用用 ``availEq`` 缺省 ``availBal``。"""
+def _okx_usdt_detail_metrics(usdt: dict, account: dict) -> tuple[float, float, float, float]:
+    """USDT 行：eq 全仓权益、cashBal 资产余额、availEq 可用保证金、占用（frozenBal 或 eq−avail）。"""
     equity = _okx_safe_float(usdt.get("eq"))
+    cash_bal = _okx_safe_float(usdt.get("cashBal"))
     avail_default = usdt.get("availBal", "0")
     try:
-        cash = float(usdt.get("availEq", avail_default))
+        avail_eq = float(usdt.get("availEq", avail_default))
     except (TypeError, ValueError):
-        cash = _okx_safe_float(avail_default)
+        avail_eq = _okx_safe_float(avail_default)
+    frozen = _okx_safe_float(usdt.get("frozenBal"))
     if equity <= 0:
         te = _okx_safe_float(account.get("totalEq"))
         if te > 0:
             equity = te
-    return equity, cash
+    if frozen > 1e-12:
+        used_margin = frozen
+    else:
+        used_margin = max(0.0, equity - avail_eq)
+    return equity, cash_bal, avail_eq, used_margin
 
 
-def _okx_aggregate_balance_from_payload(data: dict) -> tuple[float, float, float]:
-    """从 /api/v5/account/balance 聚合权益、现金、upl（口径对齐 QTrader-web account_tester / account_profit_collector）。"""
+def _okx_aggregate_balance_from_payload(data: dict) -> tuple[float, float, float, float, float]:
+    """从 /api/v5/account/balance 聚合：权益、USDT 资产余额 cashBal、可用保证金 availEq、占用保证金、upl。"""
     rows = data.get("data") or []
     if not rows or not isinstance(rows[0], dict):
-        return 0.0, 0.0, 0.0
+        return 0.0, 0.0, 0.0, 0.0, 0.0
     account = rows[0]
     upl = _okx_safe_float(account.get("upl"))
 
@@ -580,12 +584,22 @@ def _okx_aggregate_balance_from_payload(data: dict) -> tuple[float, float, float
     )
 
     if usdt is not None:
-        equity, cash = _okx_equity_and_cash_from_usdt_detail(usdt, account)
-        return equity, cash, upl
+        equity, cash_bal, avail_eq, used_m = _okx_usdt_detail_metrics(usdt, account)
+        return equity, cash_bal, avail_eq, used_m, upl
 
     total_d, avail_d = _okx_sum_details_eq_avail_like_qtrader(account)
     if total_d > 0:
-        return total_d, avail_d, upl
+        cash_b = 0.0
+        for d in details:
+            if not isinstance(d, dict):
+                continue
+            if str(d.get("ccy") or "").upper() == "USDT":
+                cash_b = _okx_safe_float(d.get("cashBal"))
+                break
+        if cash_b <= 1e-12:
+            cash_b = avail_d
+        used_m = max(0.0, total_d - avail_d)
+        return total_d, cash_b, avail_d, used_m, upl
 
     total_eq = _okx_safe_float(account.get("totalEq"))
     avail_eq = _okx_safe_float(account.get("availEq"))
@@ -595,7 +609,9 @@ def _okx_aggregate_balance_from_payload(data: dict) -> tuple[float, float, float
             avail_eq = fb
     if avail_eq == 0 and total_eq != 0:
         avail_eq = total_eq
-    return total_eq, avail_eq, upl
+    cash_bal = avail_eq
+    used_m = max(0.0, total_eq - avail_eq) if total_eq > 1e-12 else 0.0
+    return total_eq, cash_bal, avail_eq, used_m, upl
 
 
 def _okx_fetch_balance_fallback(
@@ -609,26 +625,34 @@ def _okx_fetch_balance_fallback(
         return None, _okx_business_error_detail(data)
     if not isinstance(data, dict):
         return None, "invalid balance response"
-    total_eq, avail_eq, upl = _okx_aggregate_balance_from_payload(data)
-    return _okx_balance_dict(total_eq, avail_eq, upl, raw=data), None
+    total_eq, cash_bal, avail_eq, used_m, upl = _okx_aggregate_balance_from_payload(data)
+    return _okx_balance_dict(total_eq, cash_bal, avail_eq, used_m, upl, raw=data), None
 
 
 def _okx_balance_dict(
-    total_eq: float, avail_eq: float, upl: float, *, raw: object
+    total_eq: float,
+    cash_bal: float,
+    avail_eq: float,
+    used_margin: float,
+    upl: float,
+    *,
+    raw: object,
 ) -> dict:
-    """聚合后的权益/可用：与 QTrader-web 一致写入 total_eq、equity_usdt、avail_eq、cash_balance。"""
+    """聚合结果：cash_balance=USDT 资产余额(cashBal)；available_margin=可用保证金(availEq)；与旧版 avail 误作 cash 区分。"""
     return {
         "total_eq": total_eq,
         "avail_eq": avail_eq,
         "equity_usdt": total_eq,
-        "cash_balance": avail_eq,
+        "cash_balance": cash_bal,
+        "available_margin": avail_eq,
+        "used_margin": used_margin,
         "upl": upl,
         "raw": raw,
     }
 
 
 def okx_fetch_balance(config_path: Path | None = None) -> dict | None:
-    """OKX 账户余额；解析规则与 QTrader-web ``account_tester`` / ``account_profit_collector`` 对齐（见 _okx_aggregate_balance_from_payload）。
+    """OKX 账户余额：``cash_balance``=USDT ``cashBal``（资产余额），``available_margin``=``availEq``（可用保证金），``used_margin``=占用。
 
     仅走 OKX v5 REST，不调用 ccxt.fetch_balance（否则会 load_markets，ccxt 对 preopen 等标的解析可能 TypeError: NoneType + str）。
     """
@@ -1093,6 +1117,7 @@ def okx_fetch_positions_history(
 ) -> tuple[list[dict], str | None]:
     """
     历史仓位：GET /api/v5/account/positions-history（近约 3 个月，按 uTime 倒序）。
+    官方字段：cTime 开仓创建时间，uTime 仓位更新时间（平仓记录上即平仓相关更新；分页 after/before 均基于 uTime）。
     分页拉取多页后合并为列表；用于定时入库去重。
     max_pages 默认 500（每页最多 100 条），直至接口返回不足一页或无数据。
 
@@ -1619,4 +1644,134 @@ def okx_test_account_full(
         and chk.get("leverage_long_ok") is True
         and chk.get("leverage_short_ok") is True
     )
+    return out
+
+
+def _okx_leverage_str_for_api(target_leverage: float) -> str:
+    try:
+        x = float(target_leverage)
+    except (TypeError, ValueError):
+        x = 50.0
+    if abs(x - round(x)) < 1e-9:
+        return str(int(round(x)))
+    return f"{x}".rstrip("0").rstrip(".")
+
+
+def okx_apply_strategy_trading_defaults(
+    config_path: Path | None,
+    symbol_for_inst: str,
+    *,
+    target_leverage: float = 50.0,
+) -> dict[str, Any]:
+    """调用 OKX 私有接口，将账户对齐策略默认：永续 SWAP 标的、双向持仓、全仓 cross、多空杠杆。
+
+    - 持仓模式：``POST /api/v5/account/set-position-mode`` → ``long_short_mode``（已处于该模式则跳过）。
+    - 杠杆：``POST /api/v5/account/set-leverage``，对 ``instId`` 的 ``long`` / ``short`` 各设 ``mgnMode=cross``。
+
+    需要 API Key 具备交易/账户类写权限；存在未平仓位或委托时，OKX 可能拒绝切换持仓模式。
+
+    返回 ``ok``、``steps``（每步 name/ok/detail）、``errors``（汇总失败说明）；``inst_id`` 为规范化后的 SWAP 代码。
+    """
+    inst_id = okx_normalize_swap_inst_id(symbol_for_inst)
+    lev_s = _okx_leverage_str_for_api(target_leverage)
+    out: dict[str, Any] = {
+        "ok": False,
+        "inst_id": inst_id,
+        "target_leverage": target_leverage,
+        "leverage_str": lev_s,
+        "steps": [],
+        "errors": [],
+    }
+
+    def add_step(name: str, ok: bool, detail: str) -> None:
+        out["steps"].append({"name": name, "ok": ok, "detail": detail})
+        if not ok and detail:
+            out["errors"].append(f"{name}: {detail}")
+
+    if not inst_id.upper().endswith("-SWAP"):
+        add_step(
+            "validate_swap_inst",
+            False,
+            "symbol 须为永续 SWAP instId（以 -SWAP 结尾），例如 PEPE-USDT-SWAP",
+        )
+        return out
+
+    cfg_raw, cfg_err = okx_request(
+        "GET", "/api/v5/account/config", config_path=config_path
+    )
+    if cfg_err:
+        add_step("get_account_config", False, cfg_err)
+        return out
+    if not isinstance(cfg_raw, dict) or cfg_raw.get("code") != "0":
+        msg = (
+            _okx_business_error_detail(cfg_raw)
+            if isinstance(cfg_raw, dict)
+            else "config 返回异常"
+        )
+        add_step("get_account_config", False, msg)
+        return out
+
+    pos_mode = ""
+    data = cfg_raw.get("data")
+    if isinstance(data, list) and data and isinstance(data[0], dict):
+        pos_mode = (data[0].get("posMode") or "").strip()
+
+    if pos_mode == "long_short_mode":
+        add_step("set_position_mode", True, "已是双向持仓 long_short_mode，跳过")
+    else:
+        body = json.dumps({"posMode": "long_short_mode"})
+        raw, err = okx_request(
+            "POST",
+            "/api/v5/account/set-position-mode",
+            body=body,
+            config_path=config_path,
+        )
+        if err:
+            add_step("set_position_mode", False, err)
+            return out
+        if not isinstance(raw, dict) or raw.get("code") != "0":
+            add_step(
+                "set_position_mode",
+                False,
+                _okx_business_error_detail(raw)
+                if isinstance(raw, dict)
+                else "set-position-mode 返回异常",
+            )
+            return out
+        add_step("set_position_mode", True, "已设为双向持仓 long_short_mode")
+
+    for side in ("long", "short"):
+        payload = {
+            "instId": inst_id,
+            "lever": lev_s,
+            "mgnMode": "cross",
+            "posSide": side,
+        }
+        body = json.dumps(payload)
+        raw, err = okx_request(
+            "POST",
+            "/api/v5/account/set-leverage",
+            body=body,
+            config_path=config_path,
+        )
+        step = f"set_leverage_{side}"
+        if err:
+            add_step(step, False, err)
+            continue
+        if not isinstance(raw, dict) or raw.get("code") != "0":
+            add_step(
+                step,
+                False,
+                _okx_business_error_detail(raw)
+                if isinstance(raw, dict)
+                else "set-leverage 返回异常",
+            )
+            continue
+        add_step(
+            step,
+            True,
+            f"全仓 cross {side} 杠杆已设为 {lev_s}x（{inst_id}）",
+        )
+
+    out["ok"] = all(s.get("ok") for s in out["steps"])
     return out

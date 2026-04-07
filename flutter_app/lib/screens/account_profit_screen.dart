@@ -91,7 +91,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
       final api = ApiClient(baseUrl, token: token);
       final batch = await Future.wait([
         api.getAccountProfit(),
-        api.getBotProfitHistory(botId, limit: 500),
+        api.getBotProfitHistory(botId),
         api.getTradingbotPositions(botId),
       ]);
       if (!mounted || g != _accountSwitchGeneration) return;
@@ -172,7 +172,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
         if (botId != null && botId.isNotEmpty) {
           final out = await Future.wait([
             api.getAccountProfit(),
-            api.getBotProfitHistory(botId, limit: 500),
+            api.getBotProfitHistory(botId),
             api.getTradingbotPositions(botId),
           ]);
           if (!mounted) return;
@@ -231,7 +231,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
 
       final phase1 = await Future.wait([
         api.getAccountProfit(),
-        api.getBotProfitHistory(botId, limit: 500),
+        api.getBotProfitHistory(botId),
       ]);
       if (!mounted || g != _accountSwitchGeneration) return;
       final profitResp = phase1[0] as AccountProfitResponse;
@@ -757,7 +757,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
     if (a == null) return const SizedBox.shrink();
     final bot = _currentUnifiedBot;
     final equity = a.equityUsdt;
-    final balance = a.balanceUsdt;
+    final assetBal = a.cashBalance ?? a.balanceUsdt;
     final singleInst =
         _positions.isNotEmpty &&
         _positions.map((p) => p.instId).toSet().length == 1;
@@ -793,8 +793,8 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
               final narrow = c.maxWidth < 520;
               final chipBal = _overviewChip(
                 context,
-                '现金余额',
-                _fmt(balance),
+                '资产余额',
+                _fmt(assetBal),
                 titleSize: titleSize,
                 valueColor: AppFinanceStyle.profitGreenEnd,
               );
@@ -828,6 +828,18 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
                 titleSize: titleSize,
                 valueColor: rateColor,
               );
+              final availM = a.availableMargin;
+              final usedM = a.usedMargin;
+              final marginLine = (availM != null || usedM != null)
+                  ? Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: Text(
+                        '可用保证金 ${_fmt(availM ?? 0)} · 占用 ${_fmt(usedM ?? 0)}',
+                        style: AppFinanceStyle.labelTextStyle(context)
+                            .copyWith(fontSize: 13),
+                      ),
+                    )
+                  : null;
               if (narrow) {
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -841,6 +853,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
                     chipIni,
                     const SizedBox(height: 12),
                     chipRate,
+                    if (marginLine != null) marginLine,
                   ],
                 );
               }
@@ -864,6 +877,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
                       Expanded(child: chipRate),
                     ],
                   ),
+                  if (marginLine != null) marginLine,
                 ],
               );
             },
@@ -983,7 +997,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
             snapshots: snap,
             title: '',
             description:
-                '按日展示：当日最后一条快照现金余额相对前一有效时点的变化。右下角平仓笔数为 UTC 自然日历史平仓汇总（与盈亏数值口径不同）。',
+                '按日展示：当日最后一条快照现金余额相对前一有效时点的变化。右下角平仓笔数为 UTC 自然日汇总，按 OKX uTime（平仓时刻）归入日（与盈亏数值口径不同）。',
             valueAt: (s) => s.currentBalance,
             emptyMessage: '暂无历史快照，无法统计月度现金余额',
             showMonthNavigator: false,
@@ -1068,7 +1082,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
             snapshots: snap,
             title: '',
             description:
-                '按日展示：当日最后一条快照权益相对前一有效时点的变化。右下角平仓笔数为 UTC 自然日历史平仓汇总（与盈亏数值口径不同）。',
+                '按日展示：当日最后一条快照权益相对前一有效时点的变化。右下角平仓笔数为 UTC 自然日汇总，按 OKX uTime（平仓时刻）归入日（与盈亏数值口径不同）。',
             valueAt: (s) => s.equityUsdt,
             emptyMessage: '暂无历史快照，无法统计月度权益',
             showMonthNavigator: false,

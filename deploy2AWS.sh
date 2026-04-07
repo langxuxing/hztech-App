@@ -1,63 +1,175 @@
 #!/usr/bin/env bash
-# Ops 一键部署：1) 默认同时构建 Flutter Android release APK 与（macOS 上）iOS release IPA
-#             2) 同步 webserver + apk/ + ipa/ + Web 到 AWS  3) 重启 AWS 后台服务
-# 依赖：server/deploy-aws.json、本机可 SSH 到 AWS、Flutter/Android；IPA 需 macOS + Xcode + 签名
-# 默认：在 macOS 上 APK 与 IPA 均须成功，脚本才会继续；仅打 Android 时：export HZTECH_SKIP_IOS_BUILD=1
+# Ops 一键部署：构建 Flutter → rsync →（可选）远程 DB 迁移 → 重启远端进程
 #
-# 双机 AWS（密钥路径见 server/deploy-aws.json）：
-#   API 后端  54.66.108.150  /home/ec2-user/Apiserver   密钥 hztech.pem
-#   Web/App   54.252.181.151 /home/ec2-user/hztechapp   密钥 aws-defi.pem
-set -e
-# 脚本在项目根目录，PROJECT_ROOT = 脚本所在目录
+# 环境变量（DevOps）：
+#   DEPLOY_CONFIG          部署 JSON，默认 server/deploy-aws.json
+#   HZTECH_API_BASE_URL    传给 flutter build 的 API 基址
+#   FLUTTER_DART_DEFINE_FILE
+#   HZTECH_SKIP_BUILD=1    跳过步骤 1–2（移动端 + Web 构建），直接同步与重启
+#   HZTECH_SKIP_DB_SYNC=1  跳过步骤 4（远程 init_db）
+#   HZTECH_POST_DEPLOY_VERIFY=1  部署结束后 curl 探测 API /api/health 与 Web /
+#   HZTECH_SKIP_IOS_BUILD  仅移动端构建时传给 server_mgr（与原先一致）
+#
+# 依赖：server/deploy-aws.json、SSH 密钥、Flutter/Android；IPA 需 macOS + Xcode
+set -euo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR"
 cd "$PROJECT_ROOT"
-# AWS 发布包默认连 deploy-aws.json 中的 API 主机；可覆盖 FLUTTER_DART_DEFINE_FILE 或 HZTECH_API_BASE_URL
+
+DEPLOY_CONFIG="${DEPLOY_CONFIG:-server/deploy-aws.json}"
+if [[ ! -f "$DEPLOY_CONFIG" ]]; then
+  echo "错误: 未找到部署配置: $DEPLOY_CONFIG" >&2
+  exit 1
+fi
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "错误: 需要 python3" >&2
+  exit 1
+fi
+
+# 一次读取 deploy JSON，供结尾展示 URL / 日志路径（避免硬编码 remote_path）
+eval "$(python3 <<'PY' "$DEPLOY_CONFIG"
+import json, shlex, sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    c = json.load(f)
+scheme = str(c.get("scheme") or "http")
+web_port = int(c.get("web_port", 9000))
+api_port = int(c.get("app_port", c.get("web_port", 9001)))
+user = str(c.get("user") or "ec2-user")
+web = c.get("web") if isinstance(c.get("web"), dict) else {}
+api = c.get("api") if isinstance(c.get("api"), dict) else {}
+# 与 server_mgr.has_dual_deploy 一致
+dual = (
+    "1"
+    if isinstance(c.get("api"), dict) and isinstance(c.get("web"), dict)
+    else "0"
+)
+
+
+def out(name, val):
+    print(f"export {name}={shlex.quote(str(val))}")
+
+wh = (web.get("host") or c.get("host") or "").strip()
+ah = (api.get("host") or "").strip()
+wrp = (web.get("remote_path") or "").strip()
+arp = (api.get("remote_path") or "").strip()
+wkey = (web.get("key") or c.get("key") or "").strip()
+akey = (api.get("key") or c.get("key") or "").strip()
+if dual == "0":
+    if not ah:
+        ah = wh
+    if not arp:
+        arp = wrp
+    if not akey:
+        akey = wkey
+
+out("_D_SCHEME", scheme)
+out("_D_WEB_HOST", wh)
+out("_D_API_HOST", ah)
+out("_D_WEB_PORT", web_port)
+out("_D_API_PORT", api_port)
+out("_D_WEB_RP", wrp)
+out("_D_API_RP", arp)
+out("_D_WEB_KEY", wkey)
+out("_D_API_KEY", akey)
+out("_D_USER", user)
+out("_D_DUAL", dual)
+PY
+)"
+
+export HZTECH_API_BASE_URL="${HZTECH_API_BASE_URL:-http://54.66.108.150:9001/}"
 export FLUTTER_DART_DEFINE_FILE="${FLUTTER_DART_DEFINE_FILE:-flutter_app/dart_defines/production.json}"
 
 echo "=============================================="
 echo "  Ops 部署：Flutter 构建 → AWS 同步 → 服务重启"
+echo "  配置: $DEPLOY_CONFIG"
 echo "=============================================="
 
-echo ""
-echo "=== 1/5 构建 Flutter 移动端 (release APK + macOS 上 IPA) ==="
-python3 "$PROJECT_ROOT/server/server_mgr.py" build
-echo "  APK 输出: $PROJECT_ROOT/apk/"
-echo "  IPA 输出（仅 macOS 成功时）: $PROJECT_ROOT/ipa/"
+if [[ "${HZTECH_SKIP_BUILD:-0}" == "1" ]]; then
+  echo ""
+  echo "=== （已跳过构建 HZTECH_SKIP_BUILD=1）==="
+else
+  echo ""
+  echo "=== 1/5 构建 Flutter 移动端 (release APK + macOS 上 IPA) ==="
+  python3 "$PROJECT_ROOT/server/server_mgr.py" build
+  echo "  APK: $PROJECT_ROOT/apk/"
+  echo "  IPA: $PROJECT_ROOT/ipa/"
+
+  echo ""
+  echo "=== 2/5 构建 Flutter Web (release) ==="
+  if python3 "$PROJECT_ROOT/server/server_mgr.py" build-web; then
+    echo "  Web: $PROJECT_ROOT/flutter_app/build/web/"
+  else
+    echo "  （Web 构建失败或跳过；远端 Web 静态可能 503，API 仍可用）" >&2
+  fi
+fi
 
 echo ""
-echo "=== 2/5 构建 Flutter Web (release) ==="
-python3 "$PROJECT_ROOT/server/server_mgr.py" build-web || echo "  （跳过 Web 构建）"
-
-echo ""
-echo "=== 3/5 上传到 AWS（server/ + apk/ + ipa/ + flutter_app/build/web）==="
+echo "=== 3/5 上传到 AWS（rsync，--no-start）==="
 python3 "$PROJECT_ROOT/server/server_mgr.py" deploy --no-start
-# 仅 rsync 同步，不启动；步骤 3 统一重启服务
 
-echo ""
-echo "=== 4/5 同步远程数据库（用户迁移）==="
-cd "$PROJECT_ROOT" && python3 server/server_mgr.py db-sync
+if [[ "${HZTECH_SKIP_DB_SYNC:-0}" != "1" ]]; then
+  echo ""
+  echo "=== 4/5 同步远程数据库（用户迁移）==="
+  python3 "$PROJECT_ROOT/server/server_mgr.py" db-sync
+else
+  echo ""
+  echo "=== 4/5 跳过远程 DB（HZTECH_SKIP_DB_SYNC=1）==="
+fi
 
 echo ""
 echo "=== 5/5 重启 AWS 后台服务 ==="
-cd "$PROJECT_ROOT" && python3 server/server_mgr.py restart
+python3 "$PROJECT_ROOT/server/server_mgr.py" restart
 
-WEB_HOST=$(python3 -c "import json; c=json.load(open('server/deploy-aws.json')); w=c.get('web') or {}; print(w.get('host') or c.get('host','54.252.181.151'))")
-API_HOST=$(python3 -c "import json; c=json.load(open('server/deploy-aws.json')); a=c.get('api') or {}; print(a.get('host',''))")
-WEB_PORT=$(python3 -c "import json; c=json.load(open('server/deploy-aws.json')); print(c.get('web_port',9000))")
-WEB_KEY=$(python3 -c "import json; c=json.load(open('server/deploy-aws.json')); w=c.get('web') or {}; print(w.get('key') or c.get('key',''))")
-API_KEY=$(python3 -c "import json; c=json.load(open('server/deploy-aws.json')); a=c.get('api') or {}; print(a.get('key') or c.get('key',''))")
-WEB_USER=$(python3 -c "import json; c=json.load(open('server/deploy-aws.json')); print(c.get('user','ec2-user'))")
 echo ""
 echo "=============================================="
-echo "  部署完成（双机：API 与 Web 分离）"
-echo "  Web/App（Flutter Web + apk/ + ipa/）: http://${WEB_HOST}:${WEB_PORT}"
-if [ -n "$API_HOST" ]; then
-  echo "  API（/api/*）: http://${API_HOST}:${WEB_PORT}"
-  echo "  日志 Web: ssh -i \"${WEB_KEY}\" ${WEB_USER}@${WEB_HOST} cat /home/ec2-user/hztechapp/server.log"
-  echo "  日志 API: ssh -i \"${API_KEY}\" ${WEB_USER}@${API_HOST} cat /home/ec2-user/Apiserver/server.log"
+echo "  部署完成"
+if [[ "$_D_DUAL" == "1" ]]; then
+  echo "  Web（Flutter 静态）: ${_D_SCHEME}://${_D_WEB_HOST}:${_D_WEB_PORT}/"
+  echo "  API:                  ${_D_SCHEME}://${_D_API_HOST}:${_D_API_PORT}/"
+  if [[ -n "$_D_WEB_RP" ]]; then
+    echo "  日志 Web: ${_D_WEB_RP}/web_static.log"
+  fi
+  if [[ -n "$_D_API_RP" ]]; then
+    echo "  日志 API: ${_D_API_RP}/server.log"
+  fi
+  if [[ -n "$_D_WEB_KEY" && -n "$_D_WEB_HOST" ]]; then
+    echo "  SSH Web: ssh -i \"${_D_WEB_KEY}\" ${_D_USER}@${_D_WEB_HOST}"
+  fi
+  if [[ -n "$_D_API_KEY" && -n "$_D_API_HOST" ]]; then
+    echo "  SSH API: ssh -i \"${_D_API_KEY}\" ${_D_USER}@${_D_API_HOST}"
+  fi
 else
-  echo "  访问: http://${WEB_HOST}:${WEB_PORT}"
-  echo "  日志: ssh -i \"${WEB_KEY}\" ${WEB_USER}@${WEB_HOST} cat /home/ec2-user/hztechapp/server.log"
+  echo "  Web: ${_D_SCHEME}://${_D_WEB_HOST}:${_D_WEB_PORT}/"
+  echo "  API: ${_D_SCHEME}://${_D_WEB_HOST}:${_D_API_PORT}/"
+  if [[ -n "$_D_WEB_RP" ]]; then
+    echo "  日志: ${_D_WEB_RP}/server.log  ${_D_WEB_RP}/web_static.log"
+  fi
 fi
 echo "=============================================="
+
+if [[ "${HZTECH_POST_DEPLOY_VERIFY:-0}" == "1" ]]; then
+  echo ""
+  echo "=== 部署后探测（HZTECH_POST_DEPLOY_VERIFY=1）==="
+  _curl_ok() {
+    local url="$1"
+    local name="$2"
+    local code
+    code=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 15 "$url" || echo "000")
+    if [[ "$code" == "200" || "$code" == "503" ]]; then
+      echo "  OK $name -> HTTP $code ($url)"
+    else
+      echo "  WARN $name -> HTTP $code ($url)" >&2
+    fi
+  }
+  if [[ "$_D_DUAL" == "1" ]]; then
+    _curl_ok "${_D_SCHEME}://${_D_API_HOST}:${_D_API_PORT}/api/health" "API health"
+    _curl_ok "${_D_SCHEME}://${_D_WEB_HOST}:${_D_WEB_PORT}/" "Web /"
+  else
+    _curl_ok "${_D_SCHEME}://${_D_WEB_HOST}:${_D_API_PORT}/api/health" "API health"
+    _curl_ok "${_D_SCHEME}://${_D_WEB_HOST}:${_D_WEB_PORT}/" "Web /"
+  fi
+fi

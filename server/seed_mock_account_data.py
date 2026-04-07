@@ -101,24 +101,39 @@ def seed_one_account(
         rng=rng,
     )
     rows = 0
-    month_first: dict[str, tuple[float, str]] = {}
+    month_first: dict[str, tuple[float, float, str]] = {}
 
     for day, eq in zip(days, equities):
         ts = _snapshot_ts(day)
         profit = eq - initial
         pct = (profit / initial * 100.0) if initial else 0.0
-        cash = eq * rng.uniform(0.93, 0.99)
+        cash_bal = eq * rng.uniform(0.93, 0.99)
+        cash_profit = cash_bal - initial
+        cash_pct = (cash_profit / initial * 100.0) if initial else 0.0
+        avail_eq = cash_bal * rng.uniform(0.90, 0.98)
+        used_m = max(0.0, eq - avail_eq)
         conn.execute(
             """INSERT INTO account_balance_snapshots
-               (account_id, snapshot_at, cash_balance, equity_usdt,
-                profit_amount, profit_percent)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (account_id, ts, cash, eq, profit, pct),
+               (account_id, snapshot_at, cash_balance, available_margin, used_margin, equity_usdt,
+                profit_amount, profit_percent, cash_profit_amount, cash_profit_percent)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                account_id,
+                ts,
+                cash_bal,
+                avail_eq,
+                used_m,
+                eq,
+                profit,
+                pct,
+                cash_profit,
+                cash_pct,
+            ),
         )
         rows += 1
         ym = f"{day.year:04d}-{day.month:02d}"
         if ym not in month_first:
-            month_first[ym] = (eq, cash, ts)
+            month_first[ym] = (eq, cash_bal, ts)
 
     for ym, (open_eq, open_cash, rec_at) in sorted(month_first.items()):
         conn.execute(

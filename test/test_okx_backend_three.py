@@ -71,7 +71,8 @@ def _first_three_bot_ids() -> list[str]:
     return []
 
 
-_BOT_IDS_PARAM = _first_three_bot_ids() or ["simpleserver-lhg"]
+# 无 tradingbots.json 时依赖 Account_List；二者皆空时用仓库内常见启用账户占位
+_BOT_IDS_PARAM = _first_three_bot_ids() or ["Alang_Sandbox"]
 
 
 class TestOkxBackendThreeRoutes:

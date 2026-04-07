@@ -11,13 +11,24 @@
     "enbaled": true
   },
   {
-    "account_id": "Dong_Live",
+    "account_id": "Dong_Readonly",
     "account_name": "董杰VIP",
+    "exchange_account": "OKX",
+    "symbol": "PEPE-USDT-SWAP",
+    "Initial_capital": 7153,
+    "trading_strategy": "Moneyflow-V2.1",
+    "account_key_file": "OKX_Dong_Readonly.json",
+    "script_file": "tradingbot_ctrl/moneyflow_alangsandbox.sh",
+    "enbaled": true
+  },  
+  {
+    "account_id": "Defi_Demo",
+    "account_name": "Defi样板",
     "exchange_account": "OKX",
     "symbol": "PEPE-USDT-SWAP",
     "Initial_capital": 500,
     "trading_strategy": "Moneyflow-V2.1",
-    "account_key_file": "OKX_Dong_Live.json",
+    "account_key_file": "OKX_Defi_Readonly.json",
     "script_file": "tradingbot_ctrl/moneyflow_alangsandbox.sh",
     "enbaled": true
   },

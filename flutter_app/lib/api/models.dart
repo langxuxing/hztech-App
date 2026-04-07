@@ -128,14 +128,27 @@ class AccountProfit {
   final double currentBalance;
   final double profitAmount;
   final double profitPercent;
+  /// USDT 资产余额相对期初的收益额（与 [profitAmount] 权益口径并列）
+  final double cashProfitAmount;
+  /// USDT 资产余额相对期初的收益率%
+  final double cashProfitPercent;
   final double floatingProfit;
   final double equityUsdt;
   final double balanceUsdt;
   final String? snapshotTime;
   /// UTC 自然月月初权益（account_month_open）
   final double? monthOpenEquity;
-  /// UTC 自然月月初现金（account_month_open.open_cash）
-  final double? monthOpenCash;
+  /// UTC 自然月月初 USDT 资产余额（account_month_open.initial_balance，OKX cashBal）
+  final double? monthInitialBalance;
+
+  /// USDT 资产余额（OKX cashBal），与可用保证金不同
+  final double? cashBalance;
+
+  /// 可用保证金（原误作 cash_balance 存入库的 availEq）
+  final double? availableMargin;
+
+  /// 占用保证金
+  final double? usedMargin;
 
   AccountProfit({
     required this.exchangeAccount,
@@ -143,13 +156,18 @@ class AccountProfit {
     required this.currentBalance,
     required this.profitAmount,
     required this.profitPercent,
+    this.cashProfitAmount = 0,
+    this.cashProfitPercent = 0,
     required this.floatingProfit,
     required this.equityUsdt,
     double? balanceUsdt,
     this.snapshotTime,
     String? botId,
     this.monthOpenEquity,
-    this.monthOpenCash,
+    this.monthInitialBalance,
+    this.cashBalance,
+    this.availableMargin,
+    this.usedMargin,
   }) : balanceUsdt = balanceUsdt ?? currentBalance,
        botId = botId ?? '';
 
@@ -161,12 +179,18 @@ class AccountProfit {
       currentBalance: (json['current_balance'] as num?)?.toDouble() ?? 0,
       profitAmount: (json['profit_amount'] as num?)?.toDouble() ?? 0,
       profitPercent: (json['profit_percent'] as num?)?.toDouble() ?? 0,
+      cashProfitAmount: (json['cash_profit_amount'] as num?)?.toDouble() ?? 0,
+      cashProfitPercent: (json['cash_profit_percent'] as num?)?.toDouble() ?? 0,
       floatingProfit: (json['floating_profit'] as num?)?.toDouble() ?? 0,
       equityUsdt: (json['equity_usdt'] as num?)?.toDouble() ?? 0,
       balanceUsdt: (json['balance_usdt'] as num?)?.toDouble(),
       snapshotTime: json['snapshot_time'] as String?,
       monthOpenEquity: (json['month_open_equity'] as num?)?.toDouble(),
-      monthOpenCash: (json['month_open_cash'] as num?)?.toDouble(),
+      monthInitialBalance: (json['month_initial_balance'] as num?)?.toDouble() ??
+          (json['month_open_cash'] as num?)?.toDouble(),
+      cashBalance: (json['cash_balance'] as num?)?.toDouble(),
+      availableMargin: (json['available_margin'] as num?)?.toDouble(),
+      usedMargin: (json['used_margin'] as num?)?.toDouble(),
     );
   }
 }
@@ -269,7 +293,12 @@ class BotProfitSnapshot {
   final double equityUsdt;
   final double profitAmount;
   final double profitPercent;
+  final double cashProfitAmount;
+  final double cashProfitPercent;
   final String? createdAt;
+  final double? cashBalance;
+  final double? availableMargin;
+  final double? usedMargin;
 
   BotProfitSnapshot({
     required this.id,
@@ -280,7 +309,12 @@ class BotProfitSnapshot {
     required this.equityUsdt,
     required this.profitAmount,
     required this.profitPercent,
+    this.cashProfitAmount = 0,
+    this.cashProfitPercent = 0,
     this.createdAt,
+    this.cashBalance,
+    this.availableMargin,
+    this.usedMargin,
   });
 
   factory BotProfitSnapshot.fromJson(Map<String, dynamic> json) {
@@ -293,7 +327,12 @@ class BotProfitSnapshot {
       equityUsdt: (json['equity_usdt'] as num?)?.toDouble() ?? 0,
       profitAmount: (json['profit_amount'] as num?)?.toDouble() ?? 0,
       profitPercent: (json['profit_percent'] as num?)?.toDouble() ?? 0,
+      cashProfitAmount: (json['cash_profit_amount'] as num?)?.toDouble() ?? 0,
+      cashProfitPercent: (json['cash_profit_percent'] as num?)?.toDouble() ?? 0,
       createdAt: json['created_at'] as String?,
+      cashBalance: (json['cash_balance'] as num?)?.toDouble(),
+      availableMargin: (json['available_margin'] as num?)?.toDouble(),
+      usedMargin: (json['used_margin'] as num?)?.toDouble(),
     );
   }
 }
@@ -324,23 +363,52 @@ class BotProfitHistoryResponse {
   }
 }
 
-/// GET /api/tradingbots/{id}/daily-realized-pnl（UTC 自然日平仓汇总）。
+/// GET /api/tradingbots/{id}/daily-realized-pnl（UTC 自然日；平仓按 OKX uTime 归入日 + 日绩效合并）。
 class DailyRealizedPnlDayRow {
   DailyRealizedPnlDayRow({
     required this.day,
     required this.netPnl,
     required this.closeCount,
+    this.equityChange,
+    this.cashChange,
+    this.pnlPct,
+    this.equityBaseRealizedChain,
+    this.pnlPctRealizedChain,
+    this.benchmarkInstId,
+    this.marketTr,
+    this.efficiencyRatio,
+    this.performanceUpdatedAt,
   });
 
   final String day;
   final double netPnl;
   final int closeCount;
+  final double? equityChange;
+  final double? cashChange;
+  final double? pnlPct;
+  final double? equityBaseRealizedChain;
+  final double? pnlPctRealizedChain;
+  final String? benchmarkInstId;
+  final double? marketTr;
+  final double? efficiencyRatio;
+  final String? performanceUpdatedAt;
 
   factory DailyRealizedPnlDayRow.fromJson(Map<String, dynamic> json) {
     return DailyRealizedPnlDayRow(
       day: json['day'] as String? ?? '',
       netPnl: (json['net_pnl'] as num?)?.toDouble() ?? 0,
       closeCount: (json['close_count'] as num?)?.toInt() ?? 0,
+      equityChange: (json['equity_change'] as num?)?.toDouble(),
+      cashChange: (json['cash_change'] as num?)?.toDouble(),
+      pnlPct: (json['pnl_pct'] as num?)?.toDouble(),
+      equityBaseRealizedChain:
+          (json['equity_base_realized_chain'] as num?)?.toDouble(),
+      pnlPctRealizedChain:
+          (json['pnl_pct_realized_chain'] as num?)?.toDouble(),
+      benchmarkInstId: json['benchmark_inst_id'] as String?,
+      marketTr: (json['market_tr'] as num?)?.toDouble(),
+      efficiencyRatio: (json['efficiency_ratio'] as num?)?.toDouble(),
+      performanceUpdatedAt: json['performance_updated_at'] as String?,
     );
   }
 }
@@ -592,6 +660,84 @@ class OkxPositionsResponse {
           [],
       positionsError: json['positions_error'] as String?,
       okxDebug: okxDebug,
+    );
+  }
+}
+
+/// GET /api/tradingbots/{id}/open-positions-snapshots（入库的当前持仓聚合，按 snapshot_at 降序）
+class OpenPositionsSnapshotRow {
+  OpenPositionsSnapshotRow({
+    required this.instId,
+    required this.snapshotAt,
+    required this.lastPx,
+    required this.longPosSize,
+    required this.shortPosSize,
+    required this.markPx,
+    required this.longUpl,
+    required this.shortUpl,
+    required this.totalUpl,
+    required this.longAvgPx,
+    required this.shortAvgPx,
+  });
+
+  final String instId;
+  final String snapshotAt;
+  final double lastPx;
+  final double longPosSize;
+  final double shortPosSize;
+  final double markPx;
+  final double longUpl;
+  final double shortUpl;
+  final double totalUpl;
+  /// 该合约多头加权成本（与 AccountMgr 写入一致）
+  final double longAvgPx;
+  /// 该合约空头加权成本
+  final double shortAvgPx;
+
+  factory OpenPositionsSnapshotRow.fromJson(Map<String, dynamic> json) {
+    return OpenPositionsSnapshotRow(
+      instId: json['inst_id'] as String? ?? '',
+      snapshotAt: json['snapshot_at'] as String? ?? '',
+      lastPx: (json['last_px'] as num?)?.toDouble() ?? 0,
+      longPosSize: (json['long_pos_size'] as num?)?.toDouble() ?? 0,
+      shortPosSize: (json['short_pos_size'] as num?)?.toDouble() ?? 0,
+      markPx: (json['mark_px'] as num?)?.toDouble() ?? 0,
+      longUpl: (json['long_upl'] as num?)?.toDouble() ?? 0,
+      shortUpl: (json['short_upl'] as num?)?.toDouble() ?? 0,
+      totalUpl: (json['total_upl'] as num?)?.toDouble() ?? 0,
+      longAvgPx: (json['long_avg_px'] as num?)?.toDouble() ?? 0,
+      shortAvgPx: (json['short_avg_px'] as num?)?.toDouble() ?? 0,
+    );
+  }
+}
+
+class OpenPositionsSnapshotsResponse {
+  OpenPositionsSnapshotsResponse({
+    required this.success,
+    this.botId = '',
+    this.rows = const [],
+  });
+
+  final bool success;
+  final String botId;
+  final List<OpenPositionsSnapshotRow> rows;
+
+  factory OpenPositionsSnapshotsResponse.fromJson(Map<String, dynamic> json) {
+    final raw = json['rows'];
+    List<OpenPositionsSnapshotRow> list = const [];
+    if (raw is List) {
+      list = raw
+          .map(
+            (e) => OpenPositionsSnapshotRow.fromJson(
+              e as Map<String, dynamic>,
+            ),
+          )
+          .toList();
+    }
+    return OpenPositionsSnapshotsResponse(
+      success: json['success'] as bool? ?? false,
+      botId: json['bot_id'] as String? ?? '',
+      rows: list,
     );
   }
 }

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-从 account_positions_history 按 UTC 日汇总平仓净盈亏，重建 account_daily_performance（全账户）。
+从 account_positions_history 按 UTC 日汇总平仓净盈亏，重建 account_daily_performance（全账户；
+equity_base 为当月 account_month_open 分母（initial_balance 优先），pnl_pct 及链式列同逻辑）。
 
 用法（在 server 目录下或设置 PYTHONPATH）：
   python -m server.rebuild_account_daily_performance

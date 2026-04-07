@@ -8,7 +8,7 @@ import '../theme/finance_style.dart';
 import '../utils/number_display_format.dart';
 import '../widgets/water_background.dart';
 
-/// 交易机器人：列表来自 main.py /api/tradingbots（Account_List + tradingbots.json），
+/// 交易机器人：列表来自 main.py /api/tradingbots（Account_List.json），
 /// 启停走 script_file（如 tradingbot_ctrl/moneyflow_alangsandbox.sh start|stop）。
 class TradingBotControl extends StatefulWidget {
   const TradingBotControl({super.key, this.embedInShell = false});
@@ -399,7 +399,7 @@ class _TradingBotControlState extends State<TradingBotControl> {
                                             mainAxisSize: MainAxisSize.min,
                                             children: [
                                               Text(
-                                                '现金余额',
+                                                '资产余额',
                                                 style: Theme.of(context)
                                                     .textTheme
                                                     .bodyMedium
@@ -407,7 +407,8 @@ class _TradingBotControlState extends State<TradingBotControl> {
                                               ),
                                               const SizedBox(height: 8),
                                               Text(
-                                                _fmt(account.balanceUsdt),
+                                                _fmt(account.cashBalance ??
+                                                    account.balanceUsdt),
                                                 style: (Theme.of(context)
                                                             .textTheme.titleMedium ??
                                                         const TextStyle())

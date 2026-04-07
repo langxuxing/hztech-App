@@ -100,24 +100,20 @@ class TestAuthRequired:
 
 
 class TestTradingbotsConfigAndApi:
-    """后台账户：含 Account_List 启用账户 + tradingbots.json 中额外 bot（如 simpleserver-*）。"""
+    """后台账户：仅以 Account_List.json 为准（不再使用 tradingbots.json）。"""
 
-    EXPECTED_BOT_IDS = {
-        "simpleserver-lhg",
-        "simpleserver-hztech",
-    }
+    LEGACY_MOCK_BOT_IDS = frozenset({"simpleserver-lhg", "simpleserver-hztech"})
 
-    def test_tradingbots_returns_all_configured_bots(self, client, auth_headers):
+    def test_tradingbots_excludes_default_simpleserver_when_no_tradingbots_json(
+        self, client, auth_headers
+    ):
         r = client.get("/api/tradingbots", headers=auth_headers)
         assert r.status_code == 200
         data = r.get_json()
         bots = data.get("bots") or data.get("tradingbots") or []
         ids = {b.get("tradingbot_id") for b in bots if b.get("tradingbot_id")}
-        assert len(bots) >= len(self.EXPECTED_BOT_IDS), (
-            f"至少应包含 tradingbots.json 中的 bot，实际 {len(bots)}: {bots}"
-        )
-        assert self.EXPECTED_BOT_IDS.issubset(ids), (
-            f"应包含 id 集合 {self.EXPECTED_BOT_IDS}，实际 {ids}"
+        assert self.LEGACY_MOCK_BOT_IDS.isdisjoint(ids), (
+            f"/api/tradingbots 不应默认包含模拟 simpleserver bot，实际 ids={ids}"
         )
 
     def test_tradingbots_each_has_required_fields(self, client, auth_headers):
@@ -403,7 +399,7 @@ class TestCustomerScope:
         conn = tdb.get_conn()
         conn.execute(
             "UPDATE users SET role = ?, linked_account_ids = ? WHERE LOWER(username) = LOWER(?)",
-            ("customer", '["simpleserver-lhg"]', "cust_rb"),
+            ("customer", '["Hztech_Devops"]', "cust_rb"),
         )
         conn.commit()
         conn.close()
@@ -420,7 +416,7 @@ class TestCustomerScope:
         assert r.status_code == 200
         bots = r.get_json().get("bots") or []
         ids = {b.get("tradingbot_id") for b in bots}
-        assert ids == {"simpleserver-lhg"}
+        assert ids == {"Hztech_Devops"}
 
     def test_customer_account_profit_filtered(self, client):
         import hashlib
@@ -431,7 +427,7 @@ class TestCustomerScope:
         conn = tdb.get_conn()
         conn.execute(
             "UPDATE users SET role = ?, linked_account_ids = ? WHERE LOWER(username) = LOWER(?)",
-            ("customer", '["simpleserver-lhg"]', "cust_profit"),
+            ("customer", '["Hztech_Devops"]', "cust_profit"),
         )
         conn.commit()
         conn.close()
@@ -452,7 +448,7 @@ class TestCustomerScope:
             (a.get("bot_id") or a.get("account_id") or "").strip() for a in accounts
         }
         ids.discard("")
-        assert ids <= {"simpleserver-lhg"}
+        assert ids <= {"Hztech_Devops"}
 
     def test_customer_strategy_status_filtered_when_authenticated(self, client):
         import hashlib

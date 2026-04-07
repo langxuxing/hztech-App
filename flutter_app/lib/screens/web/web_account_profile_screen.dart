@@ -96,6 +96,10 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   DateTime? _cashMetricsMonth;
   Map<int, int>? _equityCalendarCloseCounts;
   Map<int, int>? _cashCalendarCloseCounts;
+  /// 与 [_equityMetricsMonth] 对应月的 daily-realized-pnl（含 account_daily_performance 合并字段）
+  List<DailyRealizedPnlDayRow> _equityPerfDays = const [];
+  /// 与 [_cashMetricsMonth] 对应月
+  List<DailyRealizedPnlDayRow> _cashPerfDays = const [];
   final TextEditingController _noDropdownAccountController =
       TextEditingController();
 
@@ -161,7 +165,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
       final api = ApiClient(baseUrl, token: token);
       final batch = await Future.wait([
         api.getAccountProfit(),
-        api.getBotProfitHistory(botId, limit: 500),
+        api.getBotProfitHistory(botId),
         api.getTradingbotPositions(botId),
         api.getTradingbotSeasons(botId, limit: 50),
       ]);
@@ -179,6 +183,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         _seasons = seasonsResp.seasons;
         _equityMetricsMonth = null;
         _cashMetricsMonth = null;
+        _equityPerfDays = const [];
+        _cashPerfDays = const [];
       });
       unawaited(_syncCalendarCloseCounts());
       _syncOkxTickerSubscription();
@@ -220,7 +226,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
       try {
         final batch = await Future.wait([
           api.getAccountProfit(),
-          api.getBotProfitHistory(botId, limit: 500),
+          api.getBotProfitHistory(botId),
           api.getTradingbotPositions(botId),
           api.getTradingbotSeasons(botId, limit: 50),
         ]);
@@ -238,6 +244,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
           _seasons = seasonsResp.seasons;
           _equityMetricsMonth = null;
           _cashMetricsMonth = null;
+          _equityPerfDays = const [];
+          _cashPerfDays = const [];
         });
         unawaited(_syncCalendarCloseCounts());
         _syncOkxTickerSubscription();
@@ -274,7 +282,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
 
       final phase1 = await Future.wait([
         api.getAccountProfit(),
-        api.getBotProfitHistory(botId, limit: 500),
+        api.getBotProfitHistory(botId),
       ]);
       if (!mounted || g != _accountSwitchGeneration) return;
       final profitResp = phase1[0] as AccountProfitResponse;
@@ -552,14 +560,6 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         (list.isNotEmpty ? list.first.tradingbotId : null) ??
         _defaultBotId;
     final snap = _snapshots;
-    if (snap.isEmpty) {
-      if (!mounted || gen != _accountSwitchGeneration) return;
-      setState(() {
-        _equityCalendarCloseCounts = null;
-        _cashCalendarCloseCounts = null;
-      });
-      return;
-    }
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
@@ -574,6 +574,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
           setState(() {
             _equityCalendarCloseCounts = null;
             _cashCalendarCloseCounts = null;
+            _equityPerfDays = const [];
+            _cashPerfDays = const [];
           });
           return;
         }
@@ -581,6 +583,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         setState(() {
           _equityCalendarCloseCounts = m;
           _cashCalendarCloseCounts = m;
+          _equityPerfDays = r.days;
+          _cashPerfDays = r.days;
         });
       } else {
         final rEq = await api.getDailyRealizedPnl(botId, eq.year, eq.month);
@@ -597,6 +601,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
           _cashCalendarCloseCounts = rCash.success
               ? dailyCloseCountsMapForMonth(rCash.days, cash.year, cash.month)
               : null;
+          _equityPerfDays = rEq.success ? rEq.days : const [];
+          _cashPerfDays = rCash.success ? rCash.days : const [];
         });
       }
     } catch (_) {
@@ -604,8 +610,26 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
       setState(() {
         _equityCalendarCloseCounts = null;
         _cashCalendarCloseCounts = null;
+        _equityPerfDays = const [];
+        _cashPerfDays = const [];
       });
     }
+  }
+
+  double _equityPctLineDenominator() {
+    final a = _selectedAccount;
+    if (a == null) return 0;
+    final m = a.monthOpenEquity;
+    if (m != null && m > 1e-12) return m;
+    return a.initialBalance;
+  }
+
+  double _cashPctLineDenominator() {
+    final a = _selectedAccount;
+    if (a == null) return 0;
+    final m = a.monthInitialBalance;
+    if (m != null && m > 1e-12) return m;
+    return a.initialBalance;
   }
 
   void _syncNoDropdownAccountLabel() {
@@ -904,7 +928,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     if (a == null) return const SizedBox.shrink();
     final bot = _currentUnifiedBot;
     final equity = a.equityUsdt;
-    final balance = a.balanceUsdt;
+    final assetBal = a.cashBalance ?? a.balanceUsdt;
     // 与「当前持仓」价格轴上「总浮动盈亏」一致：单合约时用 WS 最新价 + [_totalDynUpl] 动态刷新。
     final singleInst =
         _positions.isNotEmpty &&
@@ -915,8 +939,10 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     final floating = singleInst && curPx > 0
         ? _totalDynUpl(_positions, curPx)
         : a.floatingProfit;
-    final rate = a.profitPercent;
-    final rateColor = rate >= 0 ? AppFinanceStyle.profitGreenEnd : Colors.red;
+    final eqRate = a.profitPercent;
+    final cashRate = a.cashProfitPercent;
+    final cashAmt = a.cashProfitAmount;
+    final eqAmt = a.profitAmount;
     TextStyle v(double fs) =>
         AppFinanceStyle.valueTextStyle(context, fontSize: fs);
 
@@ -939,14 +965,38 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
           const SizedBox(height: 4),
 
           const SizedBox(height: 16),
-          // 与 Dashboard「全局概览」下 `_SummaryStrip` 一致。
           LayoutBuilder(
             builder: (context, c) {
               final narrow = c.maxWidth < 520;
-              final children = <Widget>[
+              final green = AppFinanceStyle.chartProfit;
+              final red = AppFinanceStyle.chartLoss;
+              Widget metricRow(List<Widget> cells) {
+                if (narrow) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (var i = 0; i < cells.length; i++) ...[
+                        if (i > 0) const SizedBox(height: 12),
+                        cells[i],
+                      ],
+                    ],
+                  );
+                }
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    for (var i = 0; i < cells.length; i++) ...[
+                      if (i > 0) const SizedBox(width: 16),
+                      Expanded(child: cells[i]),
+                    ],
+                  ],
+                );
+              }
+
+              final rowBalances = [
                 _AccountDetailMetricCell(
-                  label: '现金余额',
-                  value: _fmt(balance),
+                  label: '资产余额',
+                  value: _fmt(assetBal),
                   valueStyle: v(24),
                   trailingLabel: !narrow,
                 ),
@@ -960,9 +1010,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                   label: '浮动盈亏',
                   value: _fmt(floating),
                   valueStyle: v(24).copyWith(
-                    color: floating >= 0
-                        ? AppFinanceStyle.profitGreenEnd
-                        : Colors.redAccent,
+                    color: floating >= 0 ? green : red,
                   ),
                   trailingLabel: !narrow,
                 ),
@@ -972,35 +1020,60 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                   valueStyle: v(24),
                   trailingLabel: !narrow,
                 ),
+              ];
+              final rowReturns = [
                 _AccountDetailMetricCell(
-                  label: '收益率',
-                  value: _fmtPct(rate),
-                  valueStyle: v(24).copyWith(color: rateColor),
+                  label: '现金收益',
+                  value: _fmt(cashAmt),
+                  valueStyle: v(24).copyWith(
+                    color: cashAmt >= 0 ? green : red,
+                  ),
+                  trailingLabel: !narrow,
+                ),
+                _AccountDetailMetricCell(
+                  label: '现金收益率',
+                  value: _fmtPct(cashRate),
+                  valueStyle: v(24).copyWith(
+                    color: cashRate >= 0 ? green : red,
+                  ),
+                  trailingLabel: !narrow,
+                ),
+                _AccountDetailMetricCell(
+                  label: '权益收益',
+                  value: _fmt(eqAmt),
+                  valueStyle: v(24).copyWith(
+                    color: eqAmt >= 0 ? green : red,
+                  ),
+                  trailingLabel: !narrow,
+                ),
+                _AccountDetailMetricCell(
+                  label: '权益收益率',
+                  value: _fmtPct(eqRate),
+                  valueStyle: v(24).copyWith(
+                    color: eqRate >= 0 ? green : red,
+                  ),
                   trailingLabel: !narrow,
                 ),
               ];
-              if (narrow) {
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    for (var i = 0; i < children.length; i++) ...[
-                      if (i > 0) const SizedBox(height: 12),
-                      children[i],
-                    ],
-                  ],
-                );
-              }
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  for (var i = 0; i < children.length; i++) ...[
-                    if (i > 0) const SizedBox(width: 16),
-                    Expanded(child: children[i]),
-                  ],
+                  metricRow(rowBalances),
+                  SizedBox(height: narrow ? 16 : 20),
+                  metricRow(rowReturns),
                 ],
               );
             },
           ),
+          if (a.availableMargin != null || a.usedMargin != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Text(
+                '可用保证金 ${_fmt(a.availableMargin ?? 0)} · 占用 ${_fmt(a.usedMargin ?? 0)}',
+                style: AppFinanceStyle.labelTextStyle(context)
+                    .copyWith(fontSize: 13),
+              ),
+            ),
         ],
       ),
     );
@@ -1043,6 +1116,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     if (_selectedAccount == null) return const SizedBox.shrink();
     final snap = _snapshots;
     final month = _equityMonthFor(snap);
+    final equityPctDenom = _equityPctLineDenominator();
     void setEquityMonth(DateTime d) {
       setState(() => _equityMetricsMonth = clampMonthToSnapshots(snap, d));
       unawaited(_syncCalendarCloseCounts());
@@ -1068,7 +1142,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(
-                  '权益曲线',
+                  '权益收益率 %',
                   style: AppFinanceStyle.labelTextStyle(
                     context,
                   ).copyWith(fontWeight: FontWeight.w600),
@@ -1081,6 +1155,9 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                     series: SnapshotReturnSeries.equity,
                     compact: true,
                     focusedMonth: month,
+                    dailyPerfDays: _equityPerfDays,
+                    monthPerformanceDenom:
+                        equityPctDenom > 1e-12 ? equityPctDenom : null,
                   ),
                 ),
               ],
@@ -1091,15 +1168,18 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
             MonthEndValueBarPanel(
               snapshots: snap,
               title: '每日权益',
-              description: '按日展示：当日最后一条快照权益相对前一有效时点的变化（与右侧日历一致）。',
+              description:
+                  '优先 account_daily_performance.equity_change（UTC）；无则快照差分。',
               valueAt: (s) => s.equityUsdt,
-              emptyMessage: '暂无历史快照，无法统计月度权益',
+              emptyMessage: '暂无日绩效或历史快照',
               showMonthNavigator: false,
               selectedEndMonth: month,
               onSelectedEndMonthChanged: setEquityMonth,
               barChartHeight: plotH,
               maxBars: 8,
               useDailyBarsForEndMonth: true,
+              dailyPerformanceRows: _equityPerfDays,
+              dailyPerformancePick: (r) => r.equityChange,
             ),
           ),
           const SizedBox(height: 16),
@@ -1108,15 +1188,17 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
               snapshots: snap,
               title: '权益日历',
               description:
-                  '按日展示：当日最后一条快照权益相对前一有效时点的变化。右下角平仓笔数为 UTC 自然日历史平仓汇总（与盈亏数值口径不同）。',
+                  '优先 equity_change；无则快照。右下为 UTC 自然日平仓笔数（按 OKX uTime 归入日）。',
               valueAt: (s) => s.equityUsdt,
-              emptyMessage: '暂无历史快照，无法统计月度权益',
+              emptyMessage: '暂无日绩效或历史快照',
               showMonthNavigator: false,
               focusedMonth: month,
               onFocusedMonthChanged: setEquityMonth,
               gridMaxHeight: calCapCalendar,
               titleToBodyExtraGap: _kProfileCalendarTitleExtraGap,
               dailyCloseCounts: _equityCalendarCloseCounts,
+              dailyPerformanceRows: _equityPerfDays,
+              dailyPerformancePick: (r) => r.equityChange,
             ),
           ),
         ],
@@ -1146,7 +1228,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                       title: '权益日历',
                       description: '',
                       valueAt: (s) => s.equityUsdt,
-                      emptyMessage: '暂无历史快照',
+                      emptyMessage: '暂无日绩效或历史快照',
                       compact: true,
                       showMonthNavigator: false,
                       focusedMonth: month,
@@ -1155,6 +1237,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                       titleToBodyExtraGap: _kProfileCalendarTitleExtraGap,
                       centerCalendarGridInExpanded: true,
                       dailyCloseCounts: _equityCalendarCloseCounts,
+                      dailyPerformanceRows: _equityPerfDays,
+                      dailyPerformancePick: (r) => r.equityChange,
                     ),
                   ),
                 ),
@@ -1190,6 +1274,10 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                                   series: SnapshotReturnSeries.equity,
                                   compact: true,
                                   focusedMonth: month,
+                                  dailyPerfDays: _equityPerfDays,
+                                  monthPerformanceDenom: equityPctDenom > 1e-12
+                                      ? equityPctDenom
+                                      : null,
                                 ),
                               ),
                             ],
@@ -1206,7 +1294,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                             title: '每日权益',
                             description: '',
                             valueAt: (s) => s.equityUsdt,
-                            emptyMessage: '暂无历史快照',
+                            emptyMessage: '暂无日绩效或历史快照',
                             compact: true,
                             showMonthNavigator: false,
                             selectedEndMonth: month,
@@ -1214,6 +1302,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                             expandChartArea: true,
                             maxBars: 8,
                             useDailyBarsForEndMonth: true,
+                            dailyPerformanceRows: _equityPerfDays,
+                            dailyPerformancePick: (r) => r.equityChange,
                           ),
                         ),
                       ),
@@ -1232,6 +1322,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     if (_selectedAccount == null) return const SizedBox.shrink();
     final snap = _snapshots;
     final month = _cashMonthFor(snap);
+    final cashPctDenom = _cashPctLineDenominator();
     void setCashMonth(DateTime d) {
       setState(() => _cashMetricsMonth = clampMonthToSnapshots(snap, d));
       unawaited(_syncCalendarCloseCounts());
@@ -1257,7 +1348,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 Text(
-                  '收益率（现金）%',
+                  '现金收益率 %',
                   style: AppFinanceStyle.labelTextStyle(
                     context,
                   ).copyWith(fontWeight: FontWeight.w600),
@@ -1270,6 +1361,9 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                     series: SnapshotReturnSeries.cash,
                     compact: true,
                     focusedMonth: month,
+                    dailyPerfDays: _cashPerfDays,
+                    monthPerformanceDenom:
+                        cashPctDenom > 1e-12 ? cashPctDenom : null,
                   ),
                 ),
               ],
@@ -1280,15 +1374,18 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
             MonthEndValueBarPanel(
               snapshots: snap,
               title: '每日现金',
-              description: '按日展示：当日最后一条快照现金余额相对前一有效时点的变化（与右侧日历一致）。',
+              description:
+                  '优先 account_daily_performance.cash_change（UTC）；无则快照差分。',
               valueAt: (s) => s.currentBalance,
-              emptyMessage: '暂无历史快照，无法统计月度现金余额',
+              emptyMessage: '暂无日绩效或历史快照',
               showMonthNavigator: false,
               selectedEndMonth: month,
               onSelectedEndMonthChanged: setCashMonth,
               barChartHeight: plotH,
               maxBars: 8,
               useDailyBarsForEndMonth: true,
+              dailyPerformanceRows: _cashPerfDays,
+              dailyPerformancePick: (r) => r.cashChange,
             ),
           ),
           const SizedBox(height: 16),
@@ -1297,15 +1394,17 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
               snapshots: snap,
               title: '现金日历',
               description:
-                  '按日展示：当日最后一条快照现金余额相对前一有效时点的变化。右下角平仓笔数为 UTC 自然日历史平仓汇总（与盈亏数值口径不同）。',
+                  '优先 cash_change；无则快照。右下为 UTC 自然日平仓笔数（按 OKX uTime 归入日）。',
               valueAt: (s) => s.currentBalance,
-              emptyMessage: '暂无历史快照，无法统计月度现金余额',
+              emptyMessage: '暂无日绩效或历史快照',
               showMonthNavigator: false,
               focusedMonth: month,
               onFocusedMonthChanged: setCashMonth,
               gridMaxHeight: calCapCalendar,
               titleToBodyExtraGap: _kProfileCalendarTitleExtraGap,
               dailyCloseCounts: _cashCalendarCloseCounts,
+              dailyPerformanceRows: _cashPerfDays,
+              dailyPerformancePick: (r) => r.cashChange,
             ),
           ),
         ],
@@ -1335,7 +1434,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                       title: '现金日历',
                       description: '',
                       valueAt: (s) => s.currentBalance,
-                      emptyMessage: '暂无历史快照',
+                      emptyMessage: '暂无日绩效或历史快照',
                       compact: true,
                       showMonthNavigator: false,
                       focusedMonth: month,
@@ -1344,6 +1443,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                       titleToBodyExtraGap: _kProfileCalendarTitleExtraGap,
                       centerCalendarGridInExpanded: true,
                       dailyCloseCounts: _cashCalendarCloseCounts,
+                      dailyPerformanceRows: _cashPerfDays,
+                      dailyPerformancePick: (r) => r.cashChange,
                     ),
                   ),
                 ),
@@ -1379,6 +1480,10 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                                   series: SnapshotReturnSeries.cash,
                                   compact: true,
                                   focusedMonth: month,
+                                  dailyPerfDays: _cashPerfDays,
+                                  monthPerformanceDenom: cashPctDenom > 1e-12
+                                      ? cashPctDenom
+                                      : null,
                                 ),
                               ),
                             ],
@@ -1395,7 +1500,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                             title: '每日现金',
                             description: '',
                             valueAt: (s) => s.currentBalance,
-                            emptyMessage: '暂无历史快照',
+                            emptyMessage: '暂无日绩效或历史快照',
                             compact: true,
                             showMonthNavigator: false,
                             selectedEndMonth: month,
@@ -1403,6 +1508,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                             expandChartArea: true,
                             maxBars: 8,
                             useDailyBarsForEndMonth: true,
+                            dailyPerformanceRows: _cashPerfDays,
+                            dailyPerformancePick: (r) => r.cashChange,
                           ),
                         ),
                       ),
@@ -1499,7 +1606,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                       Text(
                         '空仓',
                         style: sideTitleStyle.copyWith(
-                          color: Colors.red,
+                          color: AppFinanceStyle.chartLoss,
                           fontSize: 20,
                           fontWeight: FontWeight.bold,
                         ),
@@ -1507,7 +1614,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                       const SizedBox(height: 12),
                       Text(
                         '数量：${shorts.fold<int>(0, (s, p) => s + p.pos.abs().round())}',
-                        style: posQtyStyle(Colors.red),
+                        style: posQtyStyle(AppFinanceStyle.chartLoss),
                       ),
                       const SizedBox(height: 3),
                       if (shorts.isNotEmpty && singleInst && curPx > 0)
@@ -1516,7 +1623,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                           child: Text(
                             '盈亏：${formatUiSignedInteger(_totalDynUpl(shorts, curPx))}',
                             style: plWhiteStyle.copyWith(
-                              color: Colors.red,
+                              color: AppFinanceStyle.chartLoss,
                               fontSize: 18,
                             ),
                           ),
@@ -1527,7 +1634,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                           child: Text(
                             '浮盈：${formatUiSignedInteger(shorts.fold<double>(0, (s, p) => s + p.upl))}',
                             style: plWhiteStyle.copyWith(
-                              color: Colors.red,
+                              color: AppFinanceStyle.chartLoss,
                               fontSize: 18,
                             ),
                           ),
@@ -1544,7 +1651,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                       Text(
                         '多仓',
                         style: sideTitleStyle.copyWith(
-                          color: AppFinanceStyle.profitGreenEnd,
+                          color: AppFinanceStyle.chartProfit,
                           fontSize: 20,
                           fontWeight: FontWeight.bold,
                         ),
@@ -1552,7 +1659,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                       const SizedBox(height: 12),
                       Text(
                         '${longs.fold<int>(0, (s, p) => s + p.pos.round())}：数量',
-                        style: posQtyStyle(AppFinanceStyle.profitGreenEnd),
+                        style: posQtyStyle(AppFinanceStyle.chartProfit),
                       ),
                       const SizedBox(height: 3),
                       if (longs.isNotEmpty && singleInst && curPx > 0)
@@ -1561,7 +1668,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                           child: Text(
                             '${formatUiSignedInteger(_totalDynUpl(longs, curPx))}：盈亏',
                             style: plWhiteStyle.copyWith(
-                              color: AppFinanceStyle.profitGreenEnd,
+                              color: AppFinanceStyle.chartProfit,
                               fontSize: 18,
                             ),
                           ),
@@ -1572,7 +1679,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                           child: Text(
                             '浮盈：${formatUiSignedInteger(longs.fold<double>(0, (s, p) => s + p.upl))}',
                             style: plWhiteStyle.copyWith(
-                              color: AppFinanceStyle.profitGreenEnd,
+                              color: AppFinanceStyle.chartProfit,
                               fontSize: 18,
                             ),
                           ),
@@ -1719,8 +1826,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
             final index = entry.key + 1;
             final s = entry.value;
             final profitColor = (s.profitAmount ?? 0) >= 0
-                ? AppFinanceStyle.profitGreenEnd
-                : Colors.red;
+                ? AppFinanceStyle.chartProfit
+                : AppFinanceStyle.chartLoss;
             return Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: Row(
@@ -1967,7 +2074,9 @@ class _PriceAxisBar extends StatelessWidget {
                       height: 14,
                       child: DecoratedBox(
                         decoration: BoxDecoration(
-                          color: Colors.red.withValues(alpha: 0.9),
+                          color: AppFinanceStyle.chartLoss.withValues(
+                            alpha: 0.9,
+                          ),
                           borderRadius: BorderRadius.circular(1),
                         ),
                       ),
@@ -1980,7 +2089,7 @@ class _PriceAxisBar extends StatelessWidget {
                       height: 14,
                       child: DecoratedBox(
                         decoration: BoxDecoration(
-                          color: AppFinanceStyle.profitGreenEnd.withValues(
+                          color: AppFinanceStyle.chartProfit.withValues(
                             alpha: 0.9,
                           ),
                           borderRadius: BorderRadius.circular(1),
@@ -2047,7 +2156,7 @@ class _PriceAxisBar extends StatelessWidget {
                               context,
                               fontSize: 18,
                             ).copyWith(
-                              color: Colors.red,
+                              color: AppFinanceStyle.chartLoss,
                               fontWeight: FontWeight.w700,
                             ),
                       )
@@ -2065,7 +2174,7 @@ class _PriceAxisBar extends StatelessWidget {
                               context,
                               fontSize: 18,
                             ).copyWith(
-                              color: AppFinanceStyle.profitGreenEnd,
+                              color: AppFinanceStyle.chartProfit,
                               fontWeight: FontWeight.w700,
                             ),
                       )

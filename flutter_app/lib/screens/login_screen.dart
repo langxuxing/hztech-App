@@ -22,9 +22,9 @@ const double _formWidth = 320;
 /// 副标题诗句（保留原文案）
 const String _tagline = '知空守拙，细水长流；顺势扬帆，乘风破浪';
 
-/// 登录页隐藏入口：后端 API 基址预设（端口 9001；Web 静态站多为 9000）。
+/// 登录页隐藏入口：后端 API 基址预设（与 API 服务端口一致，默认 9001）。
 const List<({String label, String apiBaseUrl})> _kBackendPresets = [
-  (label: '开发环境[本东]', apiBaseUrl: 'http://127.0.0.1:9001/'),
+  (label: '开发环境[本地]', apiBaseUrl: 'http://127.0.0.1:9001/'),
   (label: '开发环境', apiBaseUrl: 'http://192.168.3.41:9001/'),
   (label: 'AWS-Alpha', apiBaseUrl: 'http://54.66.108.150:9001/'),
   (label: 'AWS-Defi', apiBaseUrl: 'http://54.252.181.151:9001/'),
@@ -133,7 +133,7 @@ class _LoginScreenState extends State<LoginScreen> {
       context: context,
       builder: (dialogContext) {
         return StatefulBuilder(
-          builder: (context, setDialogState) {
+          builder: (dialogBodyContext, setDialogState) {
             return AlertDialog(
               title: const Text('后端 API 地址'),
               content: SingleChildScrollView(
@@ -142,7 +142,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
-                      'API 服务端口为 9001；浏览器访问 Web 前端一般为 9000。',
+                      '此处填写 API 根地址（默认本机 9001）。浏览器打开 Flutter Web 使用静态站端口（本地多为 9000）。',
                       style: TextStyle(
                         fontSize: 12,
                         color: Colors.grey.shade700,
@@ -221,11 +221,20 @@ class _LoginScreenState extends State<LoginScreen> {
                       _showSnack('请输入有效的 API 地址');
                       return;
                     }
-                    await _prefs.setBackendBaseUrl(norm);
+                    try {
+                      await _prefs.setBackendBaseUrl(norm);
+                    } catch (e) {
+                      if (!mounted) return;
+                      _showSnack('保存失败: $e');
+                      return;
+                    }
                     if (!mounted) return;
-                    if (!dialogContext.mounted) return;
                     setState(() => _backendUrlCtrl.text = norm);
-                    Navigator.of(dialogContext).pop();
+                    if (dialogBodyContext.mounted) {
+                      Navigator.of(dialogBodyContext).pop();
+                    } else if (dialogContext.mounted) {
+                      Navigator.of(dialogContext).pop();
+                    }
                     _showSnack('已保存后端地址');
                   },
                   child: const Text('保存'),
@@ -301,8 +310,8 @@ class _LoginScreenState extends State<LoginScreen> {
             s.contains('Failed to fetch') || s.contains('ClientException');
         if (kIsWeb && looksUnreachable) {
           msg =
-              '无法连接后端 $rawUrl。请确认 API 服务已启动（端口 9001，例如 ./server/run_local.sh），'
-              '并填写 API 根地址（如 http://127.0.0.1:9001/）；浏览器访问 Web 前端多为 9000 端口。';
+              '无法连接后端 $rawUrl。请确认 API 已启动（例如 ./server/run_local.sh，默认 API 端口 9001），'
+              '并填写 API 根地址（如 http://127.0.0.1:9001/）；勿将浏览器打开的 Web 静态端口当成 API。';
         } else {
           msg = '网络异常: $e';
         }

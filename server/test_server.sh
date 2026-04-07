@@ -24,14 +24,12 @@ if isinstance(w, dict) and w.get("host") and isinstance(a, dict) and a.get("host
     print(f'HOST_URL_WEB="{scheme}://{w["host"]}:{web_port}"')
     print(f'HOST_URL_API="{scheme}://{a["host"]}:{api_port}"')
 elif isinstance(w, dict) and w.get("host"):
-    u = f'{scheme}://{w["host"]}:{web_port}'
-    print(f'HOST_URL_WEB="{u}"')
-    print(f'HOST_URL_API="{u}"')
+    print(f'HOST_URL_WEB="{scheme}://{w["host"]}:{web_port}"')
+    print(f'HOST_URL_API="{scheme}://{w["host"]}:{api_port}"')
 else:
     h = c.get("host", "127.0.0.1")
-    u = f"{scheme}://{h}:{api_port}"
-    print(f'HOST_URL_WEB="{u}"')
-    print(f'HOST_URL_API="{u}"')
+    print(f'HOST_URL_WEB="{scheme}://{h}:{web_port}"')
+    print(f'HOST_URL_API="{scheme}://{h}:{api_port}"')
 PY
 )"
     HOST_URL="$HOST_URL_API"
@@ -47,9 +45,17 @@ echo "=== 测试服务端: Web=$HOST_URL_WEB API=$HOST_URL_API ==="
 
 # 超时（秒），可环境变量覆盖
 CURL_TIMEOUT="${CURL_TIMEOUT:-15}"
-# 1) 首页
-echo -n "GET / ... "
+# 1) Web 静态根（serve_web_static：已构建为 200，未同步 web 产物为 503）
+echo -n "GET / (Web 静态) ... "
 code=$(curl -s -o /dev/null -w "%{http_code}" $CURL_EXTRA --connect-timeout 5 --max-time "$CURL_TIMEOUT" "$HOST_URL_WEB/" || echo "000")
+if [ "$code" = "200" ] || [ "$code" = "503" ]; then
+  echo "OK ($code)"
+else
+  echo "FAIL ($code)"; exit 1
+fi
+
+echo -n "GET / (API JSON) ... "
+code=$(curl -s -o /dev/null -w "%{http_code}" $CURL_EXTRA --connect-timeout 5 --max-time "$CURL_TIMEOUT" "$HOST_URL_API/" || echo "000")
 [ "$code" = "200" ] && echo "OK ($code)" || { echo "FAIL ($code)"; exit 1; }
 
 # 2) 策略状态（无需登录）

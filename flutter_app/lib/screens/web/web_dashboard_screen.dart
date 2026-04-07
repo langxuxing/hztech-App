@@ -5,7 +5,7 @@ import '../../api/models.dart';
 import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
 import '../../utils/number_display_format.dart';
-import '../../widgets/balance_profit_line_chart.dart';
+import '../../widgets/equity_cash_percent_line_chart.dart';
 import '../../widgets/water_background.dart';
 import 'web_account_profit_screen.dart';
 
@@ -264,7 +264,7 @@ class _SummaryStrip extends StatelessWidget {
               trailingLabel: !narrow,
             ),
             _SummaryCell(
-              label: '总盈亏',
+              label: '总权益盈亏',
               value: formatUiInteger(profit),
               valueStyle: v(24).copyWith(
                 color: profit >= 0
@@ -274,7 +274,7 @@ class _SummaryStrip extends StatelessWidget {
               trailingLabel: !narrow,
             ),
             _SummaryCell(
-              label: '收益率',
+              label: '权益收益率',
               value: formatUiPercentLabel(pct),
               valueStyle: v(24),
               trailingLabel: !narrow,
@@ -434,11 +434,11 @@ class _OverviewGlassCard extends StatelessWidget {
                 value: formatUiInteger(account.initialBalance),
               ),
               _OverviewStatCol(
-                label: '当前',
-                value: formatUiInteger(account.balanceUsdt),
+                label: '当前权益',
+                value: formatUiInteger(account.equityUsdt),
               ),
               _OverviewStatCol(
-                label: '增长',
+                label: '权益涨跌',
                 value: formatUiPercentLabel(account.profitPercent),
               ),
             ],
@@ -447,7 +447,11 @@ class _OverviewGlassCard extends StatelessWidget {
           Expanded(
             child: snapshots.isNotEmpty
                 ? IgnorePointer(
-                    child: CashBalanceLineChart(snapshots: snapshots),
+                    child: SnapshotPercentLineChart(
+                      snapshots: snapshots,
+                      series: SnapshotReturnSeries.equity,
+                      compact: true,
+                    ),
                   )
                 : Center(
                     child: Text(

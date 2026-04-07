@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""OKX /account/balance 解析：与 QTrader-web account_tester / account_profit_collector 口径一致。"""
+"""OKX /account/balance 解析：权益 eq、cashBal 资产余额、availEq 可用保证金、占用。"""
 from __future__ import annotations
 
 from exchange.okx import _okx_aggregate_balance_from_payload
 
 
-def test_aggregate_usdt_row_uses_eq_and_avail_eq_like_qtrader():
-    """USDT 行：权益用 ``eq``，可用用 ``availEq``（缺省 ``availBal``），与 QTrader account_profit_collector 一致。"""
+def test_aggregate_usdt_row_uses_eq_cashbal_avail_and_used():
+    """USDT 行：权益 ``eq``，资产 ``cashBal``，可用 ``availEq``，占用 frozen 或 eq−avail。"""
     payload = {
         "code": "0",
         "data": [
@@ -26,9 +26,11 @@ def test_aggregate_usdt_row_uses_eq_and_avail_eq_like_qtrader():
             }
         ],
     }
-    total, avail, upl = _okx_aggregate_balance_from_payload(payload)
-    assert abs(total - 85800.5) < 1e-6
+    eq, cash_bal, avail, used, upl = _okx_aggregate_balance_from_payload(payload)
+    assert abs(eq - 85800.5) < 1e-6
+    assert abs(cash_bal - 85100.0) < 1e-6
     assert abs(avail - 85000.25) < 1e-6
+    assert abs(used - (85800.5 - 85000.25)) < 1e-3
     assert abs(upl - (-10.0)) < 1e-6
 
 
@@ -46,13 +48,15 @@ def test_aggregate_usdt_eq_zero_falls_back_equity_to_total_eq():
                         "eq": "0",
                         "availBal": "100",
                         "availEq": "100",
+                        "cashBal": "120",
                     }
                 ],
             }
         ],
     }
-    total, avail, upl = _okx_aggregate_balance_from_payload(payload)
-    assert abs(total - 55837.43) < 1e-6
+    eq, cash_bal, avail, used, upl = _okx_aggregate_balance_from_payload(payload)
+    assert abs(eq - 55837.43) < 1e-6
+    assert abs(cash_bal - 120.0) < 1e-6
     assert abs(avail - 100.0) < 1e-6
     assert abs(upl) < 1e-9
 
@@ -76,14 +80,16 @@ def test_aggregate_no_usdt_sums_details_like_qtrader_tester():
             }
         ],
     }
-    total, avail, upl = _okx_aggregate_balance_from_payload(payload)
-    assert abs(total - 1.25) < 1e-9
+    eq, cash_bal, avail, used, upl = _okx_aggregate_balance_from_payload(payload)
+    assert abs(eq - 1.25) < 1e-9
     assert abs(avail - 0.5) < 1e-9
+    assert abs(cash_bal - 0.5) < 1e-9
+    assert abs(used - 0.75) < 1e-9
     assert abs(upl) < 1e-9
 
 
 def test_aggregate_empty_details_uses_top_level_total_eq_avail_eq():
-    """无 details 时用账户层 totalEq / availEq。"""
+    """无 details 时用账户层 totalEq / availEq；cash_bal 与 avail 同口径回退。"""
     payload = {
         "code": "0",
         "data": [
@@ -95,18 +101,21 @@ def test_aggregate_empty_details_uses_top_level_total_eq_avail_eq():
             }
         ],
     }
-    total, avail, upl = _okx_aggregate_balance_from_payload(payload)
-    assert abs(total - 55837.43) < 1e-6
+    eq, cash_bal, avail, used, upl = _okx_aggregate_balance_from_payload(payload)
+    assert abs(eq - 55837.43) < 1e-6
     assert abs(avail - 55415.62) < 1e-6
+    assert abs(cash_bal - 55415.62) < 1e-6
     assert abs(upl) < 1e-9
 
 
 def test_aggregate_fallback_total_when_no_cash_breakdown():
-    """仅有 totalEq、无 details 时现金回退为 totalEq。"""
+    """仅有 totalEq、无 details 时现金与可用回退为 totalEq。"""
     payload = {
         "code": "0",
         "data": [{"totalEq": "100", "upl": "0"}],
     }
-    total, avail, upl = _okx_aggregate_balance_from_payload(payload)
-    assert total == 100.0
+    eq, cash_bal, avail, used, upl = _okx_aggregate_balance_from_payload(payload)
+    assert eq == 100.0
     assert avail == 100.0
+    assert cash_bal == 100.0
+    assert used == 0.0

@@ -268,7 +268,7 @@ class _AccountsListState extends State<AccountsList> {
                                               ],
                                               const SizedBox(height: 6),
                                               Text(
-                                                '现金 ${formatUiInteger(a.balanceUsdt)} · 浮动 ${formatUiSignedInteger(a.floatingProfit)}',
+                                                '余额 ${formatUiInteger(a.cashBalance ?? a.balanceUsdt)} · 浮动 ${formatUiSignedInteger(a.floatingProfit)}',
                                                 style: Theme.of(context)
                                                     .textTheme
                                                     .bodySmall

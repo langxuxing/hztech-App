@@ -30,6 +30,12 @@ class AppFinanceStyle {
   /// 盈利绿渐变终点 #7EC850
   static const Color profitGreenEnd = Color(0xFF7EC850);
 
+  /// 图表（柱/折线/日历盈亏强调）：盈利 RGB(51, 118, 41)
+  static const Color chartProfit = Color(0xFF337629);
+
+  /// 图表（柱/折线/日历盈亏强调）：亏损 RGB(79, 38, 44)
+  static const Color chartLoss = Color(0xFF4F262C);
+
   /// 外阴影
   static const List<BoxShadow> cardShadow = [
     BoxShadow(

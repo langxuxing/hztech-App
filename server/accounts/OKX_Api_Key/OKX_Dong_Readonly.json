@@ -1,0 +1,11 @@
+
+{
+    "api": {
+      "name": "董杰VIP",
+      "passphrase": "Moneyflow004@read-api",
+      "secret":"4591BDF5FB7C3CC64888481D4B1DACB8",
+      "key":"f096d27c-e4c1-4696-a082-4ff05ffaf7de",    
+      "base_url": "https://www.okx.com",
+      "sandbox": false
+    }
+  }

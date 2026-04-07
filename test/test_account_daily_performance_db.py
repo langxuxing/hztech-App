@@ -22,7 +22,7 @@ def test_daily_performance_rebuild_equity_and_efficiency():
         "openMaxPos": "1",
         "closeTotalPos": "1",
         "pnl": "100",
-        "realizedPnl": "100",
+        "realizedPnl": "99",
         "fee": "-1",
         "fundingFee": "0",
         "type": "1",
@@ -35,6 +35,8 @@ def test_daily_performance_rebuild_equity_and_efficiency():
         4000.0,
         -1000.0,
         -20.0,
+        available_margin=4000.0,
+        used_margin=0.0,
     )
     db.market_daily_bars_upsert(
         "PEPE-USDT-SWAP",
@@ -46,21 +48,144 @@ def test_daily_performance_rebuild_equity_and_efficiency():
         0.2,
     )
     db.account_positions_history_insert_batch(aid, [row], ts)
+    db.account_month_open_upsert(
+        aid,
+        "2026-04",
+        4000.0,
+        "2026-04-01T00:00:00.000000Z",
+        initial_balance=4000.0,
+    )
+    db.account_snapshot_insert(
+        aid,
+        "2026-04-05T23:59:59.000000Z",
+        4000.0,
+        4099.0,
+        -901.0,
+        -18.02,
+        available_margin=4000.0,
+        used_margin=0.0,
+    )
 
     db.account_daily_performance_rebuild_for_accounts(
         [aid], {aid: "PEPE-USDT-SWAP"}
     )
 
     q = db.account_daily_performance_query_month(aid, 2026, 4)
-    assert len(q) == 1
-    r = q[0]
-    assert r["day"] == "2026-04-05"
+    r = next(x for x in q if x["day"] == "2026-04-05")
     assert abs(r["net_pnl"] - 99.0) < 1e-6
     assert r["close_count"] == 1
-    assert r["equity_base"] == 4000.0
+    assert r["equity_change"] is not None and abs(r["equity_change"] - 99.0) < 1e-6
     exp_pct = 99.0 / 4000.0 * 100.0
     assert r["pnl_pct"] is not None and abs(r["pnl_pct"] - exp_pct) < 1e-6
+    assert r["equity_base"] is not None and abs(r["equity_base"] - 4000.0) < 1e-6
+    assert r["equity_base_realized_chain"] == 4000.0
+    assert r["pnl_pct_realized_chain"] is not None
+    assert abs(r["pnl_pct_realized_chain"] - exp_pct) < 1e-6
     assert r["benchmark_inst_id"] == "PEPE-USDT-SWAP"
     assert r["market_tr"] == 0.2
     assert r["efficiency_ratio"] is not None
     assert abs(r["efficiency_ratio"] - 99.0 / (0.2 * 1e9)) < 1e-12
+
+
+def test_daily_performance_sparse_snapshot_chain_pct_differs_from_snapshot_pct():
+    """链式分母随上一日链末滚动；equity_base 与 pnl_pct 分母均为当月 account_month_open 口径（initial_balance 优先）。"""
+    aid = "acct-perf-chain-2"
+    ts1 = "2026-04-05T12:00:00.000000Z"
+    ts2 = "2026-04-06T12:00:00.000000Z"
+    day1_ms = "1775347200000"
+    day2_ms = "1775433600000"
+    row1 = {
+        "posId": "452587086133239901",
+        "uTime": day1_ms,
+        "cTime": day1_ms,
+        "instId": "BTC-USDT-SWAP",
+        "instType": "SWAP",
+        "posSide": "long",
+        "mgnMode": "cross",
+        "openAvgPx": "29783.9",
+        "closeAvgPx": "29786.6",
+        "openMaxPos": "1",
+        "closeTotalPos": "1",
+        "pnl": "100",
+        "realizedPnl": "99",
+        "fee": "-1",
+        "fundingFee": "0",
+        "type": "1",
+    }
+    row2 = {
+        "posId": "452587086133239902",
+        "uTime": day2_ms,
+        "cTime": day2_ms,
+        "instId": "BTC-USDT-SWAP",
+        "instType": "SWAP",
+        "posSide": "long",
+        "mgnMode": "cross",
+        "openAvgPx": "29783.9",
+        "closeAvgPx": "29786.6",
+        "openMaxPos": "1",
+        "closeTotalPos": "1",
+        "pnl": "200",
+        "realizedPnl": "198",
+        "fee": "-2",
+        "fundingFee": "0",
+        "type": "1",
+    }
+    db.account_list_upsert(aid, 5000.0)
+    db.account_snapshot_insert(
+        aid,
+        "2026-04-04T10:00:00.000000Z",
+        4000.0,
+        4000.0,
+        -1000.0,
+        -20.0,
+        available_margin=4000.0,
+        used_margin=0.0,
+    )
+    db.market_daily_bars_upsert(
+        "PEPE-USDT-SWAP",
+        "2026-04-05",
+        1.0,
+        1.1,
+        0.9,
+        1.05,
+        0.2,
+    )
+    db.market_daily_bars_upsert(
+        "PEPE-USDT-SWAP",
+        "2026-04-06",
+        1.0,
+        1.1,
+        0.9,
+        1.05,
+        0.25,
+    )
+    db.account_positions_history_insert_batch(aid, [row1], ts1)
+    db.account_positions_history_insert_batch(aid, [row2], ts2)
+    db.account_month_open_upsert(
+        aid,
+        "2026-04",
+        4000.0,
+        "2026-04-01T00:00:00.000000Z",
+        initial_balance=4000.0,
+    )
+
+    db.account_daily_performance_rebuild_for_accounts(
+        [aid], {aid: "PEPE-USDT-SWAP"}
+    )
+
+    q = db.account_daily_performance_query_month(aid, 2026, 4)
+    d5 = next(x for x in q if x["day"] == "2026-04-05")
+    d6 = next(x for x in q if x["day"] == "2026-04-06")
+    net5 = 99.0
+    net6 = 198.0
+    assert abs(d5["net_pnl"] - net5) < 1e-6
+    assert abs(d6["net_pnl"] - net6) < 1e-6
+    assert d5["pnl_pct"] is not None and abs(d5["pnl_pct"] - net5 / 4000.0 * 100.0) < 1e-6
+    assert d6["pnl_pct"] is not None and abs(d6["pnl_pct"] - net6 / 4000.0 * 100.0) < 1e-6
+    assert d5["equity_base"] is not None and abs(d5["equity_base"] - 4000.0) < 1e-6
+    assert d6["equity_base"] is not None and abs(d6["equity_base"] - 4000.0) < 1e-6
+    chain_after_5 = 4000.0 + net5
+    assert d6["equity_base_realized_chain"] is not None
+    assert abs(d6["equity_base_realized_chain"] - chain_after_5) < 1e-6
+    assert d6["pnl_pct_realized_chain"] is not None
+    assert abs(d6["pnl_pct_realized_chain"] - net6 / chain_after_5 * 100.0) < 1e-6

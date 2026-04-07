@@ -384,7 +384,7 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
                                       DataColumn(
                                           label: _headerCell('开仓(北京)')),
                                       DataColumn(
-                                          label: _headerCell('更新(北京)')),
+                                          label: _headerCell('平仓时间(北京)')),
                                       DataColumn(
                                           label: _headerCell('平仓类型')),
                                     ],

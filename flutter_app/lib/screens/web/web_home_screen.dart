@@ -40,8 +40,8 @@ class WebHomeScreen extends StatelessWidget {
                           style: Theme.of(context).textTheme.headlineMedium
                               ?.copyWith(
                                 color: const Color(0xFFE8E8F0),
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: 1,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 2,
                               ),
                         ),
                       ],
