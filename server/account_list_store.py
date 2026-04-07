@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Account_List.json 线程安全读写（管理员 API 使用；落盘后由 main 同步 SQLite account_meta）。"""
+"""Account_List.json 线程安全读写（管理员 API 使用；落盘后由 main 同步 SQLite account_list）。"""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 SERVER_DIR = Path(__file__).resolve().parent
-ACCOUNT_LIST_PATH = SERVER_DIR / "Accounts" / "Account_List.json"
+ACCOUNT_LIST_PATH = SERVER_DIR / "accounts" / "Account_List.json"
 
 _LOCK = threading.Lock()
 

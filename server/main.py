@@ -9,7 +9,7 @@ App 所需 API（与 QtraderApi.kt 一致）：
   POST /api/login                 登录，Body: {username, password}，返回 {success, token}
   GET  /api/account-profit        账户盈亏（需 Bearer token）
   GET  /api/tradingbots           交易账户列表（需 Bearer token）
-  POST /api/tradingbots/{id}/start|stop|restart|season-start|season-stop（需 Bearer token；赛季脚本成功后由服务端写 bot_seasons：新赛季与上一赛季同一时刻衔接；stop 写当前未结赛季止期及期末权益/现金）
+  POST /api/tradingbots/{id}/start|stop|restart|season-start|season-stop（需 Bearer token；season-start 先写 account_season 再按需启动策略进程，再执行赛季脚本；season-stop 仅结束赛季记录，不强制 stop 进程；stop 会写当前未结赛季止期及期末权益/现金）
   GET  /api/tradingbots/{id}/pending-orders | /ticker  当前委托、行情（不入库；id 可为 Account_List 的 account_id）
   GET  /api/tradingbots/{id}/strategy-daily-efficiency  策略效能：现金/权益收益率%、能效、ATR14 与阈值（?inst_id=&days=）
   GET  /api/tradingbots/{id}/seasons/{season_id}/positions-summary  赛季区间内历史平仓笔数与净盈亏（Account_List）
@@ -27,10 +27,12 @@ App 所需 API（与 QtraderApi.kt 一致）：
   GET  /api/status                同步状态与周期说明（需登录）
   GET  /api/tradingbots/{id}/position-history  历史仓位分页（入库数据，需登录）
   POST /api/tradingbots/{id}/position-history/sync  手动拉取该账户 OKX 历史仓位（仅管理员）
-  POST /api/tradingbots/{id}/balance-snapshot/sync  立即拉取 OKX 余额写入库（account_snapshots / bot_profit；仅管理员）
+  POST /api/tradingbots/{id}/balance-snapshot/sync  立即拉取 OKX 余额写入库（account_balance_snapshots / tradingbot_profit_snapshots；仅管理员）
+  GET  /api/tradingbots/{id}/open-positions-snapshots  已入库的当前持仓聚合快照（按时间倒序；需登录）
+  POST /api/tradingbots/{id}/open-positions-snapshot/sync  立即拉取 OKX 当前持仓写入 account_open_positions_snapshots（仅管理员）
   POST /api/admin/balance-snapshots/sync  全量余额快照同步（与定时任务相同；仅管理员）
-  POST /api/admin/balance-snapshots/backfill-bills  按 OKX bills-archive 为各启用账户补全缺日 account_snapshots（仅管理员）
-  GET|POST|PUT|DELETE /api/admin/accounts  Account_List.json + account_meta 库表同步（仅管理员）
+  POST /api/admin/balance-snapshots/backfill-bills  按 OKX bills-archive 为各启用账户补全缺日 account_balance_snapshots（仅管理员）
+  GET|POST|PUT|DELETE /api/admin/accounts  Account_List.json + account_list 库表同步（仅管理员）
   POST /api/admin/accounts/{id}/test-connection  测连 OKX + 检查 SWAP/双向持仓/50x 杠杆（仅管理员）
   GET  /api/me/customer-accounts  客户已绑定账户列表与密钥文件是否存在（仅客户）
   PUT  /api/me/customer-accounts/{id}/okx-json  客户上传 OKX 密钥 JSON（须已绑定该 account_id）
@@ -62,7 +64,7 @@ import db as _db
 import account_list_store as _account_list_store
 import strategy_efficiency as _strategy_efficiency
 import kline_web_sync as _kline_web_sync
-from Accounts import AccountMgr as _account_mgr
+from accounts import AccountMgr as _account_mgr
 from exchange import okx as _okx
 from tradingbot_ctrl import (
     start as strategy_start,
@@ -71,6 +73,7 @@ from tradingbot_ctrl import (
     season_start as strategy_season_start,
     season_stop as strategy_season_stop,
     status as strategy_status,
+    is_running as strategy_is_running,
     controllable_bot_ids,
 )
 
@@ -109,7 +112,7 @@ STATIC_ONLY = os.environ.get("HZTECH_STATIC_ONLY", "0").strip() == "1"
 # 本机/ API 节点：仅提供 /api/*、/kline/* 等，静态站由另一进程（如 9000）提供；设置 HZTECH_API_ONLY=1
 API_ONLY = os.environ.get("HZTECH_API_ONLY", "0").strip() == "1"
 
-# Account_List → account_snapshots / account_positions_history 同步周期（秒），默认 300（5 分钟）
+# Account_List → account_balance_snapshots / account_open_positions_snapshots / account_positions_history 同步周期（秒），默认 300（5 分钟）
 try:
     _ACCOUNT_SYNC_INTERVAL_SEC = int(
         os.environ.get("HZTECH_ACCOUNT_SYNC_INTERVAL_SEC", "300").strip()
@@ -117,6 +120,13 @@ try:
 except ValueError:
     _ACCOUNT_SYNC_INTERVAL_SEC = 300
 _ACCOUNT_SYNC_INTERVAL_SEC = max(30, min(_ACCOUNT_SYNC_INTERVAL_SEC, 86400))
+
+# 账户同步定时任务只启动一次，避免开发模式下重复 import / 重复注册导致同一周期跑两遍、日志交错
+_account_snapshot_timer_started = False
+_account_snapshot_timer_lock = threading.Lock()
+_month_open_timer_started = False
+_month_open_timer_lock = threading.Lock()
+_month_open_last_run_ym: str | None = None
 
 # 策略能效默认标的：market_daily_bars 按此 inst_id 全站共用（与接口默认 inst_id 一致）
 _DEFAULT_STRATEGY_EFFICIENCY_INST_ID = "PEPE-USDT-SWAP"
@@ -132,6 +142,7 @@ _SYNC_STATE: dict = {
         "balance_snapshots": {"ok": None, "error": None},
         "tradingbot_snapshots": {"ok": None, "error": None},
         "positions_history": {"ok": None, "error": None},
+        "open_positions_snapshots": {"ok": None, "error": None},
     },
     "last_loop_error": None,
 }
@@ -261,7 +272,7 @@ PROJECT_ROOT = Path(
     os.environ.get("MOBILEAPP_ROOT", Path(__file__).resolve().parent.parent)
 )
 SERVER_DIR = Path(__file__).resolve().parent
-CONFIG_DIR = SERVER_DIR / "Accounts"
+CONFIG_DIR = SERVER_DIR / "accounts"
 # APK 所在目录（可放多个版本），默认项目根下 apk/，对应 AWS 上 hztechapp/apk/
 APK_DIR = Path(os.environ.get("APK_DIR", str(PROJECT_ROOT / "apk")))
 # 资源目录：res 已移至 server/res（密钥、背景图等）
@@ -274,24 +285,18 @@ FLUTTER_WEB_DIR = Path(
         "FLUTTER_WEB_ROOT", str(PROJECT_ROOT / "flutter_app" / "build" / "web")
     )
 )
-# JWT：优先从 DB config 读，否则环境变量（静态站点节点不初始化 DB）
+# JWT：环境变量（静态站点节点不初始化 DB）
 if not STATIC_ONLY:
     _db.init_db()
 
 
 def _get_jwt_secret() -> str:
-    return _db.config_get("jwt_secret") or os.environ.get(
+    return os.environ.get(
         "JWT_SECRET", "hztech-mobileapp-secret-change-in-production"
     )
 
 
 def _get_jwt_exp_days() -> int:
-    v = _db.config_get("jwt_exp_days")
-    if v is not None:
-        try:
-            return int(v)
-        except (TypeError, ValueError):
-            pass
     return int(os.environ.get("JWT_EXP_DAYS", "7"))
 
 
@@ -374,16 +379,16 @@ def _require_admin():
     return jsonify({"success": False, "message": "需要管理员权限"}), 403
 
 
-def _sync_account_meta_after_list_json_write():
-    """Account_List.json 已落盘后同步 SQLite account_meta（与 JSON 一致）。"""
+def _sync_account_list_after_list_json_write():
+    """Account_List.json 已落盘后同步 SQLite account_list（与 JSON 一致）。"""
     try:
-        _account_mgr.sync_account_meta_after_account_list_write(_db)
+        _account_mgr.sync_account_list_after_account_list_write(_db)
     except Exception:
-        logging.exception("Account_List 写入后 account_meta 同步失败")
+        logging.exception("Account_List 写入后 account_list 同步失败")
         return jsonify(
             {
                 "success": False,
-                "message": "JSON 已更新但数据库 account_meta 同步失败，请查看服务端日志",
+                "message": "JSON 已更新但数据库 account_list 同步失败，请查看服务端日志",
             }
         ), 500
     return None
@@ -401,7 +406,7 @@ def _require_trader_or_admin():
 
 
 def _validate_customer_okx_json_body(data: object) -> tuple[dict | None, str | None]:
-    """客户上传的密钥文件体：与 Accounts/OKX_Api_Key 下 JSON 一致，须含 api.key/secret/passphrase。"""
+    """客户上传的密钥文件体：与 accounts/OKX_Api_Key 下 JSON 一致，须含 api.key/secret/passphrase。"""
     if not isinstance(data, dict):
         return None, "请求体须为 JSON 对象"
     api = data.get("api")
@@ -518,7 +523,7 @@ def _filter_bots_for_user(bots: list[dict]) -> list[dict]:
 
 
 def _load_tradingbots_config() -> list[dict]:
-    """从 server/Accounts/tradingbots.json 读取交易账户列表，不存在则返回默认两 bot（lhg、hztech）。"""
+    """从 server/accounts/tradingbots.json 读取交易账户列表，不存在则返回默认两 bot（lhg、hztech）。"""
     path = CONFIG_DIR / "tradingbots.json"
     if path.exists():
         try:
@@ -547,8 +552,8 @@ def _load_tradingbots_config() -> list[dict]:
 
 
 def _bot_okx_config_path(bot_id: str) -> Path | None:
-    """仅从 Accounts/tradingbots.json 解析该 bot 的 OKX 配置文件路径，不落库、不缓存、不回退到全局。
-    一切以 Accounts 目录为准：若 account_api_file 未配置或文件不在 CONFIG_DIR 下则返回 None。"""
+    """仅从 accounts/tradingbots.json 解析该 bot 的 OKX 配置文件路径，不落库、不缓存、不回退到全局。
+    一切以 accounts 目录为准：若 account_api_file 未配置或文件不在 CONFIG_DIR 下则返回 None。"""
     bots = _load_tradingbots_config()
     for b in bots:
         if (b.get("tradingbot_id") or "").strip() != bot_id:
@@ -588,7 +593,7 @@ def _live_equity_cash_for_bot(bot_id: str) -> tuple[float, float]:
 
 # 账户信息同步器：从 OKX 交易所读取账户信息并写入数据库
 def _job_fetch_account_and_save_snapshots() -> None:
-    """定时任务：Account_List 账户写入 account_snapshots + account_positions_history（由 AccountMgr；另兼容 tradingbots.json 旧 bot 写入 bot_profit_snapshots）。"""
+    """定时任务：Account_List 账户写入 account_balance_snapshots、account_open_positions_snapshots、account_positions_history（由 AccountMgr；另兼容 tradingbots.json 旧 bot 写入 tradingbot_profit_snapshots）。"""
     try:
         _account_mgr.refresh_all_balance_snapshots(_db, app.logger)
         _sync_record_step("balance_snapshots", True, None)
@@ -626,6 +631,18 @@ def _job_fetch_account_and_save_snapshots() -> None:
         )
 
     try:
+        _account_mgr.refresh_all_open_positions_snapshots(_db, app.logger)
+        _sync_record_step("open_positions_snapshots", True, None)
+    except Exception as e:
+        _sync_record_step("open_positions_snapshots", False, str(e))
+        _db.log_insert(
+            "WARN",
+            "account_mgr_open_positions_snapshots_failed",
+            source="timer",
+            extra={"error": str(e)},
+        )
+
+    try:
         _mb_err = _strategy_efficiency.ensure_shared_market_daily_bars(
             _db, _okx, _DEFAULT_STRATEGY_EFFICIENCY_INST_ID
         )
@@ -641,6 +658,11 @@ def _job_fetch_account_and_save_snapshots() -> None:
 
 def _start_account_snapshot_timer() -> None:
     """后台线程：按 HZTECH_ACCOUNT_SYNC_INTERVAL_SEC（默认 300）执行 AccountMgr 快照（及 tradingbots 快照）；启动后 30 秒执行第一次。"""
+    global _account_snapshot_timer_started
+    with _account_snapshot_timer_lock:
+        if _account_snapshot_timer_started:
+            return
+        _account_snapshot_timer_started = True
 
     def _loop() -> None:
         time.sleep(30)
@@ -660,6 +682,38 @@ def _start_account_snapshot_timer() -> None:
                     extra={"error": str(e)},
                 )
             time.sleep(_ACCOUNT_SYNC_INTERVAL_SEC)
+
+    t = threading.Thread(target=_loop, daemon=True)
+    t.start()
+
+
+def _start_account_month_open_timer() -> None:
+    """UTC 每月 1 日 00:10 前后写入 account_month_open；每分钟检查，同一自然月只跑一次。"""
+    global _month_open_timer_started
+    with _month_open_timer_lock:
+        if _month_open_timer_started:
+            return
+        _month_open_timer_started = True
+
+    def _loop() -> None:
+        global _month_open_last_run_ym
+        time.sleep(45)
+        while True:
+            try:
+                now = datetime.now(timezone.utc)
+                if now.day == 1 and now.hour == 0 and 10 <= now.minute <= 15:
+                    ym = now.strftime("%Y-%m")
+                    if _month_open_last_run_ym != ym:
+                        _account_mgr.run_account_month_open_rollover(_db, app.logger)
+                        _month_open_last_run_ym = ym
+            except Exception as e:
+                _db.log_insert(
+                    "WARN",
+                    "account_month_open_timer_error",
+                    source="timer",
+                    extra={"error": str(e)},
+                )
+            time.sleep(60)
 
     t = threading.Thread(target=_loop, daemon=True)
     t.start()
@@ -743,7 +797,8 @@ def api_status():
     up = int(time.monotonic() - _PROCESS_START_MONO)
     doc = (
         "后台线程按 HZTECH_ACCOUNT_SYNC_INTERVAL_SEC（默认 300 秒）从 OKX 拉取 "
-        "权益/现金写入 account_snapshots，并拉取 positions-history 写入 "
+        "权益/现金写入 account_balance_snapshots，当前持仓聚合写入 "
+        "account_open_positions_snapshots，并拉取 positions-history 写入 "
         "account_positions_history；进程启动后约 30 秒首次执行一轮。"
     )
     return jsonify(
@@ -960,6 +1015,8 @@ def _collect_accounts_profit() -> list[dict]:
         bid = (b.get("tradingbot_id") or "").strip()
         if not bid or bid in seen:
             continue
+        if _account_mgr.is_account_disabled_in_account_list(bid):
+            continue
         extras.append((b, bid))
 
     live_by_bot: dict[str, dict | None] = {}
@@ -1076,6 +1133,8 @@ def _collect_tradingbots_list() -> list[dict]:
         bot_id = (b.get("tradingbot_id") or "").strip()
         if not bot_id:
             continue
+        if _account_mgr.is_account_disabled_in_account_list(bot_id):
+            continue
         if bot_id in seen:
             for row in bots:
                 if row["tradingbot_id"] == bot_id:
@@ -1157,6 +1216,9 @@ def api_bot_start(bot_id):
     _db.strategy_event_insert(
         bot_id, "start", "manual", getattr(g, "current_username", None)
     )
+    if resp.get("ok"):
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        _db.tradingbot_mgr_session_start(bot_id, ts, ts)
     return jsonify(_bot_op_response(resp, bot_id))
 
 
@@ -1183,9 +1245,10 @@ def api_bot_stop(bot_id):
         bot_id, "stop", "manual", getattr(g, "current_username", None)
     )
     if resp.get("ok"):
-        final_eq, final_cash = _live_equity_cash_for_bot(bot_id)
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        _db.bot_season_update_on_stop(bot_id, ts, final_eq, final_cash)
+        _db.tradingbot_mgr_session_stop(bot_id, ts, ts)
+        final_eq, final_cash = _live_equity_cash_for_bot(bot_id)
+        _db.account_season_update_on_stop(bot_id, ts, final_eq, final_cash)
     return jsonify(_bot_op_response(resp, bot_id))
 
 
@@ -1222,7 +1285,25 @@ def api_bot_season_start(bot_id):
         return denied
     if not _bot_is_controllable(bot_id):
         return jsonify({"success": False, "message": "未知 bot_id"}), 404
-    resp = strategy_season_start(bot_id)
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    eq, cash = _live_equity_cash_for_bot(bot_id)
+    _db.account_season_roll_forward(bot_id, ts, eq, cash)
+
+    start_resp = None
+    if not strategy_is_running(bot_id):
+        start_resp = strategy_start(bot_id)
+        _db.log_insert(
+            "INFO",
+            "season_start_auto_start_bot",
+            source="api",
+            extra={
+                "bot_id": bot_id,
+                "username": getattr(g, "current_username", None),
+                "ok": start_resp.get("ok"),
+            },
+        )
+
+    shell_resp = strategy_season_start(bot_id)
     _db.log_insert(
         "INFO",
         "season_start_api",
@@ -1230,25 +1311,52 @@ def api_bot_season_start(bot_id):
         extra={
             "bot_id": bot_id,
             "username": getattr(g, "current_username", None),
-            "ok": resp.get("ok"),
+            "shell_ok": shell_resp.get("ok"),
+            "start_attempted": start_resp is not None,
+            "start_ok": start_resp.get("ok") if start_resp else None,
         },
     )
-    if resp.get("ok"):
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        eq, cash = _live_equity_cash_for_bot(bot_id)
-        _db.bot_season_roll_forward(bot_id, ts, eq, cash)
-        _db.strategy_event_insert(
-            bot_id,
-            "season_start",
-            "manual",
-            getattr(g, "current_username", None),
+    if not shell_resp.get("ok"):
+        _db.log_insert(
+            "WARN",
+            "season_start_shell_failed",
+            source="api",
+            extra={"bot_id": bot_id, "error": shell_resp.get("error")},
         )
-    return jsonify(_bot_op_response(resp, bot_id))
+
+    if start_resp is not None and not start_resp.get("ok"):
+        return jsonify(
+            {
+                "success": False,
+                "message": start_resp.get("error")
+                or start_resp.get("message")
+                or "策略启动失败",
+                "tradingbot_id": bot_id,
+                "status": "stopped",
+            }
+        )
+
+    _db.strategy_event_insert(
+        bot_id,
+        "season_start",
+        "manual",
+        getattr(g, "current_username", None),
+    )
+    running = strategy_is_running(bot_id)
+    return jsonify(
+        {
+            "success": True,
+            "message": shell_resp.get("message") or "赛季已启动",
+            "tradingbot_id": bot_id,
+            "status": "running" if running else "stopped",
+        }
+    )
 
 
 @app.route("/api/tradingbots/<bot_id>/season-stop", methods=["POST"])
 @require_auth
 def api_bot_season_stop(bot_id):
+    """结束当前未结赛季记录；不调用策略 stop（进程可保持运行）。"""
     denied = _require_trader_or_admin()
     if denied:
         return denied
@@ -1268,7 +1376,7 @@ def api_bot_season_stop(bot_id):
     if resp.get("ok"):
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         eq, cash = _live_equity_cash_for_bot(bot_id)
-        _db.bot_season_update_on_stop(bot_id, ts, eq, cash)
+        _db.account_season_update_on_stop(bot_id, ts, eq, cash)
         _db.strategy_event_insert(
             bot_id,
             "season_stop",
@@ -1281,7 +1389,7 @@ def api_bot_season_stop(bot_id):
 @app.route("/api/tradingbots/<bot_id>/profit-history", methods=["GET"])
 @require_auth
 def api_bot_profit_history(bot_id):
-    """机器人盈利历史（用于收益曲线图），按 snapshot_at 升序。Account_List 账户读 account_snapshots。"""
+    """机器人盈利历史（用于收益曲线图），按 snapshot_at 升序。Account_List 账户读 account_balance_snapshots。"""
     denied = _customer_bot_forbidden(bot_id)
     if denied:
         return denied
@@ -1291,12 +1399,16 @@ def api_bot_profit_history(bot_id):
     }
     if bot_id in account_ids:
         raw = _db.account_snapshot_query_by_account(bot_id, limit=limit)
+        initial_bal = 0.0
+        meta = _db.account_list_get(bot_id)
+        if meta:
+            initial_bal = float(meta["initial_capital"])
         snapshots = [
             {
                 "id": r["id"],
                 "bot_id": bot_id,
                 "snapshot_at": r["snapshot_at"],
-                "initial_balance": r["initial_capital"],
+                "initial_balance": initial_bal,
                 "current_balance": r["cash_balance"],
                 "equity_usdt": r["equity_usdt"],
                 "profit_amount": r["profit_amount"],
@@ -1318,8 +1430,8 @@ def api_strategy_daily_efficiency(bot_id):
     策略能效（日增量 USDT÷(波幅×1e9)）；并返回权益日增量、权益收益率%（÷月初权益）、权益能效、
     Wilder ATR(14) 及 0.1/0.6/1.2×ATR 价格阈值（经典 TR，与库字段 tr=|H−L| 不同）。
     日线 OHLC/TR 来自 market_daily_bars 全站缓存。
-    现金：Account_List 账户读 account_snapshots（cash_basis=account_snapshots_cash）；
-    其余 bot 读 bot_profit_snapshots 的 equity_usdt 作日权益变动（cash_basis=bot_profit_equity）；
+    现金：Account_List 账户读 account_balance_snapshots（cash_basis 仍为 account_snapshots_cash）；
+    其余 bot 读 tradingbot_profit_snapshots 的 equity_usdt 作日权益变动（cash_basis=bot_profit_equity）；
     无任何快照时按 K 线日期补 sod=eod=0、增量 0（cash_basis=none），仍合并计算能效（增量为 0 则能效为 0）。
     Query: inst_id=PEPE-USDT-SWAP&days=31（默认约最近一个月，按 UTC 日）
     """
@@ -1409,6 +1521,21 @@ def api_strategy_daily_efficiency(bot_id):
         equity_snaps
     )
 
+    if bot_id in account_ids:
+        try:
+            day_strs_e = [str(b.get("day") or "") for b in bars if b.get("day")]
+            min_ym = min(d[:7] for d in day_strs_e) if day_strs_e else since[:7]
+        except (ValueError, TypeError, IndexError):
+            min_ym = since[:7]
+        mo_map = _db.account_month_open_list_since(bot_id, min_ym)
+        for ym, row in mo_map.items():
+            oc = row.get("open_cash")
+            if oc is not None and float(oc) > 0:
+                month_bases[ym] = float(oc)
+            oe = row.get("open_equity")
+            if oe is not None and float(oe) > 0:
+                month_equity_bases[ym] = float(oe)
+
     bars_asc = sorted(bars, key=lambda x: str(x.get("day") or ""))
     atr14_by_day = _strategy_efficiency.compute_atr14_wilder_by_day(bars_asc)
 
@@ -1440,7 +1567,7 @@ def api_strategy_daily_efficiency(bot_id):
 def api_bot_daily_realized_pnl(bot_id):
     """
     历史平仓按 UTC 自然日汇总（account_positions_history），用于月度盈亏日历与柱状图。
-    若已跑过 account_daily_close_performance 重建，则每日额外含 equity_base、pnl_pct（相对日初权益%）、
+    若已跑过 account_daily_performance 重建，则每日额外含 equity_base、pnl_pct（相对日初权益%）、
     benchmark_inst_id、market_tr、efficiency_ratio（平仓净盈亏÷(TR×1e9)）等字段。
     Query: year=2026&month=4
     """
@@ -1456,7 +1583,7 @@ def api_bot_daily_realized_pnl(bot_id):
         return jsonify({"success": False, "message": "year/month 超出范围"}), 400
     bid = (bot_id or "").strip()
     rows = _db.account_positions_daily_realized(bid, y, m)
-    perf_rows = _db.account_daily_close_performance_query_month(bid, y, m)
+    perf_rows = _db.account_daily_performance_query_month(bid, y, m)
     perf_by_day = {str(p["day"]): p for p in perf_rows}
     for r in rows:
         p = perf_by_day.get(str(r["day"]))
@@ -1545,7 +1672,7 @@ def api_bot_positions(bot_id):
                 "success": True,
                 "bot_id": bot_id,
                 "positions": [],
-                "positions_error": "未找到 OKX 配置：请检查 Accounts/tradingbots.json 的 account_api_file 或 Account_List 中的 account_key_file",
+                "positions_error": "未找到 OKX 配置：请检查 accounts/tradingbots.json 的 account_api_file 或 Account_List 中的 account_key_file",
             }
         )
     positions, positions_error = _okx.okx_fetch_positions(config_path=config_path)
@@ -1651,7 +1778,7 @@ def api_bot_position_history_sync(bot_id):
 def api_bot_balance_snapshot_sync(bot_id):
     """
     仅管理员：从 OKX 拉取现金(availEq)/权益并入库。
-    Account_List 账户 → account_snapshots；仅 tradingbots.json 的 bot → bot_profit_snapshots。
+    Account_List 账户 → account_balance_snapshots；仅 tradingbots.json 的 bot → tradingbot_profit_snapshots。
     策略效能接口按 UTC 日汇总这些快照计算日现金增量、现金收益率%、策略能效。
     """
     denied = _require_admin()
@@ -1686,6 +1813,40 @@ def api_bot_balance_snapshot_sync(bot_id):
     return jsonify({"success": ok, "bot_id": bid, "message": msg}), code
 
 
+@app.route("/api/tradingbots/<bot_id>/open-positions-snapshots", methods=["GET"])
+@require_auth
+def api_bot_open_positions_snapshots(bot_id):
+    """已入库的当前持仓聚合快照（按合约；snapshot_at 降序）。Account_List 账户。"""
+    denied = _customer_bot_forbidden(bot_id)
+    if denied:
+        return denied
+    try:
+        limit = int(request.args.get("limit", 200))
+    except (TypeError, ValueError):
+        limit = 200
+    limit = max(1, min(limit, 2000))
+    inst_raw = (request.args.get("inst_id") or "").strip()
+    inst_f = inst_raw if inst_raw else None
+    bid = (bot_id or "").strip()
+    rows = _db.account_open_positions_snapshots_query_by_account(
+        bid, limit=limit, inst_id=inst_f
+    )
+    return jsonify({"success": True, "bot_id": bid, "rows": rows})
+
+
+@app.route("/api/tradingbots/<bot_id>/open-positions-snapshot/sync", methods=["POST"])
+@require_auth
+def api_bot_open_positions_snapshot_sync(bot_id):
+    """仅管理员：从 OKX 拉取当前持仓并按合约聚合写入 account_open_positions_snapshots。"""
+    denied = _require_admin()
+    if denied:
+        return denied
+    bid = (bot_id or "").strip()
+    ok, msg = _account_mgr.refresh_open_positions_snapshot_one(_db, bid, app.logger)
+    code = 200 if ok else 400
+    return jsonify({"success": ok, "bot_id": bid, "message": msg}), code
+
+
 @app.route("/api/admin/balance-snapshots/sync", methods=["POST"])
 @require_auth
 def api_admin_balance_snapshots_sync():
@@ -1697,11 +1858,11 @@ def api_admin_balance_snapshots_sync():
     try:
         _account_mgr.refresh_all_balance_snapshots(_db, app.logger)
     except Exception as e:
-        errors.append(f"account_snapshots: {e}")
+        errors.append(f"account_balance_snapshots: {e}")
     try:
         _account_mgr.fetch_and_save_tradingbot_snapshots(_db, app.logger)
     except Exception as e:
-        errors.append(f"bot_profit_snapshots: {e}")
+        errors.append(f"tradingbot_profit_snapshots: {e}")
     ok = len(errors) == 0
     return jsonify(
         {
@@ -1838,18 +1999,19 @@ def _enrich_season_row(row: dict) -> dict:
 @app.route("/api/tradingbots/<bot_id>/seasons", methods=["GET"])
 @require_auth
 def api_tradingbot_seasons(bot_id):
-    """指定机器人的赛季信息：启停时间、初期金额、盈利、盈利率。"""
+    """赛季列表（库表 account_season；响应含 bot_id/account_id 与路径 id 一致）：启停时间、初期权益/现金、盈利。"""
     denied = _customer_bot_forbidden(bot_id)
     if denied:
         return denied
     limit = min(int(request.args.get("limit", 50)), 100)
-    raw = _db.bot_season_list_by_bot(bot_id, limit=limit)
+    raw = _db.account_season_list_by_account(bot_id, limit=limit)
     rows = [_enrich_season_row(r) for r in raw]
     active_count = sum(1 for r in rows if r.get("is_active"))
     return jsonify(
         {
             "success": True,
             "bot_id": bot_id,
+            "account_id": bot_id,
             "seasons": rows,
             "active_season_count": active_count,
         }
@@ -1880,7 +2042,7 @@ def _iso_utc_to_epoch_ms(iso_s: str | None) -> int:
 def api_tradingbot_season_positions_summary(bot_id, season_id: int):
     """
     按赛季时间区间汇总 account_positions_history：平仓笔数、净盈亏（UTC 边界由 u_time_ms 毫秒决定）。
-    仅当 bot_id 为 Account_List 中的 account_id 时有数据；否则返回 success 与零值说明。
+    仅当路径 id 为 Account_List 中的 account_id 时有数据；否则返回 success 与零值说明。
     """
     denied = _customer_bot_forbidden(bot_id)
     if denied:
@@ -1902,7 +2064,7 @@ def api_tradingbot_season_positions_summary(bot_id, season_id: int):
                 "u_time_end_ms": None,
             }
         )
-    sea = _db.bot_season_get_by_id(bot_id, season_id)
+    sea = _db.account_season_get_by_id(bot_id, season_id)
     if not sea:
         return jsonify({"success": False, "message": "赛季不存在"}), 404
     t0 = _iso_utc_to_epoch_ms(str(sea.get("started_at") or ""))
@@ -2086,7 +2248,7 @@ def api_admin_accounts_create():
         row = _account_list_store.upsert_account(data)
     except ValueError as e:
         return jsonify({"success": False, "message": str(e)}), 400
-    err = _sync_account_meta_after_list_json_write()
+    err = _sync_account_list_after_list_json_write()
     if err:
         return err
     return jsonify({"success": True, "account": row})
@@ -2121,7 +2283,7 @@ def api_admin_accounts_update(account_id):
         row = _account_list_store.upsert_account(merged)
     except ValueError as e:
         return jsonify({"success": False, "message": str(e)}), 400
-    err = _sync_account_meta_after_list_json_write()
+    err = _sync_account_list_after_list_json_write()
     if err:
         return err
     return jsonify({"success": True, "account": row})
@@ -2136,7 +2298,7 @@ def api_admin_accounts_delete(account_id):
     aid = (account_id or "").strip()
     if not _account_list_store.delete_account(aid):
         return jsonify({"success": False, "message": "未找到"}), 404
-    err = _sync_account_meta_after_list_json_write()
+    err = _sync_account_list_after_list_json_write()
     if err:
         return err
     return jsonify({"success": True, "message": "已删除"})
@@ -2202,6 +2364,7 @@ def api_me_customer_okx_json(account_id):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(body, f, ensure_ascii=False, indent=2)
         f.write("\n")
+    _account_mgr.invalidate_okx_ccxt_exchange_cache(path)
     return jsonify(
         {"success": True, "message": "已保存", "account_key_file": path.name}
     )
@@ -2228,10 +2391,11 @@ def api_okx_info():
     return jsonify({"ok": True, "info": info})
 
 
-# 启动 5 分钟定时器：AccountMgr 写入 account_snapshots、account_positions_history，并兼容 tradingbots 盈利快照
+# 启动 5 分钟定时器：AccountMgr 写入 account_balance_snapshots、account_open_positions_snapshots、account_positions_history，并兼容 tradingbots 盈利快照
 # 夜间：PEPE（可配置）1m 标记价格 K 线写入 flutter_app/web/kline，并由 /kline/ 提供静态 JSON
 if not STATIC_ONLY:
     _start_account_snapshot_timer()
+    _start_account_month_open_timer()
     _kline_web_sync.start_kline_nightly_scheduler(app.logger, PROJECT_ROOT)
 
 # App 进程启停写入 strategy_events（bot_id="app"），便于审计

@@ -108,7 +108,14 @@ String get defaultBackendUrl {
 const unlockDurationMs = 5 * 60 * 1000; // 5 分钟
 
 class SecurePrefs {
-  SecurePrefs() : _storage = const FlutterSecureStorage(aOptions: androidOptions);
+  SecurePrefs()
+      : _storage = FlutterSecureStorage(
+          aOptions: androidOptions,
+          // macOS 沙盒：默认 useDataProtectionKeyChain 易触发 -34018（钥匙串 entitlement）
+          mOptions: (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS)
+              ? const MacOsOptions(useDataProtectionKeyChain: false)
+              : MacOsOptions.defaultOptions,
+        );
 
   static const androidOptions = AndroidOptions(
     encryptedSharedPreferences: true,

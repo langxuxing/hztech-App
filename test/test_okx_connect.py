@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""测试 OKX 连接：使用 server/exchange/okx.py 对三份 Accounts 配置做余额、持仓验证。"""
+"""测试 OKX 连接：使用 server/exchange/okx.py 对三份 accounts 配置做余额、持仓验证。"""
 import sys
 from pathlib import Path
 
@@ -11,7 +11,7 @@ if str(ROOT / "server") not in sys.path:
 
 from exchange.okx import load_okx_config, okx_fetch_balance, okx_fetch_positions, okx_request
 
-BOTCONFIG = ROOT / "server" / "Accounts"
+BOTCONFIG = ROOT / "server" / "accounts"
 CONFIGS = [
     "OKX_Alang_Sandbox.json",
     "OKX_Hztech_Devops.json",

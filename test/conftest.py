@@ -6,6 +6,7 @@ import hashlib
 import os
 import sys
 import tempfile
+from pathlib import Path
 
 import pytest
 
@@ -13,10 +14,18 @@ import pytest
 _server_dir = os.path.join(os.path.dirname(__file__), "..", "server")
 sys.path.insert(0, os.path.abspath(_server_dir))
 
-import db  # noqa: E402
+import db_backend  # noqa: E402
 
 _tmp = tempfile.mkdtemp(prefix="hztech_test_")
-db.DB_PATH = os.path.join(_tmp, "test.db")
+_test_db = Path(_tmp) / "test.db"
+db_backend.DB_PATH = _test_db
+db_backend.DB_DIR = _test_db.parent
+
+import db  # noqa: E402
+
+# db 模块内 `from db_backend import DB_PATH` 为独立绑定，需同步指向测试库路径
+db.DB_PATH = _test_db
+
 db.init_db()
 _pwd = hashlib.sha256(b"i23321").hexdigest()
 # init_db 可能已从 users.json 导入用户，其 password_hash 与测试口令不一致；统一清空后创建测试账号

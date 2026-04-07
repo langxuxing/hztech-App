@@ -78,7 +78,7 @@ def _run_random_bot_cycle(client, headers: dict) -> None:
     )
     if len(ids) < 1:
         pytest.skip(
-            "无 can_control 的 bot（检查 Account_List script_file 与 botctrl）"
+            "无 can_control 的 bot（检查 Account_List script_file 与 tradingbot_ctrl）"
         )
 
     k = min(_MAX_PICK, len(ids))

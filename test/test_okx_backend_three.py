@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-_ACCOUNTS = Path(__file__).resolve().parent.parent / "server" / "Accounts"
+_ACCOUNTS = Path(__file__).resolve().parent.parent / "server" / "accounts"
 _BOTCONFIG = _ACCOUNTS / "tradingbots.json"
 _ACCOUNT_LIST = _ACCOUNTS / "Account_List.json"
 

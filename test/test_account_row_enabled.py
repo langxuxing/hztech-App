@@ -10,7 +10,7 @@ sys.path.insert(0, str(_server))
 
 
 def test_account_row_is_enabled_prefers_enbaled_then_enabled():
-    from Accounts.test_account_key import account_row_is_enabled
+    from accounts.test_account_key import account_row_is_enabled
 
     base = {"account_id": "x", "exchange_account": "OKX"}
     row_both = {**base, "enbaled": False, "enabled": True}
@@ -18,3 +18,7 @@ def test_account_row_is_enabled_prefers_enbaled_then_enabled():
     assert account_row_is_enabled({**base, "enabled": False}) is False
     assert account_row_is_enabled({**base, "enbaled": True}) is True
     assert account_row_is_enabled({**base}) is True
+    assert account_row_is_enabled({**base, "enable": False}) is False
+    assert account_row_is_enabled({**base, "enable": True}) is True
+    row_enable_enbaled = {**base, "enbaled": False, "enable": True}
+    assert account_row_is_enabled(row_enable_enbaled) is False

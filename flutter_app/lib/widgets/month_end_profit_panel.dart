@@ -968,7 +968,7 @@ class _MonthEndValueCalendarPanelState
         ],
         SizedBox(
           height:
-              (widget.compact ? 6 : 16) + widget.titleToBodyExtraGap,
+              (widget.compact ? 6 : 18) + widget.titleToBodyExtraGap,
         ),
         if (monthly.isEmpty)
           Padding(
@@ -1039,7 +1039,7 @@ class _MonthEndValueCalendarPanelState
             ),
             SizedBox(height: widget.compact ? 4 : 8),
           ] else
-            SizedBox(height: widget.compact ? 2 : 4),
+            SizedBox(height: widget.compact ? 8 : 12),
           if (widget.expandGridArea)
             Expanded(
               child: LayoutBuilder(
@@ -1053,15 +1053,19 @@ class _MonthEndValueCalendarPanelState
                   final raw =
                       (cons.maxHeight - headerH - rs - nRows * rs) / nRows;
                   final ch = raw.clamp(24.0, 80.0);
-                  final grid = _CalendarGrid(
-                    year: focus.year,
-                    month: focus.month,
-                    dailyPnL: daily,
-                    dailyCloseCounts: widget.dailyCloseCounts,
-                    cellHeight: ch,
-                    compact: widget.compact,
-                    headerFontSize: widget.compact ? 10 : 12,
-                    rowSpacing: rs,
+                  final hPad = widget.compact ? 6.0 : 12.0;
+                  final grid = Padding(
+                    padding: EdgeInsets.symmetric(horizontal: hPad),
+                    child: _CalendarGrid(
+                      year: focus.year,
+                      month: focus.month,
+                      dailyPnL: daily,
+                      dailyCloseCounts: widget.dailyCloseCounts,
+                      cellHeight: ch,
+                      compact: widget.compact,
+                      headerFontSize: widget.compact ? 10 : 12,
+                      rowSpacing: rs,
+                    ),
                   );
                   if (widget.centerCalendarGridInExpanded) {
                     return Align(
@@ -1074,15 +1078,23 @@ class _MonthEndValueCalendarPanelState
               ),
             )
           else
-            _CalendarGrid(
-              year: focus.year,
-              month: focus.month,
-              dailyPnL: daily,
-              dailyCloseCounts: widget.dailyCloseCounts,
-              cellHeight: _cellHeightForGrid(),
-              compact: widget.compact,
-              headerFontSize: widget.compact ? 10 : 12,
-              rowSpacing: widget.compact ? 4 : 6,
+            Align(
+              alignment: Alignment.center,
+              child: Padding(
+                padding: EdgeInsets.symmetric(
+                  horizontal: widget.compact ? 6 : 12,
+                ),
+                child: _CalendarGrid(
+                  year: focus.year,
+                  month: focus.month,
+                  dailyPnL: daily,
+                  dailyCloseCounts: widget.dailyCloseCounts,
+                  cellHeight: _cellHeightForGrid(),
+                  compact: widget.compact,
+                  headerFontSize: widget.compact ? 10 : 12,
+                  rowSpacing: widget.compact ? 4 : 6,
+                ),
+              ),
             ),
         ],
       ],

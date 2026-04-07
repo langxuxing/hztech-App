@@ -4,7 +4,7 @@
 测试 OKX 账户密钥 JSON：连接、账户信息、当前持仓（仅依赖 api 段）。
 
 密钥文件路径由 Account_List.json 的 account_key_file 决定，相对目录 OKX_Api_Key/
-（若该路径不存在则回退尝试 Accounts 根目录，兼容旧布局）。
+（若该路径不存在则回退尝试 accounts 根目录，兼容旧布局）。
 默认仅测试 exchange_account 为 OKX 且 enbaled 为 true 的条目；可用命令行覆盖。
 
 沙盒（模拟盘）账户需在请求头中加 x-simulated-trading: 1，base_url 均为 https://www.okx.com。
@@ -44,12 +44,14 @@ def _parse_enabled(value: object) -> bool:
 def account_row_is_enabled(row: dict) -> bool:
     """
     Account_List 单行是否视为启用。
-    优先读 enbaled（历史拼写），否则读 enabled；两键均未出现时视为 True（兼容老数据）。
+    优先读 enbaled（历史拼写），其次 enabled，再次 enable；均未出现时视为 True（兼容老数据）。
     """
     if "enbaled" in row:
         return _parse_enabled(row.get("enbaled"))
     if "enabled" in row:
         return _parse_enabled(row.get("enabled"))
+    if "enable" in row:
+        return _parse_enabled(row.get("enable"))
     return True
 
 
@@ -69,7 +71,7 @@ def load_account_list() -> list[dict]:
 
 def resolve_key_file_path(account_key_file: str) -> Path:
     """
-    account_key_file 通常为 OKX_xxx.json：优先 OKX_Api_Key/，否则 Accounts/ 根目录。
+    account_key_file 通常为 OKX_xxx.json：优先 OKX_Api_Key/，否则 accounts/ 根目录。
     """
     name = (account_key_file or "").strip()
     if not name or "/" in name or "\\" in name:

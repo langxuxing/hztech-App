@@ -7,12 +7,13 @@
 positions / profit-history / ticker / pending-orders 等通过本模块解析密钥与账户元数据。
 
 定时任务由 main 每 5 分钟调用，写入 SQLite：
-- 现金余额（avail_eq）、权益（total_eq）→ account_snapshots（Account_List）；tradingbots.json → bot_profit_snapshots
-- 管理员「余额同步」可对缺日调用 OKX bills-archive（USDT bal）补全 account_snapshots；权益按最近快照 equity/cash 比例估算
+- 现金余额（avail_eq）、权益（total_eq）→ account_balance_snapshots（Account_List）；tradingbots.json → tradingbot_profit_snapshots
+- OKX 当前持仓（每合约一行：多/空各计一条仓位腿 open_leg_count，张数与分项/合计未实现盈亏）→ account_open_positions_snapshots
+- 管理员「余额同步」可对缺日调用 OKX bills-archive（USDT bal）补全 account_balance_snapshots；权益按最近快照 equity/cash 比例估算
 - 多时点快照经 strategy_efficiency.daily_cash_delta_by_utc_day 汇总为 UTC 自然日现金增量，再算现金收益率%、策略能效
-- OKX 历史仓位 → account_positions_history（SWAP+FUTURES 合并去重，深分页）；
-  再汇总写入 account_daily_close_performance（按 UTC 日平仓净盈亏、权益口径日收益率%、对标合约 TR 的策略能效）
-- 各账户初始资金（Initial_capital）、当月 account_month_open
+- OKX 历史仓位 → account_positions_history（SWAP+FUTURES 合并去重，深分页；自库内最大 uTime 起向前重叠 60s 增量拉取）；
+  再汇总写入 account_daily_performance（按 UTC 日平仓净盈亏、权益口径日收益率%、对标合约 TR 的策略能效）
+- 各账户静态字段（与 SQLite account_list 同步）；UTC 每月 1 日 00:10 定时任务写入 account_month_open（不再由余额同步顺带插入）
 """
 from __future__ import annotations
 
@@ -25,8 +26,12 @@ from typing import Any
 
 ACCOUNTS_DIR = Path(__file__).resolve().parent
 
+# ccxt.okx 按密钥文件路径缓存在 exchange.okx（见 get_okx_ccxt_exchange_for_config_path）
+
 # 定时任务 DEBUG 日志：账户列宽（超长截断后左对齐）
 _LOG_ACCOUNT_COL_WIDTH = 20
+# 历史仓位增量拉取：以库内最大 uTime 为基准再向前重叠，避免漏单与重复全量分页
+_POSITIONS_HISTORY_OVERLAP_MS = 60_000
 
 
 def _fmt_log_account_id(account_id: str, width: int = _LOG_ACCOUNT_COL_WIDTH) -> str:
@@ -137,6 +142,23 @@ def resolve_okx_config_path(account_id: str) -> Path | None:
     return None
 
 
+def get_okx_ccxt_exchange_for_config_path(config_path: Path | None) -> Any | None:
+    """账户级 OKX ccxt 连接：按密钥文件路径单例复用，勿在业务代码中重复 ``ccxt.okx()``。
+
+    与 ``exchange.okx.get_ccxt_okx_exchange`` 同一缓存；密钥文件 mtime 变化后自动重建。
+    """
+    import exchange.okx as okx_mod
+
+    return okx_mod.get_ccxt_okx_exchange(config_path)
+
+
+def invalidate_okx_ccxt_exchange_cache(config_path: Path | None = None) -> None:
+    """清除 OKX ccxt 缓存（换钥后可调用；不传 path 则清空全部）。"""
+    import exchange.okx as okx_mod
+
+    okx_mod.invalidate_ccxt_okx_exchange_cache(config_path)
+
+
 def resolve_okx_key_write_path(account_id: str) -> Path | None:
     """客户上传密钥时写入路径（与 Account_List 中 account_key_file 一致；文件可尚不存在）。"""
     want = (account_id or "").strip()
@@ -184,42 +206,117 @@ def list_account_basics(*, enabled_only: bool = True) -> list[dict[str, Any]]:
     return [account_basic_dict(r) for r in iter_okx_accounts(enabled_only=enabled_only)]
 
 
-def sync_account_meta_from_json(db_module: Any) -> None:
-    """将 Account_List 中的 Initial_capital 同步到 account_meta。"""
-    for row in iter_okx_accounts(enabled_only=False):
+def account_list_row_by_id(account_id: str) -> dict[str, Any] | None:
+    """account_id 对应 Account_List.json 中的一行；不存在则 None。"""
+    aid = str(account_id or "").strip()
+    if not aid:
+        return None
+    for row in load_account_list():
+        if str(row.get("account_id") or "").strip() == aid:
+            return row
+    return None
+
+
+def is_account_disabled_in_account_list(account_id: str) -> bool:
+    """若在 Account_List 中存在且 enbaled/enabled/enable 为关闭，则 True（用于合并 tradingbots.json 时排除）。"""
+    row = account_list_row_by_id(account_id)
+    if row is None:
+        return False
+    return not _account_row_enabled(row)
+
+
+def sync_account_list_from_json(db_module: Any) -> None:
+    """将 Account_List.json 全量同步到 SQLite account_list（与 JSON 字段一致）。"""
+    for row in load_account_list():
         aid = str(row.get("account_id") or "").strip()
         if not aid:
             continue
-        db_module.account_meta_upsert(aid, _initial_capital(row))
+        db_module.account_list_upsert(
+            aid,
+            _initial_capital(row),
+            account_name=(row.get("account_name") or "").strip(),
+            exchange_account=(row.get("exchange_account") or "").strip(),
+            symbol=(row.get("symbol") or "").strip(),
+            trading_strategy=(row.get("trading_strategy") or "").strip(),
+            account_key_file=(row.get("account_key_file") or "").strip(),
+            script_file=(row.get("script_file") or "").strip(),
+            enabled=_account_row_enabled(row),
+        )
 
 
-def sync_account_meta_after_account_list_write(db_module: Any) -> None:
-    """管理员写入 Account_List.json 后调用：按 JSON 同步各账户 initial_capital，并删除已从列表移除的 meta 行。"""
-    sync_account_meta_from_json(db_module)
+def sync_account_list_after_account_list_write(db_module: Any) -> None:
+    """管理员写入 Account_List.json 后调用：按 JSON 同步各账户行，并删除已从列表移除的库行。"""
+    sync_account_list_from_json(db_module)
     valid_ids = {
         str(r.get("account_id") or "").strip()
         for r in load_account_list()
         if str(r.get("account_id") or "").strip()
     }
-    db_module.account_meta_prune_except(valid_ids)
+    db_module.account_list_prune_except(valid_ids)
+
+
+def run_account_month_open_rollover(
+    db_module: Any, logger: logging.Logger | None = None
+) -> None:
+    """UTC 每月 1 日 00:10 定时：拉取各启用账户 OKX 余额，upsert 当月 account_month_open。"""
+    log = logger or logging.getLogger(__name__)
+    import exchange.okx as okx_mod
+
+    sync_account_list_from_json(db_module)
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    ym = datetime.now(timezone.utc).strftime("%Y-%m")
+    for row in iter_okx_accounts(enabled_only=True):
+        aid = str(row.get("account_id") or "").strip()
+        path = resolve_okx_config_path(aid)
+        if not path:
+            log.debug(
+                "account_month_open 跳过: %s 无密钥文件",
+                _fmt_log_account_id(aid),
+            )
+            continue
+        live = okx_mod.okx_fetch_balance(config_path=path)
+        if not live:
+            db_module.log_insert(
+                "WARN",
+                "account_month_open_skip",
+                source="account_mgr",
+                extra={
+                    "account_id": aid,
+                    "year_month": ym,
+                    "reason": "balance_fetch_failed",
+                },
+            )
+            continue
+        total_eq = float(live.get("equity_usdt") or live.get("total_eq") or 0.0)
+        cash = float(live.get("cash_balance") or live.get("avail_eq") or 0.0)
+        db_module.account_month_open_upsert(
+            aid, ym, total_eq, ts, open_cash=cash
+        )
+        log.info(
+            "account_month_open: %s ym=%s equity=%s cash=%s",
+            _fmt_log_account_id(aid),
+            ym,
+            int(round(total_eq)),
+            int(round(cash)),
+        )
 
 
 def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None = None) -> None:
     """
-    拉取各 OKX 账户余额并写入 account_snapshots；维护当月月初权益记录。
+    拉取各 OKX 账户余额并写入 account_balance_snapshots。
+    当月月初 open_equity/open_cash 由 UTC 每月 1 日 00:10 定时任务写入 account_month_open。
     应在定时器内调用（建议每 5 分钟）。
     """
     log = logger or logging.getLogger(__name__)
     import exchange.okx as okx_mod
 
-    sync_account_meta_from_json(db_module)
+    sync_account_list_from_json(db_module)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    ym = datetime.now(timezone.utc).strftime("%Y-%m")
 
     for row in iter_okx_accounts(enabled_only=True):
         aid = str(row.get("account_id") or "").strip()
         path = resolve_okx_config_path(aid)
-        meta = db_module.account_meta_get(aid)
+        meta = db_module.account_list_get(aid)
         initial = float(meta["initial_capital"]) if meta else _initial_capital(row)
 
         if not path:
@@ -241,7 +338,6 @@ def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None 
 
         total_eq = float(live.get("equity_usdt") or live.get("total_eq") or 0.0)
         cash = float(live.get("cash_balance") or live.get("avail_eq") or 0.0)
-        upl = float(live.get("upl") or 0.0)
         profit_amount = total_eq - initial
         profit_percent = (profit_amount / initial * 100.0) if initial else 0.0
 
@@ -250,15 +346,9 @@ def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None 
             snapshot_at=ts,
             cash_balance=cash,
             equity_usdt=total_eq,
-            initial_capital=initial,
             profit_amount=profit_amount,
             profit_percent=profit_percent,
         )
-
-        if db_module.account_month_open_get(aid, ym) is None:
-            db_module.account_month_open_insert_if_absent(
-                aid, ym, total_eq, ts, open_cash=cash
-            )
 
         log.debug(
             "账户快照: %s \t权益=%d \t现金=%d",
@@ -275,7 +365,9 @@ def backfill_account_snapshots_from_okx_bills(
     *,
     days: int = 40,
 ) -> tuple[int, str]:
-    """用 OKX ``/api/v5/account/bills-archive`` 的 USDT ``bal`` 补全近期缺日的 ``account_snapshots``（UTC 自然日）。
+    """用 OKX ``/api/v5/account/bills-archive`` 的 USDT ``bal`` 补全近期缺日快照。
+
+    写入 SQLite 表 ``account_balance_snapshots``（UTC 自然日）。函数名保留 ``account_snapshots`` 片段仅为兼容旧调用。
 
     仅插入「该日尚无任何快照」的日期；现金取账单余额，权益按补全前最近一条快照的 equity/cash 比例估算
     （持仓时与 OKX totalEq 可能略有偏差）。
@@ -342,7 +434,7 @@ def backfill_account_snapshots_from_okx_bills(
     if not filled_bal:
         return 0, "账单区间内无 USDT 余额记录"
 
-    meta = db_module.account_meta_get(aid)
+    meta = db_module.account_list_get(aid)
     initial = float(meta["initial_capital"]) if meta else 0.0
     if initial <= 0:
         for row in iter_okx_accounts(enabled_only=False):
@@ -375,7 +467,6 @@ def backfill_account_snapshots_from_okx_bills(
             snapshot_at=snap_at,
             cash_balance=cash_b,
             equity_usdt=equity,
-            initial_capital=initial,
             profit_amount=profit_amount,
             profit_percent=profit_percent,
         )
@@ -389,7 +480,8 @@ def refresh_balance_snapshot_one(
     db_module: Any, account_id: str, logger: logging.Logger | None = None
 ) -> tuple[bool, str]:
     """
-    从 OKX 拉取单账户余额，写入 account_snapshots（现金 availEq、权益），并维护当月 account_month_open。
+    从 OKX 拉取单账户余额，写入 account_balance_snapshots（现金 availEq、权益）。
+    当月月初 account_month_open 由定时任务写入；本函数不写入月初表。
     供管理员手动同步；策略效能日现金增量依赖此表多时点快照。
     """
     log = logger or logging.getLogger(__name__)
@@ -405,7 +497,7 @@ def refresh_balance_snapshot_one(
     if not path or not path.is_file():
         return False, "未找到密钥配置"
 
-    meta = db_module.account_meta_get(aid)
+    meta = db_module.account_list_get(aid)
     initial = float(meta["initial_capital"]) if meta else 0.0
     if initial <= 0:
         for row in iter_okx_accounts(enabled_only=False):
@@ -413,9 +505,8 @@ def refresh_balance_snapshot_one(
                 initial = _initial_capital(row)
                 break
 
-    sync_account_meta_from_json(db_module)
+    sync_account_list_from_json(db_module)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    ym = datetime.now(timezone.utc).strftime("%Y-%m")
 
     live = okx_mod.okx_fetch_balance(config_path=path)
     if not live:
@@ -431,14 +522,9 @@ def refresh_balance_snapshot_one(
         snapshot_at=ts,
         cash_balance=cash,
         equity_usdt=total_eq,
-        initial_capital=initial,
         profit_amount=profit_amount,
         profit_percent=profit_percent,
     )
-    if db_module.account_month_open_get(aid, ym) is None:
-        db_module.account_month_open_insert_if_absent(
-            aid, ym, total_eq, ts, open_cash=cash
-        )
 
     log.info(
         "balance_snapshot_one_ok: %s equity=%s cash=%s",
@@ -458,12 +544,12 @@ def refresh_balance_snapshot_one(
         )
         n_b = 0
     if n_b > 0:
-        return True, f"已写入 account_snapshots；OKX 账单已补全 {n_b} 个缺日"
-    return True, "已写入 account_snapshots"
+        return True, f"已写入 account_balance_snapshots；OKX 账单已补全 {n_b} 个缺日"
+    return True, "已写入 account_balance_snapshots"
 
 
 def _load_tradingbots_json_bots() -> list[dict]:
-    """Accounts/tradingbots.json 中的 bot 列表（无文件则空列表）。"""
+    """accounts/tradingbots.json 中的 bot 列表（无文件则空列表）。"""
     import json
 
     path = ACCOUNTS_DIR / "tradingbots.json"
@@ -480,7 +566,7 @@ def _load_tradingbots_json_bots() -> list[dict]:
 def fetch_and_save_tradingbot_snapshots(
     db_module: Any, logger: logging.Logger | None = None
 ) -> None:
-    """读取 tradingbots.json 中有 account_api_file 的 OKX 机器人余额，写入 bot_profit_snapshots。"""
+    """读取 tradingbots.json 中有 account_api_file 的 OKX 机器人余额，写入 tradingbot_profit_snapshots。"""
     log = logger or logging.getLogger(__name__)
     import exchange.okx as okx_mod
 
@@ -536,7 +622,7 @@ def refresh_tradingbot_balance_snapshot_one(
     config_path: Path,
     logger: logging.Logger | None = None,
 ) -> tuple[bool, str]:
-    """对仅存在于 tradingbots.json 的 bot：拉 OKX 余额写入 bot_profit_snapshots。"""
+    """对仅存在于 tradingbots.json 的 bot：拉 OKX 余额写入 tradingbot_profit_snapshots。"""
     log = logger or logging.getLogger(__name__)
     import exchange.okx as okx_mod
 
@@ -567,7 +653,7 @@ def refresh_tradingbot_balance_snapshot_one(
         profit_percent=profit_percent,
     )
     log.info("bot_profit_snapshot_one_ok: %s equity=%s", bid, int(round(total_eq)))
-    return True, "已写入 bot_profit_snapshots"
+    return True, "已写入 tradingbot_profit_snapshots"
 
 
 def _account_benchmark_inst_map() -> dict[str, str]:
@@ -585,7 +671,7 @@ def refresh_all_positions_history(
     """
     拉取 Account_List 中已启用（enbaled=true）OKX 账户的 positions-history：
     SWAP + FUTURES 合并去重、深分页写入 account_positions_history；
-    最后按账户重算 account_daily_close_performance。
+    最后按账户重算 account_daily_performance。
     与 refresh_all_snapshots 同周期调用即可（建议每 5 分钟）。
     """
     log = logger or logging.getLogger(__name__)
@@ -603,7 +689,10 @@ def refresh_all_positions_history(
             )
             continue
 
-        hist, err = okx_mod.okx_fetch_positions_history_contracts(config_path=path)
+        min_ut = _positions_history_min_u_time_ms_for_incremental(db_module, aid)
+        hist, err = okx_mod.okx_fetch_positions_history_contracts(
+            config_path=path, min_u_time_ms=min_ut
+        )
         if err:
             db_module.log_insert(
                 "WARN",
@@ -628,14 +717,14 @@ def refresh_all_positions_history(
             for b in list_account_basics(enabled_only=False)
             if str(b.get("account_id") or "").strip()
         ]
-        db_module.account_daily_close_performance_rebuild_for_accounts(
+        db_module.account_daily_performance_rebuild_for_accounts(
             all_ids, _account_benchmark_inst_map()
         )
     except Exception as ex:
-        log.warning("account_daily_close_performance 重建失败: %s", ex)
+        log.warning("account_daily_performance 重建失败: %s", ex)
         db_module.log_insert(
             "WARN",
-            "account_daily_close_performance_rebuild_failed",
+            "account_daily_performance_rebuild_failed",
             source="account_mgr",
             extra={"error": str(ex)},
         )
@@ -658,7 +747,10 @@ def refresh_positions_history_one(
     if not path:
         return False, "未找到密钥配置"
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    hist, err = okx_mod.okx_fetch_positions_history_contracts(config_path=path)
+    min_ut = _positions_history_min_u_time_ms_for_incremental(db_module, aid)
+    hist, err = okx_mod.okx_fetch_positions_history_contracts(
+        config_path=path, min_u_time_ms=min_ut
+    )
     if err:
         db_module.log_insert(
             "WARN",
@@ -669,7 +761,7 @@ def refresh_positions_history_one(
         return False, err
     if not hist:
         try:
-            db_module.account_daily_close_performance_rebuild_for_accounts(
+            db_module.account_daily_performance_rebuild_for_accounts(
                 [aid], _account_benchmark_inst_map()
             )
         except Exception:
@@ -683,12 +775,165 @@ def refresh_positions_history_one(
         n,
     )
     try:
-        db_module.account_daily_close_performance_rebuild_for_accounts(
+        db_module.account_daily_performance_rebuild_for_accounts(
             [aid], _account_benchmark_inst_map()
         )
     except Exception as ex:
-        log.warning("account_daily_close_performance 单账户重建失败 %s: %s", aid, ex)
+        log.warning("account_daily_performance 单账户重建失败 %s: %s", aid, ex)
     return True, f"已写入 {n} 条新记录"
+
+
+def _positions_history_min_u_time_ms_for_incremental(
+    db_module: Any, account_id: str
+) -> int | None:
+    """库内该账户最大 u_time_ms 减去重叠窗口；无历史则全量拉取（返回 None）。"""
+    try:
+        mx = db_module.account_positions_history_max_u_time_ms(account_id)
+    except Exception:
+        return None
+    if mx is None or mx <= 0:
+        return None
+    return max(0, int(mx) - _POSITIONS_HISTORY_OVERLAP_MS)
+
+
+_OPEN_LEG_EPS = 1e-12
+
+
+def aggregate_open_positions_by_inst(positions: list[dict]) -> list[dict]:
+    """将 okx_fetch_positions 归一化行按 inst_id 聚合为一条记录：多/空张数、各侧 UPL、open_leg_count（多/空非零各计 1 腿）。"""
+    by_inst: dict[str, dict[str, Any]] = {}
+    for p in positions or []:
+        inst = str(p.get("inst_id") or "").strip()
+        if not inst:
+            continue
+        side = str(p.get("pos_side") or "long").lower()
+        if side not in ("long", "short"):
+            side = "long"
+        pos = float(p.get("pos") or 0)
+        upl = float(p.get("upl") or 0)
+        mark_px = float(p.get("mark_px") or 0)
+        last_px = float(p.get("last_px") or 0)
+        if inst not in by_inst:
+            by_inst[inst] = {
+                "inst_id": inst,
+                "long_pos_size": 0.0,
+                "short_pos_size": 0.0,
+                "long_upl": 0.0,
+                "short_upl": 0.0,
+                "mark_px": 0.0,
+                "last_px": 0.0,
+            }
+        g = by_inst[inst]
+        abs_pos = abs(pos)
+        if side == "long":
+            g["long_pos_size"] += abs_pos
+            g["long_upl"] += upl
+        else:
+            g["short_pos_size"] += abs_pos
+            g["short_upl"] += upl
+        if mark_px > 0:
+            g["mark_px"] = mark_px
+        if last_px > 0:
+            g["last_px"] = last_px
+    out: list[dict] = []
+    for g in by_inst.values():
+        g["total_upl"] = float(g["long_upl"]) + float(g["short_upl"])
+        lp = float(g["long_pos_size"])
+        sp = float(g["short_pos_size"])
+        g["open_leg_count"] = (1 if lp > _OPEN_LEG_EPS else 0) + (
+            1 if sp > _OPEN_LEG_EPS else 0
+        )
+        out.append(g)
+    out.sort(key=lambda x: str(x.get("inst_id") or ""))
+    return out
+
+
+def refresh_all_open_positions_snapshots(
+    db_module: Any, logger: logging.Logger | None = None
+) -> None:
+    """
+    拉取各启用 OKX 账户当前持仓，按合约聚合（每合约一行，多空各算一条腿）写入 account_open_positions_snapshots。
+    与 refresh_all_balance_snapshots 同周期调用（main 定时器）。
+    """
+    log = logger or logging.getLogger(__name__)
+    import exchange.okx as okx_mod
+
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    for row in iter_okx_accounts(enabled_only=True):
+        aid = str(row.get("account_id") or "").strip()
+        path = resolve_okx_config_path(aid)
+        if not path:
+            log.debug(
+                "当前持仓快照跳过: %s 无密钥文件",
+                _fmt_log_account_id(aid),
+            )
+            continue
+        positions, err = okx_mod.okx_fetch_positions(config_path=path)
+        if err:
+            db_module.log_insert(
+                "WARN",
+                "open_positions_snapshot_fetch_failed",
+                source="account_mgr",
+                extra={"account_id": aid, "error": err},
+            )
+            continue
+        agg = aggregate_open_positions_by_inst(positions or [])
+        if not agg:
+            continue
+        n = db_module.account_open_positions_snapshots_insert_batch(aid, ts, agg)
+        sum_long = sum(float(g.get("long_pos_size") or 0) for g in agg)
+        sum_short = sum(float(g.get("short_pos_size") or 0) for g in agg)
+        n_legs = sum(int(g.get("open_leg_count") or 0) for g in agg)
+        log.debug(
+            "当前持仓快照: %s \t产品=%d \t仓位腿=%d \t多=%.6g \t空=%.6g \t写入行=%d",
+            _fmt_log_account_id(aid),
+            len(agg),
+            n_legs,
+            sum_long,
+            sum_short,
+            n,
+        )
+
+
+def refresh_open_positions_snapshot_one(
+    db_module: Any, account_id: str, logger: logging.Logger | None = None
+) -> tuple[bool, str]:
+    """单账户拉取当前持仓并写入 account_open_positions_snapshots（管理员手动同步）。"""
+    log = logger or logging.getLogger(__name__)
+    import exchange.okx as okx_mod
+
+    aid = str(account_id or "").strip()
+    if not aid:
+        return False, "缺少 account_id"
+    br = okx_account_disabled_exchange_reason(aid)
+    if br:
+        return False, br
+    path = resolve_okx_config_path(aid)
+    if not path:
+        return False, "未找到密钥配置"
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    positions, err = okx_mod.okx_fetch_positions(config_path=path)
+    if err:
+        db_module.log_insert(
+            "WARN",
+            "open_positions_snapshot_fetch_failed",
+            source="account_mgr",
+            extra={"account_id": aid, "error": err},
+        )
+        return False, err
+    agg = aggregate_open_positions_by_inst(positions or [])
+    if not agg:
+        return True, "当前无持仓，未写入快照行"
+    n = db_module.account_open_positions_snapshots_insert_batch(aid, ts, agg)
+    n_legs = sum(int(g.get("open_leg_count") or 0) for g in agg)
+    log.info(
+        "open_positions_snapshot_one_ok: %s products=%d legs=%d rows=%d",
+        _fmt_log_account_id(aid),
+        len(agg),
+        n_legs,
+        n,
+    )
+    return True, f"已写入 account_open_positions_snapshots（{n} 行）"
 
 
 # --- 实时查询（不入库） ---
@@ -750,7 +995,7 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
         ex_name = (row.get("exchange_account") or "OKX").strip()
         path = resolve_okx_config_path(aid)
         snap = db_module.account_snapshot_latest_by_account(aid)
-        meta_row = db_module.account_meta_get(aid)
+        meta_row = db_module.account_list_get(aid)
         initial = float(meta_row["initial_capital"]) if meta_row else _initial_capital(row)
         ym = datetime.now(timezone.utc).strftime("%Y-%m")
         month_row = db_module.account_month_open_get(aid, ym)
@@ -809,7 +1054,7 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
                     "bot_id": aid,
                     "account_id": aid,
                     "exchange_account": ex_name,
-                    "initial_balance": float(snap["initial_capital"]),
+                    "initial_balance": initial,
                     "current_balance": eq,
                     "profit_amount": float(snap["profit_amount"]),
                     "profit_percent": float(snap["profit_percent"]),

@@ -7,7 +7,8 @@
 字段名 ``tr`` 存的是当日价格区间 |high−low|（非负），与 OKX 日线合并字段一致；**不是**经典 True Range（需昨收），
 也**不是** ATR。经典 ATR(14) 由 ``compute_atr14_wilder_by_day`` 单独从 OHLC 递推（Wilder），供阈值参考。
 
-现金日明细优先来自 account_snapshots；旧版 tradingbots.json 机器人用 bot_profit_snapshots（权益 equity_usdt
+Account_List 账户的「UTC 自然月月初」资金/权益分母优先用库表 account_month_open（与定时任务一致），无表行时仍可从快照序列推导。
+现金日明细优先来自 account_balance_snapshots；旧版 tradingbots.json 机器人用 tradingbot_profit_snapshots（权益 equity_usdt
 经 normalize_bot_profit_snapshots_for_efficiency 映射为 cash_balance）。对 K 线有、但当日无快照的日期，
 由 fill_cash_by_day_for_market_bars 补齐为「当日无增量」（sod=eod=上一日末现金）；若全程无快照则占位为 0，
 以便仍返回结构化行并由 merge 计算现金收益率%与策略能效（增量为 0 时能效为 0）。
@@ -22,7 +23,7 @@ def normalize_bot_profit_snapshots_for_efficiency(
     bot_profit_rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """
-    将 bot_profit_snapshots 行转为与 account_snapshots 相同的「按日现金」汇总输入：
+    将 tradingbot_profit_snapshots 行转为与 account_balance_snapshots 相同的「按日现金」汇总输入：
     仅保留 snapshot_at + cash_balance（取 equity_usdt，缺省用 current_balance），非负。
     """
     out: list[dict[str, Any]] = []
@@ -556,36 +557,46 @@ def ensure_shared_market_daily_bars(
         return err
     if not bars:
         return "no market bars"
+    batch: list[tuple[str, str, float, float, float, float, float]] = []
     for b in bars:
         d = str(b.get("day") or "")
         if not d:
             continue
-        db_mod.market_daily_bars_upsert(
-            inst_id,
-            d,
-            float(b.get("open") or 0.0),
-            float(b.get("high") or 0.0),
-            float(b.get("low") or 0.0),
-            float(b.get("close") or 0.0),
-            max(0.0, float(b.get("tr") or 0.0)),
+        batch.append(
+            (
+                inst_id,
+                d,
+                float(b.get("open") or 0.0),
+                float(b.get("high") or 0.0),
+                float(b.get("low") or 0.0),
+                float(b.get("close") or 0.0),
+                max(0.0, float(b.get("tr") or 0.0)),
+            )
         )
+    if batch:
+        db_mod.market_daily_bars_upsert_many(batch)
     return None
 
 
 def _upsert_okx_bars(db_mod: Any, inst_id: str, bars: list[dict[str, Any]]) -> None:
+    batch: list[tuple[str, str, float, float, float, float, float]] = []
     for b in bars:
         d = str(b.get("day") or "")
         if not d:
             continue
-        db_mod.market_daily_bars_upsert(
-            inst_id,
-            d,
-            float(b.get("open") or 0.0),
-            float(b.get("high") or 0.0),
-            float(b.get("low") or 0.0),
-            float(b.get("close") or 0.0),
-            max(0.0, float(b.get("tr") or 0.0)),
+        batch.append(
+            (
+                inst_id,
+                d,
+                float(b.get("open") or 0.0),
+                float(b.get("high") or 0.0),
+                float(b.get("low") or 0.0),
+                float(b.get("close") or 0.0),
+                max(0.0, float(b.get("tr") or 0.0)),
+            )
         )
+    if batch:
+        db_mod.market_daily_bars_upsert_many(batch)
 
 
 def load_market_bars_for_efficiency(

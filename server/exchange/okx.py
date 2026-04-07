@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 OKX 交易所 API：配置加载、账户余额/持仓/行情，基于 ccxt 实现。
-与 Accounts/testapi.py 行为一致（优先 api 子对象、沙盒请求头）。
+与 accounts/testapi.py 行为一致（优先 api 子对象、沙盒请求头）。
 """
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import hmac
 import json
 import logging
 import os
+import threading
 import time
 from typing import Any
 from datetime import datetime, timezone
@@ -186,7 +187,7 @@ _default_config_path: Path | None = None
 
 
 def get_default_config_path(config_dir: Path) -> Path:
-    """解析默认 OKX 配置路径并设为模块默认。config_dir 一般为 server/Accounts。"""
+    """解析默认 OKX 配置路径并设为模块默认。config_dir 一般为 server/accounts。"""
     global _default_config_path
     path = Path(os.environ.get("OKX_CONFIG", str(config_dir / "okx.json")))
     if not path.exists():
@@ -221,7 +222,7 @@ def _read_key_secret_passphrase(obj: dict) -> tuple[str, str, str]:
 
 
 def load_okx_config(path: Path | None) -> dict | None:
-    """从 JSON 加载 OKX 配置（与 Accounts/testapi.py 一致，优先 api 子对象）。
+    """从 JSON 加载 OKX 配置（与 accounts/testapi.py 一致，优先 api 子对象）。
     支持格式：
     1) 新格式：{"api": {"name", "key", "secret", "passphrase", "base_url", "sandbox"}}
     2) 中间格式：{"api": {"apikey", "secretkey", "passphrase", ...}}（api 内用旧键名）
@@ -294,6 +295,52 @@ def _create_exchange(cfg: dict):
     )
     exchange.set_sandbox_mode(sandbox)
     return exchange
+
+
+_CCXT_OKX_LOCK = threading.Lock()
+# 密钥文件绝对路径 -> (mtime, ccxt.okx)；mtime 变化则重建（换钥/覆盖文件）
+_CCXT_OKX_CACHE: dict[str, tuple[float, Any]] = {}
+
+
+def get_ccxt_okx_exchange(config_path: Path | None) -> Any | None:
+    """按密钥文件路径复用单个 ccxt.okx 实例，避免每次请求 new。无效路径或配置返回 None。
+
+    与 accounts.AccountMgr.get_okx_ccxt_exchange_for_config_path 为同一缓存。
+    """
+    path = _resolve_path(config_path)
+    if path is None or not path.is_file():
+        return None
+    try:
+        key = str(path.resolve())
+        mtime = path.stat().st_mtime
+    except OSError:
+        return None
+    with _CCXT_OKX_LOCK:
+        ent = _CCXT_OKX_CACHE.get(key)
+        if ent is not None and ent[0] == mtime:
+            return ent[1]
+        cfg = load_okx_config(path)
+        if not cfg or not (cfg.get("key") and cfg.get("secret")):
+            return None
+        ex = _create_exchange(cfg)
+        _CCXT_OKX_CACHE[key] = (mtime, ex)
+        return ex
+
+
+def invalidate_ccxt_okx_exchange_cache(config_path: Path | None = None) -> None:
+    """清除 ccxt 连接缓存：config_path 为 None 时清空全部；否则只移除对应密钥文件。"""
+    with _CCXT_OKX_LOCK:
+        if config_path is None:
+            _CCXT_OKX_CACHE.clear()
+            return
+        path = _resolve_path(config_path)
+        if path is None:
+            return
+        try:
+            k = str(path.resolve())
+        except OSError:
+            return
+        _CCXT_OKX_CACHE.pop(k, None)
 
 
 def okx_info_safe(config_path: Path | None = None) -> dict | None:
@@ -448,6 +495,109 @@ def okx_request(
         return (None, str(e) or "request failed")
 
 
+def _okx_safe_float(x: object) -> float:
+    try:
+        if x is None or x == "":
+            return 0.0
+        return float(x)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _okx_usdt_cash_from_account_details(account_row: dict) -> float | None:
+    """无标准 USDT 行解析时的兜底：从 details 里找 USDT 行的 availBal/availEq/cashBal。"""
+    details = account_row.get("details")
+    if not isinstance(details, list):
+        return None
+    for row in details:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("ccy") or "").upper() != "USDT":
+            continue
+        for key in ("availBal", "availEq", "cashBal"):
+            raw = row.get(key)
+            if raw is None or str(raw).strip() == "":
+                continue
+            v = _okx_safe_float(raw)
+            return v
+    return None
+
+
+def _okx_sum_details_eq_avail_like_qtrader(account: dict) -> tuple[float, float]:
+    """与 QTrader-web ``account_tester`` 一致：按各币种 ``eq`` 与 ``availEq``（缺省 ``availBal``）累加。"""
+    total = 0.0
+    available = 0.0
+    for detail in account.get("details") or []:
+        if not isinstance(detail, dict):
+            continue
+        equity = _okx_safe_float(detail.get("eq"))
+        avail_default = detail.get("availBal", "0")
+        try:
+            available_amt = float(detail.get("availEq", avail_default))
+        except (TypeError, ValueError):
+            available_amt = _okx_safe_float(avail_default)
+        if equity > 0:
+            total += equity
+            available += available_amt
+    return total, available
+
+
+def _okx_equity_and_cash_from_usdt_detail(
+    usdt: dict, account: dict
+) -> tuple[float, float]:
+    """与 QTrader-web ``account_profit_collector`` 一致：USDT 行权益用 ``eq``，可用用 ``availEq`` 缺省 ``availBal``。"""
+    equity = _okx_safe_float(usdt.get("eq"))
+    avail_default = usdt.get("availBal", "0")
+    try:
+        cash = float(usdt.get("availEq", avail_default))
+    except (TypeError, ValueError):
+        cash = _okx_safe_float(avail_default)
+    if equity <= 0:
+        te = _okx_safe_float(account.get("totalEq"))
+        if te > 0:
+            equity = te
+    return equity, cash
+
+
+def _okx_aggregate_balance_from_payload(data: dict) -> tuple[float, float, float]:
+    """从 /api/v5/account/balance 聚合权益、现金、upl（口径对齐 QTrader-web account_tester / account_profit_collector）。"""
+    rows = data.get("data") or []
+    if not rows or not isinstance(rows[0], dict):
+        return 0.0, 0.0, 0.0
+    account = rows[0]
+    upl = _okx_safe_float(account.get("upl"))
+
+    details_list = account.get("details")
+    details = details_list if isinstance(details_list, list) else []
+
+    usdt = next(
+        (
+            d
+            for d in details
+            if isinstance(d, dict) and str(d.get("ccy") or "").upper() == "USDT"
+        ),
+        None,
+    )
+
+    if usdt is not None:
+        equity, cash = _okx_equity_and_cash_from_usdt_detail(usdt, account)
+        return equity, cash, upl
+
+    total_d, avail_d = _okx_sum_details_eq_avail_like_qtrader(account)
+    if total_d > 0:
+        return total_d, avail_d, upl
+
+    total_eq = _okx_safe_float(account.get("totalEq"))
+    avail_eq = _okx_safe_float(account.get("availEq"))
+    if avail_eq <= 0:
+        fb = _okx_usdt_cash_from_account_details(account)
+        if fb is not None:
+            avail_eq = fb
+    if avail_eq == 0 and total_eq != 0:
+        avail_eq = total_eq
+    return total_eq, avail_eq, upl
+
+
 def _okx_fetch_balance_fallback(
     config_path: Path | None,
 ) -> tuple[dict | None, str | None]:
@@ -457,25 +607,16 @@ def _okx_fetch_balance_fallback(
         return None, err or "请求失败或无有效 JSON（参见同时间点 OKX request 日志）"
     if data.get("code") != "0":
         return None, _okx_business_error_detail(data)
-    total_eq = 0.0
-    avail_eq = 0.0
-    upl = 0.0
-    for d in (data.get("data") or []):
-        try:
-            total_eq += float(d.get("totalEq", 0) or 0)
-            avail_eq += float(d.get("availEq", 0) or 0)
-            upl += float(d.get("upl", 0) or 0)
-        except (TypeError, ValueError):
-            pass
-    if avail_eq == 0 and total_eq != 0:
-        avail_eq = total_eq
+    if not isinstance(data, dict):
+        return None, "invalid balance response"
+    total_eq, avail_eq, upl = _okx_aggregate_balance_from_payload(data)
     return _okx_balance_dict(total_eq, avail_eq, upl, raw=data), None
 
 
 def _okx_balance_dict(
     total_eq: float, avail_eq: float, upl: float, *, raw: object
 ) -> dict:
-    """OKX /api/v5/account/balance 口径：权益 totalEq、可用权益 availEq（作现金余额展示）。"""
+    """聚合后的权益/可用：与 QTrader-web 一致写入 total_eq、equity_usdt、avail_eq、cash_balance。"""
     return {
         "total_eq": total_eq,
         "avail_eq": avail_eq,
@@ -487,7 +628,7 @@ def _okx_balance_dict(
 
 
 def okx_fetch_balance(config_path: Path | None = None) -> dict | None:
-    """OKX 账户：权益 totalEq、现金余额口径 availEq（见 cash_balance / equity_usdt 字段）。
+    """OKX 账户余额；解析规则与 QTrader-web ``account_tester`` / ``account_profit_collector`` 对齐（见 _okx_aggregate_balance_from_payload）。
 
     仅走 OKX v5 REST，不调用 ccxt.fetch_balance（否则会 load_markets，ccxt 对 preopen 等标的解析可能 TypeError: NoneType + str）。
     """
@@ -875,15 +1016,14 @@ def _ccxt_symbol_to_inst_id(symbol: str) -> str:
 
 
 def okx_fetch_positions(config_path: Path | None = None) -> tuple[list[dict], str | None]:
-    """调用 OKX 持仓（ccxt fetch_positions）；返回 (positions, error)。"""
+    """调用 OKX 持仓（ccxt fetch_positions）；返回 (positions, error)。ccxt 实例按密钥文件路径复用。"""
     path = _resolve_path(config_path)
     if _DEBUG_POSITIONS and path:
         logger.info("[持仓] 开始拉取 OKX 持仓 config=%s", path.name)
-    cfg = load_okx_config(path) if path else None
-    if not cfg or not (cfg.get("key") and cfg.get("secret")):
+    exchange = get_ccxt_okx_exchange(path)
+    if exchange is None:
         return ([], "OKX 配置文件不存在或格式无效")
     try:
-        exchange = _create_exchange(cfg)
         raw_list = exchange.fetch_positions()
     except TypeError as e:
         if "NoneType" in str(e) and "+" in str(e) and "str" in str(e):
@@ -936,17 +1076,28 @@ def okx_fetch_positions(config_path: Path | None = None) -> tuple[list[dict], st
     return (out, None)
 
 
+def _positions_history_row_utime_ms(row: dict) -> int:
+    try:
+        return int(str(row.get("uTime") or "0").strip() or 0)
+    except (TypeError, ValueError, AttributeError):
+        return 0
+
+
 def okx_fetch_positions_history(
     config_path: Path | None = None,
     *,
     inst_type: str = "SWAP",
     limit_per_page: int = 100,
     max_pages: int = 500,
+    min_u_time_ms: int | None = None,
 ) -> tuple[list[dict], str | None]:
     """
     历史仓位：GET /api/v5/account/positions-history（近约 3 个月，按 uTime 倒序）。
     分页拉取多页后合并为列表；用于定时入库去重。
     max_pages 默认 500（每页最多 100 条），直至接口返回不足一页或无数据。
+
+    min_u_time_ms：若给定，仅保留 uTime ≥ 该值的行；首请求带 ``before=min-1`` 以只拉较新数据，
+    并在分页遇到更旧数据时提前结束，减少重复拉取（与库内最大 uTime 配合做增量）。
     """
     path = _resolve_path(config_path)
     cfg = load_okx_config(path) if path else None
@@ -956,6 +1107,7 @@ def okx_fetch_positions_history(
     pages = max(1, min(2000, int(max_pages)))
     merged: list[dict] = []
     after_ms: str | None = None
+    min_lo = int(min_u_time_ms) if min_u_time_ms is not None else None
 
     for _ in range(pages):
         params: dict[str, str] = {"limit": str(lim)}
@@ -963,6 +1115,9 @@ def okx_fetch_positions_history(
             params["instType"] = inst_type
         if after_ms:
             params["after"] = after_ms
+        elif min_lo is not None and min_lo > 0:
+            # OKX：before = 返回 uTime **newer than** 该时间戳；故用 min_lo-1 等价于 uTime ≥ min_lo
+            params["before"] = str(min_lo - 1)
         data, err = okx_request(
             "GET",
             "/api/v5/account/positions-history",
@@ -978,23 +1133,30 @@ def okx_fetch_positions_history(
                 else "positions-history 异常"
             )
             return (merged, msg) if merged else ([], msg)
-        batch = data.get("data") or []
-        if not batch:
+        api_batch = data.get("data") or []
+        if not api_batch:
             break
-        merged.extend(batch)
-        if len(batch) < lim:
+        raw_uts: list[int] = []
+        for r in api_batch:
+            u = _positions_history_row_utime_ms(r)
+            if u:
+                raw_uts.append(u)
+        if min_lo is not None and raw_uts and min(raw_uts) < min_lo:
+            merged.extend(
+                r
+                for r in api_batch
+                if _positions_history_row_utime_ms(r) >= min_lo
+            )
             break
-        uts: list[int] = []
-        for r in batch:
-            try:
-                u = int(str(r.get("uTime") or "0").strip() or 0)
-                if u:
-                    uts.append(u)
-            except (TypeError, ValueError, AttributeError):
-                continue
-        if not uts:
+        to_add = api_batch
+        if min_lo is not None:
+            to_add = [r for r in api_batch if _positions_history_row_utime_ms(r) >= min_lo]
+        merged.extend(to_add)
+        if len(api_batch) < lim:
             break
-        after_ms = str(min(uts))
+        if not raw_uts:
+            break
+        after_ms = str(min(raw_uts))
     return (merged, None)
 
 
@@ -1004,10 +1166,12 @@ def okx_fetch_positions_history_contracts(
     inst_types: tuple[str, ...] = ("SWAP", "FUTURES"),
     limit_per_page: int = 100,
     max_pages: int = 500,
+    min_u_time_ms: int | None = None,
 ) -> tuple[list[dict], str | None]:
     """
     合并永续与交割合约的历史仓位（分别请求 positions-history），
     按 (posId, uTime) 去重。任一分支报错且无合并结果时返回错误信息。
+    min_u_time_ms 传给各 instType 请求，见 okx_fetch_positions_history。
     """
     seen: set[tuple[str, str]] = set()
     out: list[dict] = []
@@ -1022,6 +1186,7 @@ def okx_fetch_positions_history_contracts(
             inst_type=it_s,
             limit_per_page=limit_per_page,
             max_pages=max_pages,
+            min_u_time_ms=min_u_time_ms,
         )
         if err:
             last_err = err

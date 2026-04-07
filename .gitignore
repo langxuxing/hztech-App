@@ -3,8 +3,8 @@
 # =============================================================================
 **/okx.json
 src/res/okx.json
-server/Accounts/account_api.json
-server/Accounts/.bot_run/
+server/accounts/account_api.json
+server/accounts/.bot_run/
 server/sqlite/
 server/data.db
 

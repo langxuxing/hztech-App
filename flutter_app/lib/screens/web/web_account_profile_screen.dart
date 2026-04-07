@@ -21,7 +21,7 @@ String _fmtOkxContractPxForUi(double v) {
   return formatUiInteger(v * _kOkxContractPxUiScale);
 }
 
-/// Web「账户画像」：顶栏账户选择 → 账户详情 → 持仓|赛季（宽屏 50/50）→ 权益/现金各一行三列（折线|柱|日历）。
+/// Web「账户画像」：顶栏账户选择 → 账户详情 → 持仓|赛季（宽屏 50/50）→ 现金/权益各一行三列（折线|柱|日历）。
 ///
 /// 视口 ≥[_kLayoutWideBp] 为上述栅格；更窄同序纵向堆叠。超宽内容限制在 [_maxContentWidth] 内居中。
 /// [embedInShell] 缺省 true（侧栏 Tab 无本页 AppBar）；独立路由请用 [WebAccountProfitScreen] 或传入 false。
@@ -86,8 +86,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   /// 窄屏权益/现金日历 [gridMaxHeight] 相对折线/柱统一带高的倍数（仅日历加高 10%）。
   static const double _kProfileCalendarHeightFactor = 1.1;
 
-  /// 「权益日历」「现金日历」标题与下方内容的额外间距。
-  static const double _kProfileCalendarTitleExtraGap = 12;
+  /// 「权益日历」「现金日历」标题与下方内容（含星期行）的额外间距。
+  static const double _kProfileCalendarTitleExtraGap = 22;
 
   /// 窄屏与宽屏单列内折线/柱/日历图表区统一高度。
   static const double _kUnifiedChartBandHeight = 420;
@@ -98,6 +98,19 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   Map<int, int>? _cashCalendarCloseCounts;
   final TextEditingController _noDropdownAccountController =
       TextEditingController();
+
+  /// 切换账户时递增，用于丢弃过期的异步结果与日历同步。
+  int _accountSwitchGeneration = 0;
+
+  /// 立即断开 OKX 公共 ticker WS（切换账户须先于新请求调用）。
+  void _disconnectOkxPublicTicker() {
+    _tickerSub?.cancel();
+    _tickerSub = null;
+    _tickerWs?.dispose();
+    _tickerWs = null;
+    _tickerSubscribedInstId = null;
+    _liveLastPx = null;
+  }
 
   String? get _trimmedInitialBotId {
     final s = widget.initialBotId?.trim();
@@ -140,37 +153,34 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         _selectedBotId ??
         (list.isNotEmpty ? list.first.tradingbotId : null) ??
         _defaultBotId;
+    final g = _accountSwitchGeneration;
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
+      if (!mounted || g != _accountSwitchGeneration) return;
       final api = ApiClient(baseUrl, token: token);
-      final phase2 = await Future.wait([
+      final batch = await Future.wait([
         api.getAccountProfit(),
         api.getBotProfitHistory(botId, limit: 500),
-      ]);
-      if (!mounted) return;
-      final profitResp = phase2[0] as AccountProfitResponse;
-      final historyResp = phase2[1] as BotProfitHistoryResponse;
-      setState(() {
-        _accounts = profitResp.accounts ?? [];
-        _snapshots = historyResp.snapshots;
-        _equityMetricsMonth = null;
-        _cashMetricsMonth = null;
-      });
-      unawaited(_syncCalendarCloseCounts());
-      final phase3 = await Future.wait([
         api.getTradingbotPositions(botId),
         api.getTradingbotSeasons(botId, limit: 50),
       ]);
-      if (!mounted) return;
-      final positionsResp = phase3[0] as OkxPositionsResponse;
-      final seasonsResp = phase3[1] as TradingbotSeasonsResponse;
+      if (!mounted || g != _accountSwitchGeneration) return;
+      final profitResp = batch[0] as AccountProfitResponse;
+      final historyResp = batch[1] as BotProfitHistoryResponse;
+      final positionsResp = batch[2] as OkxPositionsResponse;
+      final seasonsResp = batch[3] as TradingbotSeasonsResponse;
       setState(() {
+        _accounts = profitResp.accounts ?? [];
+        _snapshots = historyResp.snapshots;
         _positions = positionsResp.positions;
         _positionsLoadError = positionsResp.positionsError;
         _positionsOkxDebug = positionsResp.okxDebug;
         _seasons = seasonsResp.seasons;
+        _equityMetricsMonth = null;
+        _cashMetricsMonth = null;
       });
+      unawaited(_syncCalendarCloseCounts());
       _syncOkxTickerSubscription();
     } catch (_) {
       // 后台轮询失败不打扰主流程
@@ -184,7 +194,6 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
       _error = null;
     });
     try {
-      // 并行读配置，减少首包延迟
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
       final api = ApiClient(baseUrl, token: token);
@@ -207,51 +216,34 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         _loading = false;
       });
 
-      // 阶段二：账户收益 + 历史（不经过 OKX 直连，通常较快）
+      // 阶段二：收益、历史、持仓、赛季并行（缩短首屏等待）
       try {
-        final phase2 = await Future.wait([
+        final batch = await Future.wait([
           api.getAccountProfit(),
           api.getBotProfitHistory(botId, limit: 500),
-        ]);
-        if (!mounted) return;
-        final profitResp = phase2[0] as AccountProfitResponse;
-        final historyResp = phase2[1] as BotProfitHistoryResponse;
-        setState(() {
-          _accounts = profitResp.accounts ?? [];
-          _snapshots = historyResp.snapshots;
-          _equityMetricsMonth = null;
-          _cashMetricsMonth = null;
-        });
-        unawaited(_syncCalendarCloseCounts());
-      } catch (e) {
-        if (mounted) {
-          setState(() => _error = '收益/历史加载失败: $e');
-        }
-      }
-
-      // 阶段三：持仓 + 赛季（后端可能调 OKX，1010/慢响应不再阻塞上面两阶段）
-      try {
-        final phase3 = await Future.wait([
           api.getTradingbotPositions(botId),
           api.getTradingbotSeasons(botId, limit: 50),
         ]);
         if (!mounted) return;
-        final positionsResp = phase3[0] as OkxPositionsResponse;
-        final seasonsResp = phase3[1] as TradingbotSeasonsResponse;
+        final profitResp = batch[0] as AccountProfitResponse;
+        final historyResp = batch[1] as BotProfitHistoryResponse;
+        final positionsResp = batch[2] as OkxPositionsResponse;
+        final seasonsResp = batch[3] as TradingbotSeasonsResponse;
         setState(() {
+          _accounts = profitResp.accounts ?? [];
+          _snapshots = historyResp.snapshots;
           _positions = positionsResp.positions;
           _positionsLoadError = positionsResp.positionsError;
           _positionsOkxDebug = positionsResp.okxDebug;
           _seasons = seasonsResp.seasons;
+          _equityMetricsMonth = null;
+          _cashMetricsMonth = null;
         });
+        unawaited(_syncCalendarCloseCounts());
         _syncOkxTickerSubscription();
       } catch (e) {
         if (mounted) {
-          setState(() {
-            _positionsLoadError = '持仓/赛季加载异常: $e';
-            _positionsOkxDebug = null;
-          });
-          _syncOkxTickerSubscription();
+          setState(() => _error = '收益/历史/持仓/赛季加载失败: $e');
         }
       }
     } catch (e) {
@@ -264,37 +256,53 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   }
 
   Future<void> _loadForBot(String botId) async {
-    setState(() => _selectedBotId = botId);
+    _disconnectOkxPublicTicker();
+    final g = ++_accountSwitchGeneration;
+    setState(() {
+      _selectedBotId = botId;
+      _positions = [];
+      _seasons = [];
+      _positionsLoadError = null;
+      _positionsOkxDebug = null;
+      _error = null;
+    });
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
+      if (!mounted || g != _accountSwitchGeneration) return;
       final api = ApiClient(baseUrl, token: token);
-      final results = await Future.wait([
+
+      final phase1 = await Future.wait([
         api.getAccountProfit(),
         api.getBotProfitHistory(botId, limit: 500),
-        api.getTradingbotSeasons(botId, limit: 50),
-        api.getTradingbotPositions(botId),
       ]);
-      if (!mounted) return;
-      final profitResp = results[0] as AccountProfitResponse;
-      final historyResp = results[1] as BotProfitHistoryResponse;
-      final seasonsResp = results[2] as TradingbotSeasonsResponse;
-      final positionsResp = results[3] as OkxPositionsResponse;
+      if (!mounted || g != _accountSwitchGeneration) return;
+      final profitResp = phase1[0] as AccountProfitResponse;
+      final historyResp = phase1[1] as BotProfitHistoryResponse;
       setState(() {
         _accounts = profitResp.accounts ?? [];
         _snapshots = historyResp.snapshots;
-        _seasons = seasonsResp.seasons;
-        _positions = positionsResp.positions;
-        _positionsLoadError = positionsResp.positionsError;
-        _positionsOkxDebug = positionsResp.okxDebug;
-        _error = null;
         _equityMetricsMonth = null;
         _cashMetricsMonth = null;
       });
       unawaited(_syncCalendarCloseCounts());
+
+      final phase2 = await Future.wait([
+        api.getTradingbotPositions(botId),
+        api.getTradingbotSeasons(botId, limit: 50),
+      ]);
+      if (!mounted || g != _accountSwitchGeneration) return;
+      final positionsResp = phase2[0] as OkxPositionsResponse;
+      final seasonsResp = phase2[1] as TradingbotSeasonsResponse;
+      setState(() {
+        _positions = positionsResp.positions;
+        _positionsLoadError = positionsResp.positionsError;
+        _positionsOkxDebug = positionsResp.okxDebug;
+        _seasons = seasonsResp.seasons;
+      });
       _syncOkxTickerSubscription();
     } catch (e) {
-      if (mounted) {
+      if (mounted && g == _accountSwitchGeneration) {
         setState(() => _error = '切换账户后加载失败: $e');
       }
     }
@@ -328,14 +336,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     if (oldWidget.periodicRefreshActive != widget.periodicRefreshActive) {
       _syncAutoRefreshTimer();
       if (!widget.periodicRefreshActive) {
-        _tickerSub?.cancel();
-        _tickerSub = null;
-        _tickerWs?.dispose();
-        _tickerWs = null;
-        _tickerSubscribedInstId = null;
-        if (_liveLastPx != null && mounted) {
-          setState(() => _liveLastPx = null);
-        }
+        _disconnectOkxPublicTicker();
+        if (mounted) setState(() {});
       } else if (mounted) {
         _syncOkxTickerSubscription();
       }
@@ -364,8 +366,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   @override
   void dispose() {
     _noDropdownAccountController.dispose();
-    _tickerSub?.cancel();
-    _tickerWs?.dispose();
+    _disconnectOkxPublicTicker();
     _autoRefreshTimer?.cancel();
     super.dispose();
   }
@@ -380,13 +381,10 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     final singleInst = ids.length == 1 ? ids.first : null;
 
     if (singleInst == null) {
-      _tickerSub?.cancel();
-      _tickerSub = null;
-      _tickerWs?.dispose();
-      _tickerWs = null;
-      _tickerSubscribedInstId = null;
-      if (_liveLastPx != null) {
-        setState(() => _liveLastPx = null);
+      final had = _liveLastPx != null;
+      _disconnectOkxPublicTicker();
+      if (had) {
+        setState(() {});
       }
       return;
     }
@@ -547,6 +545,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   }
 
   Future<void> _syncCalendarCloseCounts() async {
+    final gen = _accountSwitchGeneration;
     final list = _bots.isNotEmpty ? _bots : widget.sharedBots;
     final botId =
         _selectedBotId ??
@@ -554,7 +553,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         _defaultBotId;
     final snap = _snapshots;
     if (snap.isEmpty) {
-      if (!mounted) return;
+      if (!mounted || gen != _accountSwitchGeneration) return;
       setState(() {
         _equityCalendarCloseCounts = null;
         _cashCalendarCloseCounts = null;
@@ -564,12 +563,13 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
+      if (!mounted || gen != _accountSwitchGeneration) return;
       final api = ApiClient(baseUrl, token: token);
       final eq = _equityMonthFor(snap);
       final cash = _cashMonthFor(snap);
       if (eq.year == cash.year && eq.month == cash.month) {
         final r = await api.getDailyRealizedPnl(botId, eq.year, eq.month);
-        if (!mounted) return;
+        if (!mounted || gen != _accountSwitchGeneration) return;
         if (!r.success) {
           setState(() {
             _equityCalendarCloseCounts = null;
@@ -589,7 +589,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
           cash.year,
           cash.month,
         );
-        if (!mounted) return;
+        if (!mounted || gen != _accountSwitchGeneration) return;
         setState(() {
           _equityCalendarCloseCounts = rEq.success
               ? dailyCloseCountsMapForMonth(rEq.days, eq.year, eq.month)
@@ -600,7 +600,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         });
       }
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || gen != _accountSwitchGeneration) return;
       setState(() {
         _equityCalendarCloseCounts = null;
         _cashCalendarCloseCounts = null;
@@ -790,7 +790,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
             padding: EdgeInsets.symmetric(vertical: 24),
             child: Center(
               child: Text(
-                '暂无账户数据，请确认后端 Accounts 已配置交易账户',
+                '暂无账户数据，请确认后端 accounts 已配置交易账户',
                 style: TextStyle(color: Colors.white70),
               ),
             ),
@@ -799,9 +799,9 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         const SizedBox(height: 32),
         _buildPositionsSeasonsRow(wide),
         const SizedBox(height: 32),
-        _buildEquityMetricsSection(wide),
-        const SizedBox(height: 32),
         _buildCashMetricsSection(wide),
+        const SizedBox(height: 32),
+        _buildEquityMetricsSection(wide),
       ],
     );
   }
@@ -1437,12 +1437,12 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     );
     TextStyle posQtyStyle(Color c) => AppFinanceStyle.valueTextStyle(
       context,
-      fontSize: 20,
+      fontSize: 18,
     ).copyWith(color: c);
     // 成本/均价/现价/标记：与账户详情数值同档字号；合约价经 [_fmtOkxContractPxForUi] ×1e9 再整数分组，避免极小价落成 0。
     final plWhiteStyle = AppFinanceStyle.valueTextStyle(
       context,
-      fontSize: 20,
+      fontSize: 18,
     ).copyWith(color: Colors.white);
 
     final positionsInner = _positions.isEmpty
@@ -1500,7 +1500,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                         '空仓',
                         style: sideTitleStyle.copyWith(
                           color: Colors.red,
-                          fontSize: 24,
+                          fontSize: 20,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -1517,7 +1517,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                             '盈亏：${formatUiSignedInteger(_totalDynUpl(shorts, curPx))}',
                             style: plWhiteStyle.copyWith(
                               color: Colors.red,
-                              fontSize: 20,
+                              fontSize: 18,
                             ),
                           ),
                         )
@@ -1528,7 +1528,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                             '浮盈：${formatUiSignedInteger(shorts.fold<double>(0, (s, p) => s + p.upl))}',
                             style: plWhiteStyle.copyWith(
                               color: Colors.red,
-                              fontSize: 20,
+                              fontSize: 18,
                             ),
                           ),
                         ),
@@ -1545,7 +1545,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                         '多仓',
                         style: sideTitleStyle.copyWith(
                           color: AppFinanceStyle.profitGreenEnd,
-                          fontSize: 24,
+                          fontSize: 20,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -1562,7 +1562,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                             '${formatUiSignedInteger(_totalDynUpl(longs, curPx))}：盈亏',
                             style: plWhiteStyle.copyWith(
                               color: AppFinanceStyle.profitGreenEnd,
-                              fontSize: 20,
+                              fontSize: 18,
                             ),
                           ),
                         )
@@ -1573,7 +1573,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                             '浮盈：${formatUiSignedInteger(longs.fold<double>(0, (s, p) => s + p.upl))}',
                             style: plWhiteStyle.copyWith(
                               color: AppFinanceStyle.profitGreenEnd,
-                              fontSize: 20,
+                              fontSize: 18,
                             ),
                           ),
                         ),
@@ -1583,7 +1583,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                 ),
               ],
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
             if (singleInst && curPx > 0)
               _PriceAxisBar(
                 shortCost: shortCost,
@@ -2014,7 +2014,7 @@ class _PriceAxisBar extends StatelessWidget {
                               '总浮动亏损：${formatUiSignedInteger(totalDynUpl)}',
                               textAlign: TextAlign.center,
                               maxLines: 2,
-                              style: floatPlStyle.copyWith(fontSize: 18),
+                              style: floatPlStyle.copyWith(fontSize: 16),
                             ),
                             const SizedBox(height: 12),
 
@@ -2022,7 +2022,7 @@ class _PriceAxisBar extends StatelessWidget {
                               '最新价格： ${_fmtOkxContractPxForUi(liveLastPx)}',
                               textAlign: TextAlign.center,
                               maxLines: 2,
-                              style: curPxStyle.copyWith(fontSize: 18),
+                              style: curPxStyle.copyWith(fontSize: 16),
                             ),
                           ],
                         ),

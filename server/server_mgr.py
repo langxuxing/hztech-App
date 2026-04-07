@@ -117,7 +117,7 @@ def _rsync_deploy_exclude_patterns() -> list[str]:
         "server/seed_mock_account_data.py",
         "server/seed_test_seasons.py",
         "server/seed_test_profit_data.py",
-        "server/Accounts/test_account_key.py",
+        "server/accounts/test_account_key.py",
     ]
 
 

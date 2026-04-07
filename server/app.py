@@ -45,6 +45,7 @@ from tradingbot_ctrl import (
     season_start as strategy_season_start,
     season_stop as strategy_season_stop,
     status as strategy_status,
+    is_running as strategy_is_running,
     BOT_SCRIPTS as _BOT_SCRIPTS,
 )
 
@@ -150,7 +151,7 @@ PROJECT_ROOT = Path(
     os.environ.get("MOBILEAPP_ROOT", Path(__file__).resolve().parent.parent)
 )
 SERVER_DIR = Path(__file__).resolve().parent
-CONFIG_DIR = SERVER_DIR / "Accounts"
+CONFIG_DIR = SERVER_DIR / "accounts"
 # APK 所在目录（可放多个版本），默认项目根下 apk/，对应 AWS 上 hztechapp/apk/
 APK_DIR = Path(os.environ.get("APK_DIR", str(PROJECT_ROOT / "apk")))
 # 资源目录：res 已移至 server/res（密钥、背景图等）
@@ -163,23 +164,17 @@ FLUTTER_WEB_DIR = Path(
         "FLUTTER_WEB_ROOT", str(PROJECT_ROOT / "flutter_app" / "build" / "web")
     )
 )
-# JWT：优先从 DB config 读，否则环境变量
+# JWT：环境变量
 _db.init_db()
 
 
 def _get_jwt_secret() -> str:
-    return _db.config_get("jwt_secret") or os.environ.get(
+    return os.environ.get(
         "JWT_SECRET", "hztech-mobileapp-secret-change-in-production"
     )
 
 
 def _get_jwt_exp_days() -> int:
-    v = _db.config_get("jwt_exp_days")
-    if v is not None:
-        try:
-            return int(v)
-        except (TypeError, ValueError):
-            pass
     return int(os.environ.get("JWT_EXP_DAYS", "7"))
 
 
@@ -240,7 +235,7 @@ def require_auth(f):
 
 
 def _load_tradingbots_config() -> list[dict]:
-    """从 server/Accounts/tradingbots.json 读取交易账户列表，不存在则返回默认两 bot（lhg、hztech）。"""
+    """从 server/accounts/tradingbots.json 读取交易账户列表，不存在则返回默认两 bot（lhg、hztech）。"""
     path = CONFIG_DIR / "tradingbots.json"
     if path.exists():
         try:
@@ -269,8 +264,8 @@ def _load_tradingbots_config() -> list[dict]:
 
 
 def _bot_okx_config_path(bot_id: str) -> Path | None:
-    """仅从 Accounts/tradingbots.json 解析该 bot 的 OKX 配置文件路径，不落库、不缓存、不回退到全局。
-    一切以 Accounts 目录为准：若 account_api_file 未配置或文件不在 CONFIG_DIR 下则返回 None。"""
+    """仅从 accounts/tradingbots.json 解析该 bot 的 OKX 配置文件路径，不落库、不缓存、不回退到全局。
+    一切以 accounts 目录为准：若 account_api_file 未配置或文件不在 CONFIG_DIR 下则返回 None。"""
     bots = _load_tradingbots_config()
     for b in bots:
         if (b.get("tradingbot_id") or "").strip() != bot_id:
@@ -298,7 +293,7 @@ def _live_equity_cash_for_bot(bot_id: str) -> tuple[float, float]:
 
 
 def _job_fetch_account_and_save_snapshots() -> None:
-    """定时任务：按 bot 的 account_api_file 分别拉取账户信息并写入 bot_profit_snapshots（每 10 分钟）。仅用 Accounts 下配置，不回退全局。"""
+    """定时任务：按 bot 的 account_api_file 分别拉取账户信息并写入 tradingbot_profit_snapshots（每 10 分钟）。仅用 accounts 下配置，不回退全局。"""
     bots = _load_tradingbots_config()
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     for b in bots:
@@ -308,7 +303,7 @@ def _job_fetch_account_and_save_snapshots() -> None:
         config_path = _bot_okx_config_path(bot_id)
         if not config_path:
             app.logger.debug(
-                "account_snapshot_skip: bot_id=%s 未在 Accounts 下配置 account_api_file 或文件不存在",
+                "account_snapshot_skip: bot_id=%s 未在 accounts 下配置 account_api_file 或文件不存在",
                 bot_id,
             )
             continue
@@ -316,7 +311,7 @@ def _job_fetch_account_and_save_snapshots() -> None:
             balance = _okx.okx_fetch_balance(config_path=config_path)
             if balance is None:
                 app.logger.info(
-                    "account_snapshot_skip: bot_id=%s config=%s (同一台机若 testapi 正常而此处失败，可对照 Accounts 下同一配置文件)",
+                    "account_snapshot_skip: bot_id=%s config=%s (同一台机若 testapi 正常而此处失败，可对照 accounts 下同一配置文件)",
                     bot_id,
                     config_path.name,
                 )
@@ -356,8 +351,17 @@ def _job_fetch_account_and_save_snapshots() -> None:
             )
 
 
+_account_snapshot_timer_started = False
+_account_snapshot_timer_lock = threading.Lock()
+
+
 def _start_account_snapshot_timer() -> None:
     """后台线程：每 10 分钟执行一次账户快照；启动后 30 秒执行第一次。"""
+    global _account_snapshot_timer_started
+    with _account_snapshot_timer_lock:
+        if _account_snapshot_timer_started:
+            return
+        _account_snapshot_timer_started = True
 
     def _loop() -> None:
         time.sleep(30)
@@ -551,7 +555,7 @@ def _collect_tradingbots_list() -> list[dict]:
     return bots
 
 
-# 交易账户列表：从 server/Accounts/tradingbots.json 读取，运行状态按 bot 分别查询
+# 交易账户列表：从 server/accounts/tradingbots.json 读取，运行状态按 bot 分别查询
 @app.route("/api/tradingbots", methods=["GET"])
 @require_auth
 def api_tradingbots():
@@ -604,6 +608,9 @@ def api_bot_start(bot_id):
     _db.strategy_event_insert(
         bot_id, "start", "manual", getattr(g, "current_username", None)
     )
+    if resp.get("ok"):
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        _db.tradingbot_mgr_session_start(bot_id, ts, ts)
     return jsonify(_bot_op_response(resp, bot_id))
 
 
@@ -627,9 +634,10 @@ def api_bot_stop(bot_id):
         bot_id, "stop", "manual", getattr(g, "current_username", None)
     )
     if resp.get("ok"):
-        final_eq, final_cash = _live_equity_cash_for_bot(bot_id)
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        _db.bot_season_update_on_stop(bot_id, ts, final_eq, final_cash)
+        _db.tradingbot_mgr_session_stop(bot_id, ts, ts)
+        final_eq, final_cash = _live_equity_cash_for_bot(bot_id)
+        _db.account_season_update_on_stop(bot_id, ts, final_eq, final_cash)
     return jsonify(_bot_op_response(resp, bot_id))
 
 
@@ -660,7 +668,15 @@ def api_bot_restart(bot_id):
 def api_bot_season_start(bot_id):
     if bot_id not in CONTROLLABLE_BOT_IDS:
         return jsonify({"success": False, "message": "未知 bot_id"}), 404
-    resp = strategy_season_start(bot_id)
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    eq, cash = _live_equity_cash_for_bot(bot_id)
+    _db.account_season_roll_forward(bot_id, ts, eq, cash)
+
+    start_resp = None
+    if not strategy_is_running(bot_id):
+        start_resp = strategy_start(bot_id)
+
+    shell_resp = strategy_season_start(bot_id)
     _db.log_insert(
         "INFO",
         "season_start_api",
@@ -668,25 +684,52 @@ def api_bot_season_start(bot_id):
         extra={
             "bot_id": bot_id,
             "username": getattr(g, "current_username", None),
-            "ok": resp.get("ok"),
+            "shell_ok": shell_resp.get("ok"),
+            "start_attempted": start_resp is not None,
+            "start_ok": start_resp.get("ok") if start_resp else None,
         },
     )
-    if resp.get("ok"):
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        eq, cash = _live_equity_cash_for_bot(bot_id)
-        _db.bot_season_roll_forward(bot_id, ts, eq, cash)
-        _db.strategy_event_insert(
-            bot_id,
-            "season_start",
-            "manual",
-            getattr(g, "current_username", None),
+    if not shell_resp.get("ok"):
+        _db.log_insert(
+            "WARN",
+            "season_start_shell_failed",
+            source="api",
+            extra={"bot_id": bot_id, "error": shell_resp.get("error")},
         )
-    return jsonify(_bot_op_response(resp, bot_id))
+
+    if start_resp is not None and not start_resp.get("ok"):
+        return jsonify(
+            {
+                "success": False,
+                "message": start_resp.get("error")
+                or start_resp.get("message")
+                or "策略启动失败",
+                "tradingbot_id": bot_id,
+                "status": "stopped",
+            }
+        )
+
+    _db.strategy_event_insert(
+        bot_id,
+        "season_start",
+        "manual",
+        getattr(g, "current_username", None),
+    )
+    running = strategy_is_running(bot_id)
+    return jsonify(
+        {
+            "success": True,
+            "message": shell_resp.get("message") or "赛季已启动",
+            "tradingbot_id": bot_id,
+            "status": "running" if running else "stopped",
+        }
+    )
 
 
 @app.route("/api/tradingbots/<bot_id>/season-stop", methods=["POST"])
 @require_auth
 def api_bot_season_stop(bot_id):
+    """结束当前未结赛季；不强制停止策略进程。"""
     if bot_id not in CONTROLLABLE_BOT_IDS:
         return jsonify({"success": False, "message": "未知 bot_id"}), 404
     resp = strategy_season_stop(bot_id)
@@ -703,7 +746,7 @@ def api_bot_season_stop(bot_id):
     if resp.get("ok"):
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         eq, cash = _live_equity_cash_for_bot(bot_id)
-        _db.bot_season_update_on_stop(bot_id, ts, eq, cash)
+        _db.account_season_update_on_stop(bot_id, ts, eq, cash)
         _db.strategy_event_insert(
             bot_id,
             "season_stop",
@@ -768,7 +811,7 @@ def api_bot_positions(bot_id):
                 "success": True,
                 "bot_id": bot_id,
                 "positions": [],
-                "positions_error": "bot 未在 Accounts/tradingbots.json 配置 account_api_file 或该文件不在 Accounts 目录下",
+                "positions_error": "bot 未在 accounts/tradingbots.json 配置 account_api_file 或该文件不在 accounts 目录下",
             }
         )
     positions, positions_error = _okx.okx_fetch_positions(config_path=config_path)
@@ -803,10 +846,12 @@ def api_bot_positions(bot_id):
 @app.route("/api/tradingbots/<bot_id>/seasons", methods=["GET"])
 @require_auth
 def api_tradingbot_seasons(bot_id):
-    """指定机器人的赛季信息：启停时间、初期金额、盈利、盈利率。"""
+    """赛季列表（库表 account_season，路径 id 与 account_id 一致）：启停时间、初期权益/现金、盈利。"""
     limit = min(int(request.args.get("limit", 50)), 100)
-    rows = _db.bot_season_list_by_bot(bot_id, limit=limit)
-    return jsonify({"success": True, "bot_id": bot_id, "seasons": rows})
+    rows = _db.account_season_list_by_account(bot_id, limit=limit)
+    return jsonify(
+        {"success": True, "bot_id": bot_id, "account_id": bot_id, "seasons": rows}
+    )
 
 
 @app.route("/api/tradingbots/<bot_id>/tradingbot-events", methods=["GET"])

@@ -353,6 +353,7 @@ class DailyRealizedPnlResponse {
     this.year = 0,
     this.month = 0,
     this.days = const [],
+    this.monthTotalPnl,
   });
 
   final bool success;
@@ -361,6 +362,9 @@ class DailyRealizedPnlResponse {
   final int year;
   final int month;
   final List<DailyRealizedPnlDayRow> days;
+
+  /// GET daily-realized-pnl 返回的当月平仓净盈亏合计（与 [days] 汇总一致）
+  final double? monthTotalPnl;
 
   factory DailyRealizedPnlResponse.fromJson(Map<String, dynamic> json) {
     final raw = json['days'];
@@ -372,6 +376,11 @@ class DailyRealizedPnlResponse {
           )
           .toList();
     }
+    final fromServer = (json['month_total_pnl'] as num?)?.toDouble();
+    final sumDays = list.fold<double>(
+      0,
+      (s, e) => s + e.netPnl,
+    );
     return DailyRealizedPnlResponse(
       success: json['success'] as bool? ?? false,
       message: json['message'] as String?,
@@ -379,6 +388,7 @@ class DailyRealizedPnlResponse {
       year: (json['year'] as num?)?.toInt() ?? 0,
       month: (json['month'] as num?)?.toInt() ?? 0,
       days: list,
+      monthTotalPnl: fromServer ?? (list.isNotEmpty ? sumDays : fromServer),
     );
   }
 }
@@ -586,10 +596,10 @@ class OkxPositionsResponse {
   }
 }
 
-/// 赛季：启停时间、初期权益/现金、盈利、盈利率
+/// 赛季：启停时间、初期权益/现金、盈利、盈利率（与 account_season.account_id 对应）
 class BotSeason {
   final int id;
-  final String botId;
+  final String accountId;
   final String? startedAt;
   final String? stoppedAt;
   final double initialBalance;
@@ -603,7 +613,7 @@ class BotSeason {
 
   BotSeason({
     required this.id,
-    required this.botId,
+    required this.accountId,
     this.startedAt,
     this.stoppedAt,
     required this.initialBalance,
@@ -619,7 +629,7 @@ class BotSeason {
   factory BotSeason.fromJson(Map<String, dynamic> json) {
     return BotSeason(
       id: json['id'] as int? ?? 0,
-      botId: json['bot_id'] as String? ?? '',
+      accountId: (json['account_id'] ?? json['bot_id']) as String? ?? '',
       startedAt: json['started_at'] as String?,
       stoppedAt: json['stopped_at'] as String?,
       initialBalance: (json['initial_balance'] as num?)?.toDouble() ?? 0,
@@ -650,7 +660,7 @@ class TradingbotSeasonsResponse {
   factory TradingbotSeasonsResponse.fromJson(Map<String, dynamic> json) {
     return TradingbotSeasonsResponse(
       success: json['success'] as bool? ?? false,
-      botId: json['bot_id'] as String? ?? '',
+      botId: (json['account_id'] ?? json['bot_id']) as String? ?? '',
       seasons:
           (json['seasons'] as List<dynamic>?)
               ?.map((e) => BotSeason.fromJson(e as Map<String, dynamic>))
@@ -1020,6 +1030,9 @@ class AccountConfigRow {
     dynamic raw = json['enbaled'];
     if (raw == null && json.containsKey('enabled')) {
       raw = json['enabled'];
+    }
+    if (raw == null && json.containsKey('enable')) {
+      raw = json['enable'];
     }
     bool ev = true;
     if (raw is bool) {

@@ -9,7 +9,7 @@ import '../utils/number_display_format.dart';
 import '../widgets/water_background.dart';
 
 /// 交易机器人：列表来自 main.py /api/tradingbots（Account_List + tradingbots.json），
-/// 启停走 script_file（如 botctrl/moneyflow_alangsandbox.sh start|stop）。
+/// 启停走 script_file（如 tradingbot_ctrl/moneyflow_alangsandbox.sh start|stop）。
 class TradingBotControl extends StatefulWidget {
   const TradingBotControl({super.key, this.embedInShell = false});
 
@@ -333,7 +333,7 @@ class _TradingBotControlState extends State<TradingBotControl> {
                                               if (!bot.canControl) ...[
                                                 const SizedBox(height: 6),
                                                 Text(
-                                                  '未配置 Accounts 目录下的启停脚本（script_file）',
+                                                  '未配置 accounts 目录下的启停脚本（script_file）',
                                                   style: Theme.of(context)
                                                       .textTheme
                                                       .bodySmall

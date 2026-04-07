@@ -6,13 +6,14 @@ import '../api/client.dart';
 import '../api/models.dart';
 import '../auth/app_user_role.dart';
 import '../secure/prefs.dart';
+import '../services/okx_public_ticker_ws.dart';
 import '../theme/finance_style.dart';
 import '../utils/number_display_format.dart';
 import '../widgets/equity_cash_percent_line_chart.dart';
 import '../widgets/month_end_profit_panel.dart';
 import '../widgets/water_background.dart';
 
-/// APK「账户收益」（客户视图）：账户选择 → 账户盈利信息总览 → 现金（日历 / 曲线 / 每日）→ 权益（日历 / 曲线 / 每日）。
+/// APK「账户收益」（客户视图）：账户选择 → 账户盈利信息总览 → 当前持仓 → 现金（日历 / 曲线 / 每日）→ 权益（日历 / 曲线 / 每日）。
 class AccountProfitScreen extends StatefulWidget {
   const AccountProfitScreen({
     super.key,
@@ -43,6 +44,12 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
   bool _loading = true;
   String? _error;
   Timer? _autoRefreshTimer;
+  OkxPublicTickerWs? _tickerWs;
+  StreamSubscription<double>? _tickerSub;
+  double? _liveLastPx;
+  String? _tickerSubscribedInstId;
+  List<OkxPosition> _positions = [];
+  String? _positionsLoadError;
   static const String _defaultBotId = 'simpleserver';
   static const double _kUnifiedChartBandHeight = 420;
 
@@ -53,7 +60,20 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
   final TextEditingController _noDropdownAccountController =
       TextEditingController();
 
-  /// 保持当前选中账户，拉取最新收益、曲线、持仓与赛季（用于定时刷新与下拉切换后的全量刷新）
+  /// 切换账户时递增，用于丢弃过期的异步结果与日历同步。
+  int _accountSwitchGeneration = 0;
+
+  /// 立即断开 OKX 公共 ticker WS（切换账户须先于新请求调用，避免旧连接推送干扰）。
+  void _disconnectOkxPublicTicker() {
+    _tickerSub?.cancel();
+    _tickerSub = null;
+    _tickerWs?.dispose();
+    _tickerWs = null;
+    _tickerSubscribedInstId = null;
+    _liveLastPx = null;
+  }
+
+  /// 保持当前选中账户，拉取最新收益、曲线与持仓（用于定时刷新与下拉切换后的全量刷新）
   Future<void> _refreshLatestData() async {
     if (!mounted || _loading) return;
     final list = _bots.isNotEmpty ? _bots : widget.sharedBots;
@@ -63,24 +83,31 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
         (list.isNotEmpty ? list.first.tradingbotId : null) ??
         (isCustomer ? null : _defaultBotId);
     if (botId == null || botId.isEmpty) return;
+    final g = _accountSwitchGeneration;
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
+      if (!mounted || g != _accountSwitchGeneration) return;
       final api = ApiClient(baseUrl, token: token);
-      final phase2 = await Future.wait([
+      final batch = await Future.wait([
         api.getAccountProfit(),
         api.getBotProfitHistory(botId, limit: 500),
+        api.getTradingbotPositions(botId),
       ]);
-      if (!mounted) return;
-      final profitResp = phase2[0] as AccountProfitResponse;
-      final historyResp = phase2[1] as BotProfitHistoryResponse;
+      if (!mounted || g != _accountSwitchGeneration) return;
+      final profitResp = batch[0] as AccountProfitResponse;
+      final historyResp = batch[1] as BotProfitHistoryResponse;
+      final posResp = batch[2] as OkxPositionsResponse;
       setState(() {
         _accounts = profitResp.accounts ?? [];
         _snapshots = historyResp.snapshots;
+        _positions = posResp.positions;
+        _positionsLoadError = posResp.positionsError;
         _equityMetricsMonth = null;
         _cashMetricsMonth = null;
       });
       unawaited(_syncCalendarCloseCounts());
+      _syncOkxTickerSubscription();
     } catch (_) {
       // 后台轮询失败不打扰主流程
     }
@@ -93,7 +120,6 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
       _error = null;
     });
     try {
-      // 并行读配置，减少首包延迟
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
       final api = ApiClient(baseUrl, token: token);
@@ -141,27 +167,42 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
         _loading = false;
       });
 
-      // 阶段二：账户收益 + 历史（不经过 OKX 直连，通常较快）
+      // 阶段二：收益、历史、持仓并行（缩短首屏等待）
       try {
-        final profitResp = await api.getAccountProfit();
-        final historyResp = (botId != null && botId.isNotEmpty)
-            ? await api.getBotProfitHistory(botId, limit: 500)
-            : BotProfitHistoryResponse(
-                success: true,
-                botId: '',
-                snapshots: const [],
-              );
-        if (!mounted) return;
-        setState(() {
-          _accounts = profitResp.accounts ?? [];
-          _snapshots = historyResp.snapshots;
-          _equityMetricsMonth = null;
-          _cashMetricsMonth = null;
-        });
-        unawaited(_syncCalendarCloseCounts());
+        if (botId != null && botId.isNotEmpty) {
+          final out = await Future.wait([
+            api.getAccountProfit(),
+            api.getBotProfitHistory(botId, limit: 500),
+            api.getTradingbotPositions(botId),
+          ]);
+          if (!mounted) return;
+          final profitResp = out[0] as AccountProfitResponse;
+          final historyResp = out[1] as BotProfitHistoryResponse;
+          final posResp = out[2] as OkxPositionsResponse;
+          setState(() {
+            _accounts = profitResp.accounts ?? [];
+            _snapshots = historyResp.snapshots;
+            _positions = posResp.positions;
+            _positionsLoadError = posResp.positionsError;
+            _equityMetricsMonth = null;
+            _cashMetricsMonth = null;
+          });
+          unawaited(_syncCalendarCloseCounts());
+          _syncOkxTickerSubscription();
+        } else {
+          final profitResp = await api.getAccountProfit();
+          if (!mounted) return;
+          setState(() {
+            _accounts = profitResp.accounts ?? [];
+            _snapshots = const [];
+            _equityMetricsMonth = null;
+            _cashMetricsMonth = null;
+          });
+          unawaited(_syncCalendarCloseCounts());
+        }
       } catch (e) {
         if (mounted) {
-          setState(() => _error = '收益/历史加载失败: $e');
+          setState(() => _error = '收益/历史/持仓加载失败: $e');
         }
       }
     } catch (e) {
@@ -174,28 +215,44 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
   }
 
   Future<void> _loadForBot(String botId) async {
-    setState(() => _selectedBotId = botId);
+    _disconnectOkxPublicTicker();
+    final g = ++_accountSwitchGeneration;
+    setState(() {
+      _selectedBotId = botId;
+      _positions = [];
+      _positionsLoadError = null;
+      _error = null;
+    });
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
+      if (!mounted || g != _accountSwitchGeneration) return;
       final api = ApiClient(baseUrl, token: token);
-      final results = await Future.wait([
+
+      final phase1 = await Future.wait([
         api.getAccountProfit(),
         api.getBotProfitHistory(botId, limit: 500),
       ]);
-      if (!mounted) return;
-      final profitResp = results[0] as AccountProfitResponse;
-      final historyResp = results[1] as BotProfitHistoryResponse;
+      if (!mounted || g != _accountSwitchGeneration) return;
+      final profitResp = phase1[0] as AccountProfitResponse;
+      final historyResp = phase1[1] as BotProfitHistoryResponse;
       setState(() {
         _accounts = profitResp.accounts ?? [];
         _snapshots = historyResp.snapshots;
-        _error = null;
         _equityMetricsMonth = null;
         _cashMetricsMonth = null;
       });
       unawaited(_syncCalendarCloseCounts());
+
+      final phase2 = await api.getTradingbotPositions(botId);
+      if (!mounted || g != _accountSwitchGeneration) return;
+      setState(() {
+        _positions = phase2.positions;
+        _positionsLoadError = phase2.positionsError;
+      });
+      _syncOkxTickerSubscription();
     } catch (e) {
-      if (mounted) {
+      if (mounted && g == _accountSwitchGeneration) {
         setState(() => _error = '切换账户后加载失败: $e');
       }
     }
@@ -228,6 +285,12 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.periodicRefreshActive != widget.periodicRefreshActive) {
       _syncAutoRefreshTimer();
+      if (!widget.periodicRefreshActive) {
+        _disconnectOkxPublicTicker();
+        if (mounted) setState(() {});
+      } else if (mounted) {
+        _syncOkxTickerSubscription();
+      }
     }
     // MainScreen 异步加载完 bots 后下发，同步到本页以显示下拉框
     if (widget.sharedBots.isNotEmpty &&
@@ -244,8 +307,73 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
   @override
   void dispose() {
     _noDropdownAccountController.dispose();
+    _disconnectOkxPublicTicker();
     _autoRefreshTimer?.cancel();
     super.dispose();
+  }
+
+  /// 仅单合约持仓时连接 OKX 公共 WS 推送现价；切换标的或清空持仓时断开（与 Web 账户画像一致）。
+  void _syncOkxTickerSubscription() {
+    if (!mounted) return;
+    final ids = _positions
+        .map((e) => e.instId)
+        .where((e) => e.isNotEmpty)
+        .toSet();
+    final singleInst = ids.length == 1 ? ids.first : null;
+
+    if (singleInst == null) {
+      final had = _liveLastPx != null;
+      _disconnectOkxPublicTicker();
+      if (had) {
+        setState(() {});
+      }
+      return;
+    }
+
+    if (_tickerSubscribedInstId == singleInst &&
+        _tickerWs != null &&
+        _tickerSub != null) {
+      return;
+    }
+
+    final prevInst = _tickerSubscribedInstId;
+    _tickerSub?.cancel();
+    _tickerSub = null;
+    _tickerWs?.dispose();
+    _tickerWs = OkxPublicTickerWs();
+    _tickerSubscribedInstId = singleInst;
+    if (prevInst != singleInst) {
+      _liveLastPx = null;
+    }
+    _tickerWs!.subscribe(singleInst);
+    final stream = _tickerWs!.priceStream;
+    if (stream != null) {
+      _tickerSub = stream.listen((px) {
+        if (mounted) setState(() => _liveLastPx = px);
+      });
+    }
+  }
+
+  double _dynUplFor(OkxPosition p, double last) {
+    final mark = p.markPx;
+    final avg = p.avgPx;
+    final denom = mark - avg;
+    if (denom.abs() < 1e-12) return p.upl;
+    return p.upl * (last - avg) / denom;
+  }
+
+  double _totalDynUpl(Iterable<OkxPosition> ps, double last) =>
+      ps.fold<double>(0, (s, p) => s + _dynUplFor(p, last));
+
+  double _singleInstQuotePx() {
+    for (final p in _positions) {
+      final d = p.displayPrice;
+      if (d > 0) return d;
+    }
+    for (final p in _positions) {
+      if (p.markPx > 0) return p.markPx;
+    }
+    return 0;
   }
 
   String _fmt(double v) => formatUiInteger(v);
@@ -295,13 +423,14 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
   }
 
   Future<void> _syncCalendarCloseCounts() async {
+    final gen = _accountSwitchGeneration;
     final list = _bots.isNotEmpty ? _bots : widget.sharedBots;
     final botId = _selectedBotId ??
         (list.isNotEmpty ? list.first.tradingbotId : null) ??
         _defaultBotId;
     final snap = _snapshots;
     if (snap.isEmpty) {
-      if (!mounted) return;
+      if (!mounted || gen != _accountSwitchGeneration) return;
       setState(() {
         _equityCalendarCloseCounts = null;
         _cashCalendarCloseCounts = null;
@@ -311,12 +440,13 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
+      if (!mounted || gen != _accountSwitchGeneration) return;
       final api = ApiClient(baseUrl, token: token);
       final eq = _equityMonthFor(snap);
       final cash = _cashMonthFor(snap);
       if (eq.year == cash.year && eq.month == cash.month) {
         final r = await api.getDailyRealizedPnl(botId, eq.year, eq.month);
-        if (!mounted) return;
+        if (!mounted || gen != _accountSwitchGeneration) return;
         if (!r.success) {
           setState(() {
             _equityCalendarCloseCounts = null;
@@ -332,7 +462,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
       } else {
         final rEq = await api.getDailyRealizedPnl(botId, eq.year, eq.month);
         final rCash = await api.getDailyRealizedPnl(botId, cash.year, cash.month);
-        if (!mounted) return;
+        if (!mounted || gen != _accountSwitchGeneration) return;
         setState(() {
           _equityCalendarCloseCounts = rEq.success
               ? dailyCloseCountsMapForMonth(rEq.days, eq.year, eq.month)
@@ -343,7 +473,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
         });
       }
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || gen != _accountSwitchGeneration) return;
       setState(() {
         _equityCalendarCloseCounts = null;
         _cashCalendarCloseCounts = null;
@@ -523,12 +653,14 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
             padding: EdgeInsets.symmetric(vertical: 24),
             child: Center(
               child: Text(
-                '暂无账户数据，请确认后端 Accounts 已配置交易账户',
+                '暂无账户数据，请确认后端 accounts 已配置交易账户',
                 style: TextStyle(color: Colors.white70),
               ),
             ),
           ),
         _buildProfitOverview(),
+        const SizedBox(height: 28),
+        _buildPositionsSection(),
         const SizedBox(height: 28),
         _buildCashCustomerSections(),
         const SizedBox(height: 28),
@@ -626,7 +758,15 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
     final bot = _currentUnifiedBot;
     final equity = a.equityUsdt;
     final balance = a.balanceUsdt;
-    final floating = a.floatingProfit;
+    final singleInst =
+        _positions.isNotEmpty &&
+        _positions.map((p) => p.instId).toSet().length == 1;
+    final curPx = singleInst && _positions.isNotEmpty
+        ? (_liveLastPx ?? _singleInstQuotePx())
+        : 0.0;
+    final floating = singleInst && curPx > 0
+        ? _totalDynUpl(_positions, curPx)
+        : a.floatingProfit;
     final rate = a.profitPercent;
     final rateColor = rate >= 0 ? AppFinanceStyle.profitGreenEnd : Colors.red;
     final titleSize =
@@ -668,7 +808,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
               final chipFl = _overviewChip(
                 context,
                 '浮动盈亏',
-                _fmt(floating),
+                formatUiSignedInteger(floating),
                 titleSize: titleSize,
                 valueColor: floating >= 0
                     ? AppFinanceStyle.profitGreenEnd
@@ -728,6 +868,87 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
               );
             },
           ),
+        ],
+      ),
+    );
+  }
+
+  /// 当前持仓与每腿浮动（与 Web「账户画像」同源接口；单合约时浮动与总览「浮动盈亏」一致）。
+  Widget _buildPositionsSection() {
+    if (_selectedAccount == null) return const SizedBox.shrink();
+    final positions = _positions;
+    final singleInst =
+        positions.isNotEmpty &&
+        positions.map((p) => p.instId).toSet().length == 1;
+    final curPx = singleInst && positions.isNotEmpty
+        ? (_liveLastPx ?? _singleInstQuotePx())
+        : 0.0;
+    final totalFloating = singleInst && curPx > 0
+        ? _totalDynUpl(positions, curPx)
+        : positions.fold<double>(0, (s, p) => s + p.upl);
+
+    return _glassCard(
+      Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _sectionTitle('当前持仓'),
+          const SizedBox(height: 12),
+          if (_positionsLoadError != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                _positionsLoadError!,
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.error,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          if (positions.isEmpty && _positionsLoadError == null)
+            Text(
+              '暂无持仓',
+              style: AppFinanceStyle.labelTextStyle(context),
+            ),
+          if (positions.isNotEmpty) ...[
+            Text(
+              '合计浮动盈亏：${formatUiSignedInteger(totalFloating)}',
+              style: AppFinanceStyle.valueTextStyle(context, fontSize: 18)
+                  .copyWith(
+                color: totalFloating >= 0
+                    ? AppFinanceStyle.profitGreenEnd
+                    : Colors.redAccent,
+              ),
+            ),
+            const SizedBox(height: 12),
+            ...positions.map((p) {
+              final side = p.posSide == 'long' ? '多' : '空';
+              final lineUpl =
+                  singleInst && curPx > 0 ? _dynUplFor(p, curPx) : p.upl;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${p.instId} · $side · ${formatUiInteger(p.pos)}',
+                        style: AppFinanceStyle.labelTextStyle(context),
+                      ),
+                    ),
+                    Text(
+                      formatUiSignedInteger(lineUpl),
+                      style: AppFinanceStyle.valueTextStyle(context, fontSize: 16)
+                          .copyWith(
+                        color: lineUpl >= 0
+                            ? AppFinanceStyle.profitGreenEnd
+                            : Colors.redAccent,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
+          ],
         ],
       ),
     );

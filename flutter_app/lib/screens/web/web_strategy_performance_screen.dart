@@ -993,6 +993,7 @@ class _WebStrategyPerformanceScreenState
       );
     }
     final rows = _limitRowsToRecentDays(eff.rows, _efficiencyDays);
+    // cash_basis：account_snapshots_cash 为历史枚举名；服务端数据来自表 account_balance_snapshots。
     final cashNote = switch (eff.cashBasis) {
       'account_snapshots_cash' => '现金变动来自（availEq），按自然日汇总。',
       'bot_profit_equity' => '日权益变动来自（equity），与收益曲线同源；按自然日汇总。',

@@ -1213,7 +1213,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                         if (widget.bot != null && !widget.bot!.canControl) ...[
                           const SizedBox(height: 6),
                           Text(
-                            '未配置 Accounts 目录下的启停脚本（script_file）',
+                            '未配置 accounts 目录下的启停脚本（script_file）',
                             style: Theme.of(context).textTheme.bodySmall
                                 ?.copyWith(
                                   color: Theme.of(context).colorScheme.outline,

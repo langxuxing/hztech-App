@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-模拟交易机器人脚本核心：供 botctrl 下各 .sh 调用（Account_List 的 script_file，如 botctrl/xxx.sh）。
+模拟交易机器人脚本核心：供 tradingbot_ctrl 下各 .sh 调用（Account_List 的 script_file，如 tradingbot_ctrl/xxx.sh）。
 
 子命令：
   start         前台常驻（exec），供 tradingbot_ctrl 跟踪 PID；写日志
   stop          结束进程（读 .pid），写日志
   restart       先 stop 再 exec start
   checkhealth   打印 JSON：运行状态、未结束赛季等；写日志
-  season-start  日志 + JSON（bot_seasons 由服务端 POST /season-start 在脚本成功后写入）
+  season-start  日志 + JSON（account_season 由服务端 POST /season-start 在脚本成功后写入）
   season-stop   日志 + JSON（停赛写库由服务端 POST /season-stop 完成）
 
 环境变量：
@@ -24,8 +24,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-BOTCTRL_DIR = Path(__file__).resolve().parent
-ACCOUNTS_DIR = BOTCTRL_DIR.parent
+TRADINGBOT_CTRL_DIR = Path(__file__).resolve().parent
+ACCOUNTS_DIR = TRADINGBOT_CTRL_DIR.parent
 SERVER_DIR = ACCOUNTS_DIR.parent
 if str(SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(SERVER_DIR))
@@ -65,7 +65,7 @@ def _import_db():
 
 
 def _import_account_mgr():
-    from Accounts import AccountMgr as _am
+    from accounts import AccountMgr as _am
 
     return _am
 
@@ -255,7 +255,7 @@ def cmd_checkhealth() -> int:
     label = _script_label()
     pids = _read_pids_from_file(aid)
     running = any(_pid_is_alive(p) for p in pids)
-    seasons = db.bot_season_list_by_bot(aid, limit=5)
+    seasons = db.account_season_list_by_account(aid, limit=5)
     open_season = None
     for s in seasons:
         if s.get("stopped_at") is None:
@@ -287,7 +287,7 @@ def cmd_checkhealth() -> int:
 
 
 def cmd_season_start() -> int:
-    """赛季写库由服务端 POST season-start 在脚本成功后统一执行；此处仅日志/JSON，避免与 API 重复入库。"""
+    """赛季写库由服务端 POST season-start 先写 account_season 再按需启动进程后调用本脚本；此处仅日志/JSON。"""
     db = _import_db()
     aid = _account_id_required()
     label = _script_label()

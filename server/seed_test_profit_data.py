@@ -54,14 +54,14 @@ def seed():
     conn = db.get_conn()
     try:
         for bot_id in BOT_IDS:
-            conn.execute("DELETE FROM bot_profit_snapshots WHERE bot_id = ?", (bot_id,))
+            conn.execute("DELETE FROM tradingbot_profit_snapshots WHERE bot_id = ?", (bot_id,))
         conn.commit()
 
         for bot_id in BOT_IDS:
             rows = _generate_month_snapshots(bot_id)
             for r in rows:
                 conn.execute(
-                    """INSERT INTO bot_profit_snapshots
+                    """INSERT INTO tradingbot_profit_snapshots
                        (bot_id, snapshot_at, initial_balance, current_balance, equity_usdt, profit_amount, profit_percent)
                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
                     r,

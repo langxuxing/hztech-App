@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """交易机器人进程管控：
 - 旧版：server/simpleserver-lhg.py、simpleserver-hztech.py（nohup python3）
-- Account_List：script_file 指向 Accounts 目录下 .sh，通过 `bash script start|stop` 启停，
-  并写入 Accounts/.bot_run/<account_id>.pid 跟踪 PID。
+- Account_List：script_file 指向 accounts 目录下 .sh，通过 `bash script start|stop` 启停，
+  并写入 accounts/.bot_run/<account_id>.pid 跟踪 PID。
 """
 from __future__ import annotations
 
@@ -34,8 +34,8 @@ def _safe_pid_tag(account_id: str) -> str:
 
 
 def load_account_shell_map() -> dict[str, Path]:
-    """Account_List 中已启用且 script_file 在 Accounts 目录存在的账户 -> 脚本绝对路径。"""
-    from Accounts import AccountMgr as _am
+    """Account_List 中已启用且 script_file 在 accounts 目录存在的账户 -> 脚本绝对路径。"""
+    from accounts import AccountMgr as _am
 
     out: dict[str, Path] = {}
     for basic in _am.list_account_basics(enabled_only=True):
@@ -58,8 +58,21 @@ def controllable_bot_ids() -> set[str]:
     return set(BOT_SCRIPTS.keys()) | set(load_account_shell_map().keys())
 
 
+def is_running(bot_id: str) -> bool:
+    """当前进程是否视为在运行（shell 账户读 .pid；旧版 bot 用 pgrep）。"""
+    bid = (bot_id or "").strip()
+    if not bid:
+        return False
+    shell_map = load_account_shell_map()
+    if bid in shell_map:
+        return len(_find_pids_shell(bid)) > 0
+    if bid in BOT_SCRIPTS:
+        return len(_find_pids(bid)) > 0
+    return False
+
+
 def _pid_file(account_id: str) -> Path:
-    from Accounts import AccountMgr as _am
+    from accounts import AccountMgr as _am
 
     d = _am.ACCOUNTS_DIR / ".bot_run"
     d.mkdir(parents=True, exist_ok=True)
@@ -133,7 +146,7 @@ def _find_pids_shell(account_id: str) -> list[int]:
 
 
 def start_shell_bot(account_id: str, script_abs: Path) -> dict:
-    """`bash script start`，PID 写入 Accounts/.bot_run。"""
+    """`bash script start`，PID 写入 accounts/.bot_run。"""
     root = _project_root()
     if not script_abs.is_file():
         return {"ok": False, "error": f"脚本不存在: {script_abs}"}
@@ -331,7 +344,7 @@ def restart(bot_id: str) -> dict:
 
 
 def run_shell_season_action(account_id: str, script_abs: Path, action: str) -> dict:
-    """同步执行 `bash script season-start|season-stop`（无 PID；由脚本写库与日志）。"""
+    """同步执行 `bash script season-start|season-stop`（日志/JSON；赛季写库由 API 侧 account_season_* 完成）。"""
     root = _project_root()
     if not script_abs.is_file():
         return {"ok": False, "error": f"脚本不存在: {script_abs}"}
@@ -364,7 +377,7 @@ def season_start(bot_id: str) -> dict:
     if bot_id in BOT_SCRIPTS:
         return {
             "ok": False,
-            "error": "该 bot 未配置 Accounts script_file，暂不支持 API 赛季操作",
+            "error": "该 bot 未配置 accounts script_file，暂不支持 API 赛季操作",
         }
     return {"ok": False, "error": f"未知 bot_id: {bot_id}"}
 
@@ -377,7 +390,7 @@ def season_stop(bot_id: str) -> dict:
     if bot_id in BOT_SCRIPTS:
         return {
             "ok": False,
-            "error": "该 bot 未配置 Accounts script_file，暂不支持 API 赛季操作",
+            "error": "该 bot 未配置 accounts script_file，暂不支持 API 赛季操作",
         }
     return {"ok": False, "error": f"未知 bot_id: {bot_id}"}
 

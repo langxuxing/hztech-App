@@ -63,6 +63,12 @@ enum AppUserRole {
       this == AppUserRole.trader ||
       this == AppUserRole.admin;
 
+  /// Web「绩效对比表」：多账户持仓与月度平仓对比（策略分析师、交易员、管理员；与客户无关）
+  bool get canViewAccountPerformanceComparison =>
+      this == AppUserRole.strategyAnalyst ||
+      this == AppUserRole.trader ||
+      this == AppUserRole.admin;
+
   /// Web 侧栏「账户收益与详情」「策略能效评估」等（客户仅能看到已绑定账户，由接口过滤）
   bool get canViewStrategyPerformance =>
       this == AppUserRole.customer ||

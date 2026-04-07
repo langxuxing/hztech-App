@@ -25,7 +25,7 @@ sys.path.insert(0, __import__("os").path.abspath(_server_dir))
 
 
 def _enabled_account_ids_from_mgr() -> list[str]:
-    from Accounts import AccountMgr as am
+    from accounts import AccountMgr as am
 
     return [
         str(x["account_id"]).strip()
@@ -127,7 +127,7 @@ class TestMainAccountMgrE2E:
         self, client, auth_headers
     ):
         """无密钥文件时 resolve_okx_config_path 为 None，与 positions 错误文案一致。"""
-        from Accounts import AccountMgr as am
+        from accounts import AccountMgr as am
 
         mgr_ids = _enabled_account_ids_from_mgr()
         if not mgr_ids:
@@ -152,7 +152,7 @@ class TestMainAccountMgrE2E:
         self, client, auth_headers
     ):
         """enbaled=false 的 Account_List OKX 账户：持仓接口不访问 OKX，返回禁用说明。"""
-        from Accounts import AccountMgr as am
+        from accounts import AccountMgr as am
 
         disabled_id = None
         for row in am.load_account_list():
