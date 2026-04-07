@@ -1,5 +1,5 @@
 # 测试依赖。安装后可在项目根执行: pytest test/
-# 若需完整后台依赖，请再安装: pip install -r server/requirements.txt
+# 若需完整后台依赖，请再安装: pip install -r baasapi/requirements.txt
 #
 # 若本机全局装有旧版 pytest-asyncio，可能出现:
 #   ImportError: cannot import name 'Config' from 'pytest'

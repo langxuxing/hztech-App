@@ -66,8 +66,9 @@ class _AccountsListState extends State<AccountsList> {
     return list;
   }
 
-  /// 与 Web「账户总览」汇总条一致：总权益、总权益盈亏、整体收益率 = 总盈利 ÷ 总期初 × 100。
-  int get _aggregateAccountCount => _accounts.length;
+  /// 与 Web「账户总览」汇总条一致：期末资产等为各账户加总；盈利率 = 总盈利 ÷ 总期初 × 100。
+  double get _aggregateInitialSum =>
+      _accounts.fold<double>(0, (s, a) => s + a.initialBalance);
 
   double get _aggregateTotalEquity =>
       _accounts.fold<double>(0, (s, a) => s + a.equityUsdt);
@@ -344,88 +345,39 @@ class _AccountsListState extends State<AccountsList> {
                   children: [
                     if (_accounts.isNotEmpty)
                       FinanceCard(
-                        padding: const EdgeInsets.all(16),
+                        padding: AppFinanceStyle.mobileSummaryStripPadding,
                         child: Builder(
                           builder: (context) {
-                            final labelStyle = Theme.of(context)
-                                .textTheme
-                                .bodyMedium
-                                ?.copyWith(color: AppFinanceStyle.labelColor);
-                            final titleSize =
-                                (Theme.of(context).textTheme.titleLarge
-                                            ?.fontSize ??
-                                        22) +
-                                    2;
-                            final profit = _aggregateTotalProfit;
                             final pct = _aggregateReturnPercent;
-                            Widget cell(
-                              String label,
-                              String value,
-                              Color? valueColor,
-                            ) {
-                              final vColor =
-                                  valueColor ?? AppFinanceStyle.profitGreenEnd;
-                              return Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(label, style: labelStyle),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    value,
-                                    style: (Theme.of(context)
-                                                .textTheme.titleLarge ??
-                                            const TextStyle())
-                                        .copyWith(
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: titleSize,
-                                          color: vColor,
-                                          letterSpacing: 0,
-                                        ),
-                                  ),
-                                ],
-                              );
-                            }
-
-                            return Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                            final pctColor = pct >= 0
+                                ? AppFinanceStyle.textProfit
+                                : AppFinanceStyle.textLoss;
+                            return Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Row(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Expanded(
-                                      child: cell(
-                                        '总数',
-                                        '$_aggregateAccountCount',
-                                        null,
-                                      ),
-                                    ),
-                                    Expanded(
-                                      child: cell(
-                                        '总金额',
-                                        formatUiInteger(_aggregateTotalEquity),
-                                        null,
-                                      ),
-                                    ),
-
-                                    Expanded(
-                                      child: cell(
-                                        '总盈利',
-                                        formatUiInteger(profit),
-                                        profit >= 0
-                                            ? AppFinanceStyle.textProfit
-                                            : AppFinanceStyle.textLoss,
-                                      ),
-                                    ),
-                                    Expanded(
-                                      child: cell(
-                                        '平均收益率',
-                                        formatUiPercentLabel(pct),
-                                        pct >= 0
-                                            ? AppFinanceStyle.textProfit
-                                            : AppFinanceStyle.textLoss,
-                                      ),
-                                    ),
-                                  ],
+                                Expanded(
+                                  child: AppFinanceStyle.mobileSummaryStackCell(
+                                    context,
+                                    label: '月初',
+                                    value: formatUiInteger(_aggregateInitialSum),
+                                    valueColor: AppFinanceStyle.valueColor,
+                                  ),
+                                ),
+                                Expanded(
+                                  child: AppFinanceStyle.mobileSummaryStackCell(
+                                    context,
+                                    label: '资产余额',
+                                    value: formatUiInteger(_aggregateTotalEquity),
+                                    valueColor: AppFinanceStyle.valueColor,
+                                  ),
+                                ),
+                                Expanded(
+                                  child: AppFinanceStyle.mobileSummaryStackCell(
+                                    context,
+                                    label: '盈利率',
+                                    value: formatUiPercentLabel(pct),
+                                    valueColor: pctColor,
+                                  ),
                                 ),
                               ],
                             );
@@ -435,16 +387,19 @@ class _AccountsListState extends State<AccountsList> {
                     if (_accounts.isNotEmpty) const SizedBox(height: 20),
                     Text(
                       '账户概览',
-                      style: (Theme.of(context).textTheme.titleLarge ??
-                              const TextStyle())
-                          .copyWith(
-                            color: AppFinanceStyle.labelColor,
-                            fontSize:
-                                (Theme.of(context).textTheme.titleLarge?.fontSize ??
+                      style:
+                          (Theme.of(context).textTheme.titleLarge ??
+                                  const TextStyle())
+                              .copyWith(
+                                color: AppFinanceStyle.labelColor,
+                                fontSize:
+                                    (Theme.of(
+                                          context,
+                                        ).textTheme.titleLarge?.fontSize ??
                                         22) +
                                     2,
-                            fontWeight: FontWeight.w600,
-                          ),
+                                fontWeight: FontWeight.w600,
+                              ),
                     ),
                     const SizedBox(height: 12),
                     if (_accounts.isEmpty)
@@ -491,16 +446,17 @@ class _AccountsListState extends State<AccountsList> {
                                           color: AppFinanceStyle.labelColor,
                                         );
                                     final titleSize =
-                                        (Theme.of(context)
-                                                    .textTheme
-                                                    .titleLarge
-                                                    ?.fontSize ??
-                                                22) +
-                                            2;
+                                        (Theme.of(
+                                              context,
+                                            ).textTheme.titleLarge?.fontSize ??
+                                            22) +
+                                        2;
                                     final upl = _floatingForAccount(a);
                                     final pct = a.profitPercent;
                                     TextStyle metricValue(Color c) =>
-                                        (Theme.of(context).textTheme.titleMedium ??
+                                        (Theme.of(
+                                                  context,
+                                                ).textTheme.titleMedium ??
                                                 const TextStyle())
                                             .copyWith(
                                               color: c,
@@ -513,14 +469,17 @@ class _AccountsListState extends State<AccountsList> {
                                       children: [
                                         Text(
                                           _accountTitle(a),
-                                          style: (Theme.of(context)
-                                                      .textTheme.titleLarge ??
-                                                  const TextStyle())
-                                              .copyWith(
-                                                fontWeight: FontWeight.w800,
-                                                fontSize: titleSize,
-                                                color: AppFinanceStyle.valueColor,
-                                              ),
+                                          style:
+                                              (Theme.of(
+                                                        context,
+                                                      ).textTheme.titleLarge ??
+                                                      const TextStyle())
+                                                  .copyWith(
+                                                    fontWeight: FontWeight.w800,
+                                                    fontSize: titleSize,
+                                                    color: AppFinanceStyle
+                                                        .valueColor,
+                                                  ),
                                         ),
                                         const SizedBox(height: 12),
                                         Row(

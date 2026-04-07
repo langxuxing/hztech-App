@@ -267,7 +267,6 @@ class _TradingBotControlState extends State<TradingBotControl> {
 
   static const _barBg = AppFinanceStyle.backgroundDark;
   static const _barTextColor = AppFinanceStyle.valueColor;
-  static const _durationMuted = Color(0xFF8FA9A5);
 
   static bool _botErrored(UnifiedTradingBot b) {
     final s = b.status.toLowerCase();
@@ -372,7 +371,9 @@ class _TradingBotControlState extends State<TradingBotControl> {
                           fontSize: 16,
                         ).copyWith(
                           fontWeight: FontWeight.w600,
-                          color: _durationMuted,
+                          color: AppFinanceStyle.textDefault.withValues(
+                            alpha: 0.72,
+                          ),
                           letterSpacing: 0.5,
                           fontFeatures: const [FontFeature.tabularFigures()],
                         );
@@ -523,10 +524,17 @@ class _TradingBotControlState extends State<TradingBotControl> {
                                   running: running,
                                   errored: _botErrored(bot),
                                 ),
-                                if (bot.canControl) ...[
-                                  const SizedBox(height: 10),
-                                  _buildStrategyStartStopColumn(bot),
-                                ],
+                                SizedBox(height: 24),
+                                if (bot.canControl)
+                                  Expanded(
+                                    child: Column(
+                                      mainAxisAlignment: MainAxisAlignment.end,
+                                      children: [
+                                        const SizedBox(height: 10),
+                                        _buildStrategyStartStopColumn(bot),
+                                      ],
+                                    ),
+                                  ),
                               ],
                             ),
                           ],
@@ -628,9 +636,9 @@ class _RunStatusChip extends StatelessWidget {
   final bool errored;
 
   Color get _accent {
-    if (errored) return const Color(0xFFFFA726);
+    if (errored) return AppFinanceStyle.textLoss;
     if (running) return AppFinanceStyle.textProfit;
-    return const Color(0xFF8B7D8C);
+    return AppFinanceStyle.textDefault;
   }
 
   String get _label {

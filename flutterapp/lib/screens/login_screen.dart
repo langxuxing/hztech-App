@@ -348,7 +348,7 @@ class _LoginScreenState extends State<LoginScreen> {
           child: const Text(
             'Web3+AI 量化交易平台',
             style: TextStyle(
-              color: Colors.white,
+              color: AppFinanceStyle.textDefault,
               fontSize: 24,
               fontWeight: FontWeight.w800,
               letterSpacing: 0.5,
@@ -393,10 +393,10 @@ class _LoginScreenState extends State<LoginScreen> {
           // 这个部分是配置 AppBar，也就是顶部应用栏的显示内容和样式。
           // title 设置了标题文本 '欢迎使用禾正AI量化交易平台'，显示在顶部中间。
           // backgroundColor: Colors.black 表示 AppBar 的背景色为黑色。
-          // foregroundColor: Colors.white 表示标题文本和图标等前景内容为白色，增强对比度和可读性。
+          // foregroundColor 与全局 textDefault 一致。
           title: const Text('欢迎使用Web3+AI量化交易平台'),
           backgroundColor: Colors.black,
-          foregroundColor: Colors.white,
+          foregroundColor: AppFinanceStyle.textDefault,
         ),
         body: WaterBackground(
           child: Center(
@@ -429,7 +429,7 @@ class _LoginScreenState extends State<LoginScreen> {
         title: _buildAppTitle(),
         backgroundColor: Colors.transparent,
         elevation: 0,
-        foregroundColor: Colors.white,
+        foregroundColor: AppFinanceStyle.textDefault,
       ),
       body: WaterBackground(
         // 上半区书法图；下半区半透明叠层，透出底层水纹与底色
@@ -495,7 +495,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                       TextField(
                                         controller: _usernameCtrl,
                                         style: const TextStyle(
-                                          color: Colors.white,
+                                          color: AppFinanceStyle.textDefault,
                                         ),
                                         decoration: inputDecoration.copyWith(
                                           labelText: '用户名',
@@ -507,7 +507,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                       TextField(
                                         controller: _passwordCtrl,
                                         style: const TextStyle(
-                                          color: Colors.white,
+                                          color: AppFinanceStyle.textDefault,
                                         ),
                                         decoration: inputDecoration
                                             .copyWith(
@@ -575,20 +575,22 @@ class _LoginScreenState extends State<LoginScreen> {
                                                   : _performLogin,
                                               child: Center(
                                                 child: _loading
-                                                    ? const SizedBox(
+                                                    ? SizedBox(
                                                         width: 24,
                                                         height: 24,
                                                         child:
                                                             CircularProgressIndicator(
-                                                              strokeWidth: 2,
-                                                              color:
-                                                                  Colors.white,
-                                                            ),
+                                                          strokeWidth: 2,
+                                                          color: AppFinanceStyle
+                                                              .textDefault,
+                                                        ),
                                                       )
                                                     : const Text(
                                                         '登 录',
                                                         style: TextStyle(
-                                                          color: Colors.white,
+                                                          color:
+                                                              AppFinanceStyle
+                                                                  .textDefault,
                                                           fontSize: 16,
                                                           fontWeight:
                                                               FontWeight.w600,

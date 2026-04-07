@@ -8,7 +8,7 @@ import '../theme/finance_style.dart';
 import '../utils/number_display_format.dart';
 import '../widgets/water_background.dart';
 
-/// 移动端「账号盈利」：按机器人列表展示月初 / 资产余额 / 盈利率与收益曲线（不含策略启停）。
+/// 移动端「策略盈利」：按机器人列表展示月初 / 资产余额 / 盈利率与收益曲线（不含策略启停）。
 /// 数据与 [TradingBotControl] 同源，界面仅保留盈利相关展示。
 class AccountProfitDetailScreen extends StatefulWidget {
   const AccountProfitDetailScreen({super.key, this.embedInShell = false});
@@ -114,7 +114,7 @@ class _AccountProfitDetailScreenState extends State<AccountProfitDetailScreen> {
           ? null
           : AppBar(
               title: Text(
-                '账号盈利',
+                '策略盈利',
                 style: AppFinanceStyle.labelTextStyle(context).copyWith(
                   color: _barTextColor,
                   fontSize: 18,
@@ -131,234 +131,230 @@ class _AccountProfitDetailScreenState extends State<AccountProfitDetailScreen> {
           child: _loading && _list.isEmpty
               ? const Center(child: CircularProgressIndicator())
               : _error != null && _list.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Text(_error!, textAlign: TextAlign.center),
-                          const SizedBox(height: 16),
-                          FilledButton(onPressed: _load, child: const Text('重试')),
-                        ],
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(_error!, textAlign: TextAlign.center),
+                      const SizedBox(height: 16),
+                      FilledButton(onPressed: _load, child: const Text('重试')),
+                    ],
+                  ),
+                )
+              : _list.isEmpty
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(
+                        Icons.insights_outlined,
+                        size: 64,
+                        color: Theme.of(context).colorScheme.outline,
                       ),
-                    )
-                  : _list.isEmpty
-                      ? Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.insights_outlined,
-                                size: 64,
-                                color: Theme.of(context).colorScheme.outline,
-                              ),
-                              const SizedBox(height: 16),
-                              Text(
-                                '暂无交易账户',
-                                style: Theme.of(context).textTheme.titleMedium,
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                '请检查后端 Account_List.json 或下拉刷新',
-                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                                    ),
-                                textAlign: TextAlign.center,
-                              ),
-                            ],
-                          ),
-                        )
-                      : ListView.builder(
-                          padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
-                          itemCount: _list.length,
-                          itemBuilder: (context, i) {
-                            final bot = _list[i];
-                            final account = _accountForBot(bot, i);
-                            final snapshots = _profitHistory[bot.tradingbotId] ?? [];
-                            return Padding(
-                              padding: const EdgeInsets.only(bottom: 24),
-                              child: FinanceCard(
-                                padding: const EdgeInsets.all(20),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Row(
-                                                children: [
-                                                  Flexible(
-                                                    child: Text(
-                                                      bot.tradingbotName ?? bot.tradingbotId,
-                                                      style: (Theme.of(context)
-                                                                  .textTheme
-                                                                  .titleLarge ??
-                                                              const TextStyle())
-                                                          .copyWith(
-                                                            fontWeight: FontWeight.w800,
-                                                            fontSize: (Theme.of(context)
-                                                                        .textTheme
-                                                                        .titleLarge
-                                                                        ?.fontSize ??
-                                                                    22) +
-                                                                2,
-                                                            color: AppFinanceStyle.valueColor,
-                                                          ),
-                                                    ),
-                                                  ),
-                                                  if (bot.isTest) ...[
-                                                    const SizedBox(width: 8),
-                                                    Container(
-                                                      padding: const EdgeInsets.symmetric(
-                                                        horizontal: 6,
-                                                        vertical: 2,
-                                                      ),
-                                                      decoration: BoxDecoration(
-                                                        color: Colors.orange.withValues(
-                                                          alpha: 0.3,
-                                                        ),
-                                                        borderRadius: BorderRadius.circular(4),
-                                                      ),
-                                                      child: Text(
-                                                        '测试',
-                                                        style: Theme.of(context)
-                                                            .textTheme
-                                                            .labelSmall
-                                                            ?.copyWith(
-                                                              color: AppFinanceStyle.textDefault,
-                                                              fontWeight: FontWeight.w600,
-                                                            ),
-                                                      ),
-                                                    ),
-                                                  ],
-                                                ],
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    if (account != null) ...[
-                                      const SizedBox(height: 12),
+                      const SizedBox(height: 16),
+                      Text(
+                        '暂无交易账户',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        '请检查后端 Account_List.json 或下拉刷新',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+                  itemCount: _list.length,
+                  itemBuilder: (context, i) {
+                    final bot = _list[i];
+                    final account = _accountForBot(bot, i);
+                    final snapshots = _profitHistory[bot.tradingbotId] ?? [];
+                    final topMetricStyle = AppFinanceStyle.valueTextStyle(
+                      context,
+                      fontSize: AppFinanceStyle.mobileSummaryValueFontSize(
+                        context,
+                      ),
+                    ).copyWith(color: _cardNumberColor);
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 24),
+                      child: FinanceCard(
+                        padding: AppFinanceStyle.mobileSummaryStripPadding,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
                                       Row(
-                                        mainAxisAlignment: MainAxisAlignment.spaceAround,
                                         children: [
-                                          Column(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Text(
-                                                '月初',
-                                                style: Theme.of(context)
-                                                    .textTheme
-                                                    .bodyMedium
-                                                    ?.copyWith(color: _cardLabelColor),
-                                              ),
-                                              const SizedBox(height: 8),
-                                              Text(
-                                                _fmt(account.initialBalance),
-                                                style: (Theme.of(context)
-                                                            .textTheme.titleMedium ??
-                                                        const TextStyle())
-                                                    .copyWith(
-                                                      color: _cardNumberColor,
-                                                      fontWeight: FontWeight.bold,
-                                                      fontSize: (Theme.of(context)
-                                                                  .textTheme
-                                                                  .titleLarge
-                                                                  ?.fontSize ??
-                                                              22) +
-                                                          2,
-                                                    ),
-                                              ),
-                                            ],
+                                          Flexible(
+                                            child: Text(
+                                              bot.tradingbotName ??
+                                                  bot.tradingbotId,
+                                              style:
+                                                  (Theme.of(context)
+                                                              .textTheme
+                                                              .titleLarge ??
+                                                          const TextStyle())
+                                                      .copyWith(
+                                                        fontWeight:
+                                                            FontWeight.w800,
+                                                        fontSize:
+                                                            (Theme.of(context)
+                                                                    .textTheme
+                                                                    .titleLarge
+                                                                    ?.fontSize ??
+                                                                22) +
+                                                            2,
+                                                        color: AppFinanceStyle
+                                                            .valueColor,
+                                                      ),
+                                            ),
                                           ),
-                                          Column(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Text(
-                                                '资产余额',
-                                                style: Theme.of(context)
-                                                    .textTheme
-                                                    .bodyMedium
-                                                    ?.copyWith(color: _cardLabelColor),
-                                              ),
-                                              const SizedBox(height: 8),
-                                              Text(
-                                                _fmt(account.cashBalance ??
-                                                    account.balanceUsdt),
-                                                style: (Theme.of(context)
-                                                            .textTheme.titleMedium ??
-                                                        const TextStyle())
-                                                    .copyWith(
-                                                      color: _cardNumberColor,
-                                                      fontWeight: FontWeight.bold,
-                                                      fontSize: (Theme.of(context)
-                                                                  .textTheme
-                                                                  .titleLarge
-                                                                  ?.fontSize ??
-                                                              22) +
-                                                          2,
-                                                    ),
-                                              ),
-                                            ],
-                                          ),
-                                          Column(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              Text(
-                                                '盈利率',
-                                                style: Theme.of(context)
-                                                    .textTheme
-                                                    .bodyMedium
-                                                    ?.copyWith(color: _cardLabelColor),
-                                              ),
-                                              const SizedBox(height: 8),
-                                              Text(
-                                                formatUiPercentLabel(
-                                                  account.profitPercent,
+                                          if (bot.isTest) ...[
+                                            const SizedBox(width: 8),
+                                            Container(
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 6,
+                                                    vertical: 2,
+                                                  ),
+                                              decoration: BoxDecoration(
+                                                color: Colors.orange.withValues(
+                                                  alpha: 0.3,
                                                 ),
-                                                style: (Theme.of(context)
-                                                            .textTheme.titleMedium ??
-                                                        const TextStyle())
-                                                    .copyWith(
-                                                      color: _cardNumberColor,
-                                                      fontWeight: FontWeight.bold,
-                                                      fontSize: (Theme.of(context)
-                                                                  .textTheme
-                                                                  .titleLarge
-                                                                  ?.fontSize ??
-                                                              22) +
-                                                          2,
+                                                borderRadius:
+                                                    BorderRadius.circular(4),
+                                              ),
+                                              child: Text(
+                                                '测试',
+                                                style: Theme.of(context)
+                                                    .textTheme
+                                                    .labelSmall
+                                                    ?.copyWith(
+                                                      color: AppFinanceStyle
+                                                          .textDefault,
+                                                      fontWeight:
+                                                          FontWeight.w600,
                                                     ),
                                               ),
-                                            ],
-                                          ),
+                                            ),
+                                          ],
                                         ],
                                       ),
                                     ],
-                                    const SizedBox(height: 12),
-                                    if (snapshots.isNotEmpty)
-                                      SizedBox(
-                                        height: 128,
-                                        child: _ProfitLineChart(snapshots: snapshots),
-                                      )
-                                    else
-                                      Padding(
-                                        padding: const EdgeInsets.symmetric(vertical: 8),
-                                        child: Text(
-                                          '暂无收益曲线数据，约 10 分钟更新一次',
-                                          style: AppFinanceStyle.labelTextStyle(context),
-                                        ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            if (account != null) ...[
+                              const SizedBox(height: 12),
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceAround,
+                                children: [
+                                  Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        '月初',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodyMedium
+                                            ?.copyWith(color: _cardLabelColor),
                                       ),
-                                  ],
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        _fmt(account.initialBalance),
+                                        style: topMetricStyle,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ],
+                                  ),
+                                  Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        '资产余额',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodyMedium
+                                            ?.copyWith(color: _cardLabelColor),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        _fmt(
+                                          account.cashBalance ??
+                                              account.balanceUsdt,
+                                        ),
+                                        style: topMetricStyle,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ],
+                                  ),
+                                  Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        '盈利率',
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodyMedium
+                                            ?.copyWith(color: _cardLabelColor),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        formatUiPercentLabel(
+                                          account.profitPercent,
+                                        ),
+                                        style: topMetricStyle,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ],
+                            const SizedBox(height: 12),
+                            if (snapshots.isNotEmpty)
+                              SizedBox(
+                                height: 128,
+                                child: _ProfitLineChart(snapshots: snapshots),
+                              )
+                            else
+                              Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 8,
+                                ),
+                                child: Text(
+                                  '暂无收益曲线数据，约 10 分钟更新一次',
+                                  style: AppFinanceStyle.labelTextStyle(
+                                    context,
+                                  ),
                                 ),
                               ),
-                            );
-                          },
+                          ],
                         ),
+                      ),
+                    );
+                  },
+                ),
         ),
       ),
     );
@@ -387,8 +383,9 @@ class _ProfitLineChart extends StatelessWidget {
     }
     final isPositive =
         snapshots.isNotEmpty && (snapshots.last.profitPercent >= 0);
-    final lineColor =
-        isPositive ? AppFinanceStyle.textProfit : AppFinanceStyle.textLoss;
+    final lineColor = isPositive
+        ? AppFinanceStyle.textProfit
+        : AppFinanceStyle.textLoss;
     return LineChart(
       LineChartData(
         minX: 0,
@@ -408,10 +405,11 @@ class _ProfitLineChart extends StatelessWidget {
             dotData: FlDotData(show: false),
             belowBarData: BarAreaData(
               show: true,
-              color: (isPositive
-                      ? AppFinanceStyle.textProfit
-                      : AppFinanceStyle.textLoss)
-                  .withValues(alpha: 0.25),
+              color:
+                  (isPositive
+                          ? AppFinanceStyle.textProfit
+                          : AppFinanceStyle.textLoss)
+                      .withValues(alpha: 0.25),
             ),
           ),
         ],

@@ -42,32 +42,32 @@ class _MainScreenState extends State<MainScreen> {
   List<({String label, IconData icon})> get _tabs {
     if (_isCustomer) {
       return [
-        (label: '实时收益', icon: Icons.trending_up),
+        (label: '本月收益', icon: Icons.trending_up),
         (label: '应用设置', icon: Icons.settings),
       ];
     }
     if (_isAdmin) {
       return [
-        (label: '账户管理', icon: Icons.manage_accounts),
+        (label: '账户总览', icon: Icons.manage_accounts),
         (label: '策略启停', icon: Icons.smart_toy_outlined),
-        (label: '账号盈利', icon: Icons.insights_outlined),
-        (label: '账户收益', icon: Icons.account_balance_wallet),
+        (label: '策略盈利', icon: Icons.insights_outlined),
+        (label: '本月收益', icon: Icons.account_balance_wallet),
         (label: '应用设置', icon: Icons.settings),
       ];
     }
     if (_isStrategyAnalyst) {
       return [
-        (label: '账户管理', icon: Icons.manage_accounts),
-        (label: '账号盈利', icon: Icons.insights_outlined),
-        (label: '账户收益', icon: Icons.account_balance_wallet),
+        (label: '账户总览', icon: Icons.manage_accounts),
+        (label: '策略盈利', icon: Icons.insights_outlined),
+        (label: '本月收益', icon: Icons.account_balance_wallet),
         (label: '应用设置', icon: Icons.settings),
       ];
     }
     return [
-      (label: '账户管理', icon: Icons.manage_accounts),
+      (label: '账户总览', icon: Icons.manage_accounts),
       (label: '策略启停', icon: Icons.smart_toy_outlined),
-      (label: '账号盈利', icon: Icons.insights_outlined),
-      (label: '账户收益', icon: Icons.account_balance_wallet),
+      (label: '策略盈利', icon: Icons.insights_outlined),
+      (label: '本月收益', icon: Icons.account_balance_wallet),
       (label: '应用设置', icon: Icons.settings),
     ];
   }
@@ -132,10 +132,7 @@ class _MainScreenState extends State<MainScreen> {
             periodicRefreshActive: _index == 0,
             showRealtimeAppBarTitle: true,
           ),
-          SettingsScreen(
-            onLogout: widget.onLogout,
-            appUserRole: _role,
-          ),
+          SettingsScreen(onLogout: widget.onLogout, appUserRole: _role),
         ],
       );
     }
@@ -176,10 +173,7 @@ class _MainScreenState extends State<MainScreen> {
             sharedBots: _sharedBots,
             periodicRefreshActive: _index == 2,
           ),
-          SettingsScreen(
-            onLogout: widget.onLogout,
-            appUserRole: _role,
-          ),
+          SettingsScreen(onLogout: widget.onLogout, appUserRole: _role),
         ],
       );
     }
@@ -194,10 +188,7 @@ class _MainScreenState extends State<MainScreen> {
           sharedBots: _sharedBots,
           periodicRefreshActive: _index == 3,
         ),
-        SettingsScreen(
-          onLogout: widget.onLogout,
-          appUserRole: _role,
-        ),
+        SettingsScreen(onLogout: widget.onLogout, appUserRole: _role),
       ],
     );
   }
@@ -218,15 +209,16 @@ class _MainScreenState extends State<MainScreen> {
         data: Theme.of(context).copyWith(
           navigationBarTheme: NavigationBarThemeData(
             backgroundColor: Colors.black,
-            iconTheme: WidgetStateProperty.resolveWith((_) => const IconThemeData(
-                  color: _navBarTextColor,
-                  size: 24,
-                )),
-            labelTextStyle: WidgetStateProperty.resolveWith((_) => const TextStyle(
-                  color: _navBarTextColor,
-                  fontWeight: FontWeight.bold,
-                )),
-            indicatorColor: Colors.white24,
+            iconTheme: WidgetStateProperty.resolveWith(
+              (_) => const IconThemeData(color: _navBarTextColor, size: 24),
+            ),
+            labelTextStyle: WidgetStateProperty.resolveWith(
+              (_) => const TextStyle(
+                color: _navBarTextColor,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            indicatorColor: AppFinanceStyle.textDefault.withValues(alpha: 0.24),
           ),
         ),
         child: NavigationBar(
@@ -237,10 +229,7 @@ class _MainScreenState extends State<MainScreen> {
           },
           destinations: [
             for (final t in tabs)
-              NavigationDestination(
-                icon: Icon(t.icon),
-                label: t.label,
-              ),
+              NavigationDestination(icon: Icon(t.icon), label: t.label),
           ],
         ),
       ),

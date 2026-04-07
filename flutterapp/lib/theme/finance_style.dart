@@ -77,11 +77,102 @@ class AppFinanceStyle {
   /// 汇总条主数值字号（与条高度配套；相对上一版 48 再 +50% → 72）。
   static const double webSummaryValueFontSize = 72;
 
+  /// 移动端列表页「账户概览」等顶部汇总卡内边距（略紧于 [webSummaryStripPadding]）。
+  static const EdgeInsets mobileSummaryStripPadding = EdgeInsets.symmetric(
+    horizontal: 16,
+    vertical: 24,
+  );
+
+  /// 移动端顶部汇总主数值字号：随逻辑宽度缩放，避免超窄屏爆版、大屏仍显「大气」。
+  static double mobileSummaryValueFontSize(BuildContext context) {
+    final w = MediaQuery.sizeOf(context).width;
+    return (w * 0.075).clamp(32.0, 48.0);
+  }
+
+  /// 移动端表头汇总单行：小标签在左、大号数值在右（与账户总览顶部条横向布局一致）。
+  /// 置于 [Row] 的 [Expanded] 子节点内，以便长数字省略。
+  static Widget mobileSummaryInlinePair(
+    BuildContext context, {
+    required String label,
+    required String value,
+    required Color valueColor,
+    MainAxisAlignment rowAlign = MainAxisAlignment.start,
+  }) {
+    final labelStyle =
+        (Theme.of(context).textTheme.bodyMedium ?? const TextStyle()).copyWith(
+          color: labelColor,
+          fontSize: 13,
+          fontWeight: FontWeight.w500,
+        );
+    final vs = valueTextStyle(
+      context,
+      fontSize: mobileSummaryValueFontSize(context),
+    ).copyWith(color: valueColor);
+    final end = rowAlign == MainAxisAlignment.end;
+    return Row(
+      mainAxisAlignment: rowAlign,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Text(label, style: labelStyle),
+        const SizedBox(width: 8),
+        Flexible(
+          child: Text(
+            value,
+            style: vs,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: end ? TextAlign.right : TextAlign.left,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 移动端表头汇总单列：标签在上、主数值在下，列内水平居中（三列 [Row]+[Expanded] 时与各列等宽对齐）。
+  static Widget mobileSummaryStackCell(
+    BuildContext context, {
+    required String label,
+    required String value,
+    required Color valueColor,
+  }) {
+    final labelStyle =
+        (Theme.of(context).textTheme.bodyMedium ?? const TextStyle()).copyWith(
+          color: labelColor,
+          fontSize: 13,
+          fontWeight: FontWeight.w500,
+        );
+    final vs = valueTextStyle(
+      context,
+      fontSize: mobileSummaryValueFontSize(context),
+    ).copyWith(color: valueColor);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Text(label, style: labelStyle, textAlign: TextAlign.center),
+        const SizedBox(height: 8),
+        Text(
+          value,
+          style: vs,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          textAlign: TextAlign.center,
+        ),
+      ],
+    );
+  }
+
   /// 运行概览汇总卡与下方批量操作按钮的间距（约为原 12 的 2 倍）。
   static const double webSummaryCardToBulkActionsGap = 24;
 
   /// 毛玻璃模糊 sigma
   static const double cardBlurSigma = 14;
+
+  /// 账户盈利详情（APK）交易账户 [DropdownButton] 字号，略高于 [labelTextStyle] 便于选读。
+  static const double accountProfitBotDropdownFontSize = 15;
+
+  /// Web 账户画像同位置下拉框字号（大屏略增）。
+  static const double webAccountProfitBotDropdownFontSize = 16;
 
   /// 标签字体 14px, font-weight 500
   static TextStyle labelTextStyle(BuildContext context) {

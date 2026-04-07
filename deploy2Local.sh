@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 本地一站式：构建 Flutter（移动 + Web）→ 本地 init_db → 启动 run_local.sh
+# 本地一站式：pip requirements → 构建 Flutter（移动 + Web）→ 本地 init_db → 启动 run_local.sh
 #
 # 目录约定：运维脚本在项目根；Python 在 baasapi/（与 deploy2AWS、server_mgr 一致）。
 #
@@ -8,6 +8,7 @@
 #   · 若只要 API（对齐 run_local.sh 默认）：export HZTECH_LOCAL_WEB_STATIC=0
 #
 # 环境变量：
+#   HZTECH_SKIP_PIP_INSTALL=1   跳过本地 pip install -r baasapi/requirements.txt
 #   HZTECH_SKIP_MOBILE_BUILD=1  跳过 APK/IPA 构建
 #   HZTECH_SKIP_WEB_BUILD=1      跳过 flutter build web
 #   HZTECH_SKIP_DB_SYNC=1       跳过本地 init_db
@@ -46,13 +47,25 @@ echo "    0 = 仅 API (与单独运行 baasapi/run_local.sh 默认一致)"
 echo "  构建用 API_BASE_URL: ${HZTECH_API_BASE_URL}"
 echo "=============================================="
 
+case "${HZTECH_SKIP_PIP_INSTALL:-}" in
+1 | true | yes)
+  echo ""
+  echo "=== 1/5 跳过 Python 依赖（HZTECH_SKIP_PIP_INSTALL）==="
+  ;;
+*)
+  echo ""
+  echo "=== 1/5 安装 Python 依赖（baasapi/requirements.txt）==="
+  "$PROJECT_ROOT/baasapi/install_python_deps.sh"
+  ;;
+esac
+
 _skmb=$(printf '%s' "${HZTECH_SKIP_MOBILE_BUILD:-}" | tr '[:upper:]' '[:lower:]')
 if [[ "$_skmb" == "1" || "$_skmb" == "true" || "$_skmb" == "yes" ]]; then
   echo ""
-  echo "=== 1/4 跳过 Flutter 移动端（HZTECH_SKIP_MOBILE_BUILD）==="
+  echo "=== 2/5 跳过 Flutter 移动端（HZTECH_SKIP_MOBILE_BUILD）==="
 else
   echo ""
-  echo "=== 1/4 构建 Flutter 移动端（release APK + macOS 上 IPA）==="
+  echo "=== 2/5 构建 Flutter 移动端（release APK + macOS 上 IPA）==="
   python3 "$PROJECT_ROOT/baasapi/server_mgr.py" build
   echo "  APK: $PROJECT_ROOT/apk/"
   echo "  IPA: $PROJECT_ROOT/ipa/"
@@ -60,13 +73,13 @@ fi
 
 if [[ "${HZTECH_SKIP_WEB_BUILD:-0}" == "1" ]]; then
   echo ""
-  echo "=== 2/4 跳过 Flutter Web（HZTECH_SKIP_WEB_BUILD=1）==="
+  echo "=== 3/5 跳过 Flutter Web（HZTECH_SKIP_WEB_BUILD=1）==="
   if [[ "$HZTECH_LOCAL_WEB_STATIC" == "1" ]] && [[ ! -f "$PROJECT_ROOT/flutterapp/build/web/index.html" ]]; then
     echo "  警告: 未找到 flutterapp/build/web/index.html，Web 静态可能 503。请构建 Web 或关闭 HZTECH_LOCAL_WEB_STATIC。" >&2
   fi
 else
   echo ""
-  echo "=== 2/4 构建 Flutter Web (release) ==="
+  echo "=== 3/5 构建 Flutter Web (release) ==="
   if python3 "$PROJECT_ROOT/baasapi/server_mgr.py" build-web; then
     echo "  Web: $PROJECT_ROOT/flutterapp/build/web/"
   else
@@ -76,16 +89,16 @@ fi
 
 if [[ "${HZTECH_SKIP_DB_SYNC:-0}" != "1" ]]; then
   echo ""
-  echo "=== 3/4 同步本地数据库（用户迁移）==="
+  echo "=== 4/5 同步本地数据库（用户迁移）==="
   python3 -c "from baasapi.db import init_db; init_db()"
   echo "  数据库已就绪"
 else
   echo ""
-  echo "=== 3/4 跳过本地 DB（HZTECH_SKIP_DB_SYNC=1）==="
+  echo "=== 4/5 跳过本地 DB（HZTECH_SKIP_DB_SYNC=1）==="
 fi
 
 echo ""
-echo "=== 4/4 启动服务 (端口与访问方式见 baasapi/run_local.sh 输出) ==="
+echo "=== 5/5 启动服务 (端口与访问方式见 baasapi/run_local.sh 输出) ==="
 export FLASK_DEBUG=1
 export LOG_LEVEL=DEBUG
 exec "$PROJECT_ROOT/baasapi/run_local.sh"

@@ -83,7 +83,6 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   /// 宽屏权益/现金「日历 | 折线+柱」整行较 [_kTripleRowHeight] 加高 10%，日历网格更大。
   static double get _kTripleMetricsRowHeight => _kTripleRowHeight * 0.77;
 
-
   /// 「权益日历」「现金日历」标题与下方内容（含星期行）的额外间距。
   static const double _kProfileCalendarTitleExtraGap = 22;
 
@@ -93,10 +92,10 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
 
   DateTime? _equityMetricsMonth;
   DateTime? _cashMetricsMonth;
-  Map<int, int>? _equityCalendarCloseCounts;
-  Map<int, int>? _cashCalendarCloseCounts;
+
   /// 与 [_equityMetricsMonth] 对应月的 daily-realized-pnl（含 account_daily_performance 合并字段）
   List<DailyRealizedPnlDayRow> _equityPerfDays = const [];
+
   /// 与 [_cashMetricsMonth] 对应月
   List<DailyRealizedPnlDayRow> _cashPerfDays = const [];
   final TextEditingController _noDropdownAccountController =
@@ -185,7 +184,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         _equityPerfDays = const [];
         _cashPerfDays = const [];
       });
-      unawaited(_syncCalendarCloseCounts());
+      unawaited(_syncDailyPerformanceForCharts());
       _syncOkxTickerSubscription();
     } catch (_) {
       // 后台轮询失败不打扰主流程
@@ -246,7 +245,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
           _equityPerfDays = const [];
           _cashPerfDays = const [];
         });
-        unawaited(_syncCalendarCloseCounts());
+        unawaited(_syncDailyPerformanceForCharts());
         _syncOkxTickerSubscription();
       } catch (e) {
         if (mounted) {
@@ -292,7 +291,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         _equityMetricsMonth = null;
         _cashMetricsMonth = null;
       });
-      unawaited(_syncCalendarCloseCounts());
+      unawaited(_syncDailyPerformanceForCharts());
 
       final phase2 = await Future.wait([
         api.getTradingbotPositions(botId),
@@ -551,7 +550,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     return clampMonthToSnapshots(snap, seed);
   }
 
-  Future<void> _syncCalendarCloseCounts() async {
+  Future<void> _syncDailyPerformanceForCharts() async {
     final gen = _accountSwitchGeneration;
     final list = _bots.isNotEmpty ? _bots : widget.sharedBots;
     final botId =
@@ -571,17 +570,12 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         if (!mounted || gen != _accountSwitchGeneration) return;
         if (!r.success) {
           setState(() {
-            _equityCalendarCloseCounts = null;
-            _cashCalendarCloseCounts = null;
             _equityPerfDays = const [];
             _cashPerfDays = const [];
           });
           return;
         }
-        final m = dailyCloseCountsMapForMonth(r.days, eq.year, eq.month);
         setState(() {
-          _equityCalendarCloseCounts = m;
-          _cashCalendarCloseCounts = m;
           _equityPerfDays = r.days;
           _cashPerfDays = r.days;
         });
@@ -594,12 +588,6 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         );
         if (!mounted || gen != _accountSwitchGeneration) return;
         setState(() {
-          _equityCalendarCloseCounts = rEq.success
-              ? dailyCloseCountsMapForMonth(rEq.days, eq.year, eq.month)
-              : null;
-          _cashCalendarCloseCounts = rCash.success
-              ? dailyCloseCountsMapForMonth(rCash.days, cash.year, cash.month)
-              : null;
           _equityPerfDays = rEq.success ? rEq.days : const [];
           _cashPerfDays = rCash.success ? rCash.days : const [];
         });
@@ -607,8 +595,6 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     } catch (_) {
       if (!mounted || gen != _accountSwitchGeneration) return;
       setState(() {
-        _equityCalendarCloseCounts = null;
-        _cashCalendarCloseCounts = null;
         _equityPerfDays = const [];
         _cashPerfDays = const [];
       });
@@ -753,7 +739,11 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
               dropdownColor: AppFinanceStyle.cardBackground.withValues(
                 alpha: 0.98,
               ),
-              style: const TextStyle(color: AppFinanceStyle.valueColor),
+              style: const TextStyle(
+                color: AppFinanceStyle.valueColor,
+                fontSize: AppFinanceStyle.webAccountProfitBotDropdownFontSize,
+                fontWeight: FontWeight.w500,
+              ),
               items: list
                   .map(
                     (b) => DropdownMenuItem<String>(
@@ -762,6 +752,9 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                         b.tradingbotName ?? b.tradingbotId,
                         style: const TextStyle(
                           color: AppFinanceStyle.valueColor,
+                          fontSize: AppFinanceStyle
+                              .webAccountProfitBotDropdownFontSize,
+                          fontWeight: FontWeight.w500,
                         ),
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -942,8 +935,10 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     final cashRate = a.cashProfitPercent;
     final cashAmt = a.cashProfitAmount;
     final eqAmt = a.profitAmount;
-    TextStyle v(double fs) =>
-        AppFinanceStyle.valueTextStyle(context, fontSize: fs);
+    TextStyle v() => AppFinanceStyle.valueTextStyle(
+      context,
+      fontSize: AppFinanceStyle.webSummaryValueFontSize * 0.66,
+    );
 
     return _glassCard(
       Column(
@@ -975,7 +970,10 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       for (var i = 0; i < cells.length; i++) ...[
-                        if (i > 0) const SizedBox(height: 12),
+                        if (i > 0)
+                          const SizedBox(
+                            height: AppFinanceStyle.webSummaryNarrowGap,
+                          ),
                         cells[i],
                       ],
                     ],
@@ -985,7 +983,10 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
                     for (var i = 0; i < cells.length; i++) ...[
-                      if (i > 0) const SizedBox(width: 16),
+                      if (i > 0)
+                        const SizedBox(
+                          width: AppFinanceStyle.webSummaryWideGap,
+                        ),
                       Expanded(child: cells[i]),
                     ],
                   ],
@@ -996,27 +997,25 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                 _AccountDetailMetricCell(
                   label: '资产余额',
                   value: _fmt(assetBal),
-                  valueStyle: v(24),
+                  valueStyle: v(),
                   trailingLabel: !narrow,
                 ),
                 _AccountDetailMetricCell(
                   label: '权益',
                   value: _fmt(equity),
-                  valueStyle: v(24),
+                  valueStyle: v(),
                   trailingLabel: !narrow,
                 ),
                 _AccountDetailMetricCell(
                   label: '浮动盈亏',
                   value: _fmt(floating),
-                  valueStyle: v(24).copyWith(
-                    color: floating >= 0 ? green : red,
-                  ),
+                  valueStyle: v().copyWith(color: floating >= 0 ? green : red),
                   trailingLabel: !narrow,
                 ),
                 _AccountDetailMetricCell(
                   label: '期初',
                   value: _fmt(a.initialBalance),
-                  valueStyle: v(24),
+                  valueStyle: v(),
                   trailingLabel: !narrow,
                 ),
               ];
@@ -1024,33 +1023,25 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                 _AccountDetailMetricCell(
                   label: '现金收益',
                   value: _fmt(cashAmt),
-                  valueStyle: v(24).copyWith(
-                    color: cashAmt >= 0 ? green : red,
-                  ),
+                  valueStyle: v().copyWith(color: cashAmt >= 0 ? green : red),
                   trailingLabel: !narrow,
                 ),
                 _AccountDetailMetricCell(
                   label: '现金收益率',
                   value: _fmtPct(cashRate),
-                  valueStyle: v(24).copyWith(
-                    color: cashRate >= 0 ? green : red,
-                  ),
+                  valueStyle: v().copyWith(color: cashRate >= 0 ? green : red),
                   trailingLabel: !narrow,
                 ),
                 _AccountDetailMetricCell(
                   label: '权益收益',
                   value: _fmt(eqAmt),
-                  valueStyle: v(24).copyWith(
-                    color: eqAmt >= 0 ? green : red,
-                  ),
+                  valueStyle: v().copyWith(color: eqAmt >= 0 ? green : red),
                   trailingLabel: !narrow,
                 ),
                 _AccountDetailMetricCell(
                   label: '权益收益率',
                   value: _fmtPct(eqRate),
-                  valueStyle: v(24).copyWith(
-                    color: eqRate >= 0 ? green : red,
-                  ),
+                  valueStyle: v().copyWith(color: eqRate >= 0 ? green : red),
                   trailingLabel: !narrow,
                 ),
               ];
@@ -1058,7 +1049,11 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   metricRow(rowBalances),
-                  SizedBox(height: narrow ? 16 : 20),
+                  SizedBox(
+                    height: narrow
+                        ? AppFinanceStyle.webSummaryNarrowGap
+                        : AppFinanceStyle.webSummaryWideGap,
+                  ),
                   metricRow(rowReturns),
                 ],
               );
@@ -1066,6 +1061,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
           ),
         ],
       ),
+      padding: AppFinanceStyle.webSummaryStripPadding,
     );
   }
 
@@ -1109,7 +1105,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     final equityPctDenom = _equityPctLineDenominator();
     void setEquityMonth(DateTime d) {
       setState(() => _equityMetricsMonth = clampMonthToSnapshots(snap, d));
-      unawaited(_syncCalendarCloseCounts());
+      unawaited(_syncDailyPerformanceForCharts());
     }
 
     if (!wide) {
@@ -1140,8 +1136,9 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                     compact: true,
                     focusedMonth: month,
                     dailyPerfDays: _equityPerfDays,
-                    monthPerformanceDenom:
-                        equityPctDenom > 1e-12 ? equityPctDenom : null,
+                    monthPerformanceDenom: equityPctDenom > 1e-12
+                        ? equityPctDenom
+                        : null,
                   ),
                 ),
               ],
@@ -1178,7 +1175,6 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
               onFocusedMonthChanged: setEquityMonth,
               gridMaxHeight: plotH,
               titleToBodyExtraGap: _kProfileCalendarTitleExtraGap,
-              dailyCloseCounts: _equityCalendarCloseCounts,
               dailyPerformanceRows: _equityPerfDays,
               dailyPerformancePick: (r) => r.equityChange,
             ),
@@ -1218,7 +1214,6 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                       expandGridArea: true,
                       titleToBodyExtraGap: _kProfileCalendarTitleExtraGap,
                       centerCalendarGridInExpanded: true,
-                      dailyCloseCounts: _equityCalendarCloseCounts,
                       dailyPerformanceRows: _equityPerfDays,
                       dailyPerformancePick: (r) => r.equityChange,
                     ),
@@ -1307,7 +1302,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     final cashPctDenom = _cashPctLineDenominator();
     void setCashMonth(DateTime d) {
       setState(() => _cashMetricsMonth = clampMonthToSnapshots(snap, d));
-      unawaited(_syncCalendarCloseCounts());
+      unawaited(_syncDailyPerformanceForCharts());
     }
 
     if (!wide) {
@@ -1338,8 +1333,9 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                     compact: true,
                     focusedMonth: month,
                     dailyPerfDays: _cashPerfDays,
-                    monthPerformanceDenom:
-                        cashPctDenom > 1e-12 ? cashPctDenom : null,
+                    monthPerformanceDenom: cashPctDenom > 1e-12
+                        ? cashPctDenom
+                        : null,
                   ),
                 ),
               ],
@@ -1376,7 +1372,6 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
               onFocusedMonthChanged: setCashMonth,
               gridMaxHeight: plotH,
               titleToBodyExtraGap: _kProfileCalendarTitleExtraGap,
-              dailyCloseCounts: _cashCalendarCloseCounts,
               dailyPerformanceRows: _cashPerfDays,
               dailyPerformancePick: (r) => r.cashChange,
             ),
@@ -1416,7 +1411,6 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                       expandGridArea: true,
                       titleToBodyExtraGap: _kProfileCalendarTitleExtraGap,
                       centerCalendarGridInExpanded: true,
-                      dailyCloseCounts: _cashCalendarCloseCounts,
                       dailyPerformanceRows: _cashPerfDays,
                       dailyPerformancePick: (r) => r.cashChange,
                     ),

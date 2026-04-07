@@ -153,19 +153,11 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              '账户总览',
-                              style: Theme.of(context).textTheme.titleLarge
-                                  ?.copyWith(
-                                    color: AppFinanceStyle.valueColor,
-                                    fontWeight: FontWeight.w900,
-                                  ),
-                            ),
-                            const SizedBox(
-                              height: AppFinanceStyle.webSummaryTitleSpacing,
-                            ),
+                            const SizedBox(height: AppFinanceStyle.webSummaryTitleSpacing),
                             if (_accounts.isNotEmpty)
                               _SummaryStrip(accounts: _accounts),
+                            if (_accounts.isNotEmpty)
+                              const SizedBox(height: 12),
                           ],
                         ),
                       ),
@@ -246,9 +238,9 @@ class _SummaryStrip extends StatelessWidget {
     }
     final pct = initial > 0 ? (profit / initial) * 100 : 0.0;
     TextStyle v() => AppFinanceStyle.valueTextStyle(
-          context,
-          fontSize: AppFinanceStyle.webSummaryValueFontSize,
-        );
+      context,
+      fontSize: AppFinanceStyle.webSummaryValueFontSize,
+    );
     return FinanceCard(
       padding: AppFinanceStyle.webSummaryStripPadding,
       child: LayoutBuilder(

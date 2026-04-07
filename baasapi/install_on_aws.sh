@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 在 AWS EC2 上首次安装服务端依赖并启动（在项目部署目录下执行，如 /home/ec2-user/hztechapp）
 # 用法：cd /home/ec2-user/hztechapp && bash baasapi/install_on_aws.sh
-# 默认：BaasAPI（main.py）+ FlutterApp 静态（serve_web_static.py）双进程；端口见 deploy-aws.json 的 baas_api_port / flutter_app_port（或旧键）
+# 默认：BaasAPI（main.py）+ FlutterApp 静态（serve_web_static.py）双进程；端口见 deploy-aws.json 的 baasapi_port / flutterapp_port（或旧键）
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"

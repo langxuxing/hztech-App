@@ -542,8 +542,8 @@ class _WebTradingBotControlScreenState
               ),
               FilledButton(
                 style: FilledButton.styleFrom(
-              backgroundColor: AppFinanceStyle.textLoss,
-            ),
+                  backgroundColor: AppFinanceStyle.textLoss,
+                ),
                 onPressed: () => Navigator.pop(ctx, true),
                 child: const Text('确定'),
               ),
@@ -700,9 +700,7 @@ class _WebTradingBotControlScreenState
                                       events,
                                       running,
                                     );
-                                    final openSeason = _hasOpenSeason(
-                                      seasons,
-                                    );
+                                    final openSeason = _hasOpenSeason(seasons);
                                     return _AccountGlassCard(
                                       account: a,
                                       bot: bot,
@@ -758,9 +756,7 @@ class _WebTradingBotControlScreenState
                             SizedBox(
                               width: 22,
                               height: 22,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                              ),
+                              child: CircularProgressIndicator(strokeWidth: 2),
                             ),
                             SizedBox(width: 14),
                             Text('批量操作中…'),
@@ -801,12 +797,14 @@ class _GlobalBotStatsBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     TextStyle v() => AppFinanceStyle.valueTextStyle(
-          context,
-          fontSize: AppFinanceStyle.webSummaryValueFontSize,
-        );
+      context,
+      fontSize: AppFinanceStyle.webSummaryValueFontSize,
+    );
     final stoppedStyle = v().copyWith(color: AppFinanceStyle.labelColor);
     final errorStyle = v().copyWith(
-      color: errorCount > 0 ? AppFinanceStyle.textLoss : AppFinanceStyle.labelColor,
+      color: errorCount > 0
+          ? AppFinanceStyle.textLoss
+          : AppFinanceStyle.labelColor,
     );
 
     final bulkActions = Row(
@@ -816,8 +814,7 @@ class _GlobalBotStatsBar extends StatelessWidget {
           onPressed: bulkBusy ? null : onBulkStart,
           style: FilledButton.styleFrom(
             foregroundColor: AppFinanceStyle.textProfit,
-            backgroundColor:
-                AppFinanceStyle.textProfit.withValues(alpha: 0.14),
+            backgroundColor: AppFinanceStyle.textProfit.withValues(alpha: 0.14),
           ),
           icon: Icon(
             Icons.play_circle_outline,
@@ -846,13 +843,6 @@ class _GlobalBotStatsBar extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          '运行概览',
-          style: Theme.of(context).textTheme.titleLarge?.copyWith(
-            color: AppFinanceStyle.valueColor,
-            fontWeight: FontWeight.w900,
-          ),
-        ),
         const SizedBox(height: AppFinanceStyle.webSummaryTitleSpacing),
         FinanceCard(
           padding: AppFinanceStyle.webSummaryStripPadding,
@@ -869,7 +859,9 @@ class _GlobalBotStatsBar extends StatelessWidget {
                 _BotControlSummaryCell(
                   label: '运行中',
                   value: '$running',
-                  valueStyle: v().copyWith(color: AppFinanceStyle.profitGreenEnd),
+                  valueStyle: v().copyWith(
+                    color: AppFinanceStyle.profitGreenEnd,
+                  ),
                   trailingLabel: !narrow,
                 ),
                 _BotControlSummaryCell(
@@ -1013,6 +1005,7 @@ class _AccountGlassCard extends StatefulWidget {
 class _AccountGlassCardState extends State<_AccountGlassCard>
     with SingleTickerProviderStateMixin {
   static const _labelMuted = AppFinanceStyle.labelColor;
+
   /// 顶部「运行中」角标与脉冲点（略亮以保证可读）
   static const _greenRun = AppFinanceStyle.textProfit;
 
@@ -1020,19 +1013,13 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
   static BoxDecoration get _seasonControlBoxDecoration => BoxDecoration(
     color: Colors.white.withValues(alpha: 0.04),
     borderRadius: BorderRadius.circular(8),
-    border: Border.all(
-      color: const Color.fromRGBO(32, 64, 21, 1),
-      width: 1,
-    ),
+    border: Border.all(color: const Color.fromRGBO(32, 64, 21, 1), width: 1),
   );
 
   static BoxDecoration get _strategyControlBoxDecoration => BoxDecoration(
     color: Colors.white.withValues(alpha: 0.04),
     borderRadius: BorderRadius.circular(8),
-    border: Border.all(
-      color: const Color.fromRGBO(72, 33, 46, 1),
-      width: 1,
-    ),
+    border: Border.all(color: const Color.fromRGBO(72, 33, 46, 1), width: 1),
   );
 
   /// 赛季/策略控制圆钮：与概览区「全部启动/停止」同款——深色实底 + 亮色图标

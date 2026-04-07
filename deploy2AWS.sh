@@ -2,13 +2,19 @@
 # Ops 一键部署：构建 Flutter → rsync →（可选）远程 DB 迁移 → 重启远端进程
 #
 # 目录约定：运维脚本在项目根；Python/配置在 baasapi/（server_mgr、deploy-aws.json、main.py 等）。
-# 双 AWS 节点：deploy-aws.json 中 flutter_app（Web 静态）与 baas_api（后端）可指向不同 host/key/path；
+# 双 AWS 节点：deploy-aws.json 中 flutterapp（Web 静态）与 baasapi（后端）可指向不同 host/key/path；
 # 单机 legacy：仅顶层 host 或只配一段时由 server_mgr 合并为单主机双进程。
+#
+# Python 依赖（与 baasapi/requirements.txt）：
+#   · rsync 会同步 baasapi/（含 requirements.txt）；不含 pytest（见该文件注释）。
+#   · 远端安装：`server_mgr.py restart`（本脚本第 5 步）在每台目标机上执行
+#     cd remote_path && pip/pip3 install -r baasapi/requirements.txt --user（逻辑同 baasapi/install_on_aws.sh）。
+#   · 仅更新依赖不重拉起进程：python3 baasapi/server_mgr.py pip-remote
 #
 # 环境变量（DevOps）：
 #   DEPLOY_CONFIG          部署 JSON，默认 baasapi/deploy-aws.json（可用绝对路径）
 #   HZTECH_API_BASE_URL    传给 flutter build 的 API 基址；未设置时由 deploy-aws.json 推导为
-#                          {scheme}://{baas_api.host}:{baas_api_port}/（双机时即后端公网地址）
+#                          {scheme}://{baasapi.host}:{baasapi_port}/（双机时即后端公网地址）
 #   FLUTTER_DART_DEFINE_FILE  若已设置且 HZTECH_API_BASE_URL 未设置，则仍走 dart-define-from-file
 #   HZTECH_SKIP_BUILD=1    跳过步骤 1–2（移动端 + Web 构建），直接同步与重启
 #   HZTECH_SKIP_DB_SYNC=1  跳过步骤 4（远程 init_db）
@@ -42,11 +48,11 @@ path = sys.argv[1]
 with open(path, encoding="utf-8") as f:
     c = json.load(f)
 scheme = str(c.get("scheme") or "http")
-web_port = int(c.get("flutter_app_port", c.get("web_port", 9000)))
-api_port = int(c.get("baas_api_port", c.get("app_port", c.get("web_port", 9001))))
+web_port = int(c.get("flutterapp_port", c.get("web_port", 9000)))
+api_port = int(c.get("baasapi_port", c.get("app_port", c.get("web_port", 9001))))
 user = str(c.get("user") or "ec2-user")
-fa = c.get("flutter_app") if isinstance(c.get("flutter_app"), dict) else {}
-ba = c.get("baas_api") if isinstance(c.get("baas_api"), dict) else {}
+fa = c.get("flutterapp") if isinstance(c.get("flutterapp"), dict) else {}
+ba = c.get("baasapi") if isinstance(c.get("baasapi"), dict) else {}
 if not fa:
     fa = c.get("web") if isinstance(c.get("web"), dict) else {}
 if not ba:

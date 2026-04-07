@@ -3,8 +3,8 @@
 ## 配置
 
 - `baasapi/deploy-aws.json`：定义两台应用（可同机或分服务器）
-  - **FlutterApp**：`flutter_app` 段（`host`、`remote_path`、密钥等），监听 **`flutter_app_port`**（默认 9000），托管 `serve_web_static`。
-  - **BaasAPI**：`baas_api` 段，监听 **`baas_api_port`**（默认 9001），运行 `baasapi/main.py`。
+  - **FlutterApp**：`flutterapp` 段（`host`、`remote_path`、密钥等），监听 **`flutterapp_port`**（默认 9000），托管 `serve_web_static`。
+  - **BaasAPI**：`baasapi` 段，监听 **`baasapi_port`**（默认 9001），运行 `baasapi/main.py`。
   - 兼容旧键 `web` / `app_port` / `web_port`。
 - 每段可设 **`app_name`**（展示用）：如 `"app_name": "FlutterApp"`、`"BaasAPI"`。
 
@@ -45,7 +45,7 @@ python3 baasapi/server_mgr.py deploy --build
 当前服务端为 HTTP（Flask 直连）。连不上时按下面排查。
 
 1. **AWS 安全组（最常见）**  
-   两台 EC2 各自安全组：FlutterApp 实例放行 **`flutter_app_port`**（如 9000），BaasAPI 实例放行 **`baas_api_port`**（如 9001）。来源按团队策略（如 `0.0.0.0/0` 或固定 IP）。
+   两台 EC2 各自安全组：FlutterApp 实例放行 **`flutterapp_port`**（如 9000），BaasAPI 实例放行 **`baasapi_port`**（如 9001）。来源按团队策略（如 `0.0.0.0/0` 或固定 IP）。
 
 2. **确认服务在跑**  
    SSH 上 EC2 后执行：
@@ -94,8 +94,8 @@ cd /home/ec2-user/hztechapp && bash baasapi/install_on_aws.sh
 
 ## 部署后（地址以 `deploy-aws.json` 为准）
 
-- **FlutterApp**（浏览器静态页）：`flutter_app.host` + `flutter_app_port` 示例 `http://54.252.181.151:9000`
-- **BaasAPI**（App / 前端调用的后端）：`baas_api.host` + `baas_api_port` 示例 `http://54.66.108.150:9001`
-- APK 下载（当前由 BaasAPI 提供）：`http://<baas_api.host>:<baas_api_port>/download/apk/禾正量化-release.apk`
+- **FlutterApp**（浏览器静态页）：`flutterapp.host` + `flutterapp_port` 示例 `http://54.252.181.151:9000`
+- **BaasAPI**（App / 前端调用的后端）：`baasapi.host` + `baasapi_port` 示例 `http://54.66.108.150:9001`
+- APK 下载（当前由 BaasAPI 提供）：`http://<baasapi.host>:<baasapi_port>/download/apk/禾正量化-release.apk`
 - HTTPS：在实例前加 Nginx/Caddy，并把 `scheme` 改为 `https`。
 - 日志：BaasAPI `server.log`；FlutterApp `web_static.log`（路径为各段 `remote_path` 下）。控制台每行带 **`[BaasAPI]`** / **`[FlutterApp]`** 前缀；可用环境变量 **`HZTECH_SERVICE_LOG_TAG`** 覆盖默认标签（两进程分别设置）。

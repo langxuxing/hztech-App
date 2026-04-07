@@ -1024,7 +1024,7 @@ class _WebStrategyPerformanceScreenState
                   style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                     color: AppFinanceStyle.valueColor,
                     fontWeight: FontWeight.w600,
-                    fontSize: 20,
+                    fontSize: 24,
                   ),
                 ),
               ),
@@ -1041,13 +1041,11 @@ class _WebStrategyPerformanceScreenState
           const SizedBox(height: 12),
           Text(
             '${eff.instId}：每日波动率% = |最高−最低|÷收盘 × 100%；'
-            '现金/权益收益率% = 当日增量 ÷ UTC 月初资金或月初权益 × 100%；'
-            '策略/权益能效 = 当日增量÷ (每日波动 |最高−最低| × 1e9)；'
-            'ATR14 为 Wilder 经典波幅（与表中「每日波动」列非同一定义）；'
-            '$cashNote',
-            style: AppFinanceStyle.labelTextStyle(
-              context,
-            ).copyWith(fontSize: 14),
+            '策略/权益能效 = 当日增量÷（最高−最低） × 1e9；',
+            style: AppFinanceStyle.labelTextStyle(context).copyWith(
+              fontSize: 14,
+              color: AppFinanceStyle.textDefault.withValues(alpha: 0.65),
+            ),
           ),
           const SizedBox(height: 12),
           DefaultTabController(

@@ -5,8 +5,8 @@
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-FLUTTER_APP="$PROJECT_ROOT/flutterapp"
-cd "$FLUTTER_APP"
+flutterapp="$PROJECT_ROOT/flutterapp"
+cd "$flutterapp"
 # Debug 构建固定注入本机 API（与 prefs 中 Debug 默认一致；真机请改用电脑局域网 IP，见 prefs 注释）
 DART_DEFINES_LOCAL=(--dart-define-from-file=dart_defines/local.json)
 
@@ -24,7 +24,7 @@ echo ""
 if [ -n "$BUILD_ONLY" ]; then
   echo "=== 仅构建 debug APK ==="
   flutter build apk --debug "${DART_DEFINES_LOCAL[@]}"
-  APK_PATH="$FLUTTER_APP/build/app/outputs/apk/debug/app-debug.apk"
+  APK_PATH="$flutterapp/build/app/outputs/apk/debug/app-debug.apk"
   if [ -f "$APK_PATH" ]; then
     echo "  输出: $APK_PATH"
     echo "  安装到设备: adb install -r $APK_PATH"

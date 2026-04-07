@@ -6,8 +6,8 @@
 
 账号说明（登录名为小写）：
 - admin（管理员）→ 与 users.json 缺省一致，密码同步为 i23321
-- dongjie（董杰VIP·客户）→ 仅可见 OKX_HzTech_Moneyflow@004
-- chengwenbin（程文彬VIP·客户）→ 仅可见 OKX_HzTech_Moneyflow@002
+- dongjie（董杰VIP·客户）→ 仅可见 HzTech_Moneyflow@004（须与 Account_List.json 的 account_id 一致）
+- chengwenbin（程文彬VIP·客户）→ 仅可见 HzTech_Moneyflow@002
 - linsong（林松·交易员）
 - liuhengguo（刘恒果·交易员）
 - alang（阿郎·策略分析师）
@@ -38,13 +38,13 @@ TEAM: list[dict[str, object]] = [
         "username": "dongjie",
         "password": "i23321",
         "role": "customer",
-        "linked": ["OKX_HzTech_Moneyflow@004"],
+        "linked": ["HzTech_Moneyflow@004"],
     },
     {
         "username": "chengwenbin",
         "password": "i23321",
         "role": "customer",
-        "linked": ["OKX_HzTech_Moneyflow@002"],
+        "linked": ["HzTech_Moneyflow@002"],
     },
     {
         "username": "linsong",

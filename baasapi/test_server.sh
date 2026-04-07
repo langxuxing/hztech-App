@@ -16,10 +16,10 @@ else
 import json
 c = json.load(open("baasapi/deploy-aws.json"))
 scheme = c.get("scheme", "http")
-web_port = int(c.get("flutter_app_port", c.get("web_port", 9000)))
-api_port = int(c.get("baas_api_port", c.get("app_port", web_port)))
-fa = c.get("flutter_app") if isinstance(c.get("flutter_app"), dict) else {}
-ba = c.get("baas_api") if isinstance(c.get("baas_api"), dict) else {}
+web_port = int(c.get("flutterapp_port", c.get("web_port", 9000)))
+api_port = int(c.get("baasapi_port", c.get("app_port", web_port)))
+fa = c.get("flutterapp") if isinstance(c.get("flutterapp"), dict) else {}
+ba = c.get("baasapi") if isinstance(c.get("baasapi"), dict) else {}
 if not fa:
     fa = c.get("web") if isinstance(c.get("web"), dict) else {}
 if not ba:

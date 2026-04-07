@@ -82,7 +82,7 @@ class TestMainAccountMgrE2E:
             assert "can_control" in row
             assert row.get("tradingbot_name") or row.get("tradingbot_id")
 
-    def test_per_account_routes_like_flutter_app_and_web(
+    def test_per_account_routes_like_flutterapp_and_web(
         self, client, auth_headers
     ):
         """

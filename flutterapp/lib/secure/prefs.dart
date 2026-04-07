@@ -5,6 +5,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../auth/app_user_role.dart';
 import '../debug_ingest_log.dart';
+import 'backend_url_persist.dart';
 
 const _keyToken = 'auth_token';
 const _keyUserRole = 'user_role';
@@ -26,7 +27,7 @@ const String _kCompileTimeApiBase = String.fromEnvironment(
   defaultValue: '',
 );
 
-/// 未使用 [API_BASE_URL] 时的线上默认（与 deploy-aws.json `baas_api` 主机及 `baas_api_port` 一致）
+/// 未使用 [API_BASE_URL] 时的线上默认（与 deploy-aws.json `baasapi` 主机及 `baasapi_port` 一致）
 const String _kDefaultProductionApiBase = 'http://54.66.108.150:9001/';
 
 /// 未使用 [API_BASE_URL] 时的本地调试默认（API 服务端口；Flutter Web 页面由 serve_web_static 等单独端口提供）
@@ -105,17 +106,18 @@ String get defaultBackendUrl {
   }
   return _kDefaultProductionApiBase;
 }
+
 const unlockDurationMs = 5 * 60 * 1000; // 5 分钟
 
 class SecurePrefs {
   SecurePrefs()
-      : _storage = FlutterSecureStorage(
-          aOptions: androidOptions,
-          // macOS 沙盒：默认 useDataProtectionKeyChain 易触发 -34018（钥匙串 entitlement）
-          mOptions: (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS)
-              ? const MacOsOptions(useDataProtectionKeyChain: false)
-              : MacOsOptions.defaultOptions,
-        );
+    : _storage = FlutterSecureStorage(
+        aOptions: androidOptions,
+        // macOS 沙盒：默认 useDataProtectionKeyChain 易触发 -34018（钥匙串 entitlement）
+        mOptions: (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS)
+            ? const MacOsOptions(useDataProtectionKeyChain: false)
+            : MacOsOptions.defaultOptions,
+      );
 
   static const androidOptions = AndroidOptions(
     encryptedSharedPreferences: true,
@@ -147,7 +149,7 @@ class SecurePrefs {
   }
 
   Future<String> get backendBaseUrl async {
-    final v = await _storage.read(key: _keyBackendUrl);
+    final v = await readBackendUrl(_storage, _keyBackendUrl);
     final raw = v ?? defaultBackendUrl;
     final normalized = _normalizeBackendBaseUrl(raw);
     final next = migrateLegacyBackendApiPort(raw);
@@ -185,14 +187,11 @@ class SecurePrefs {
           location: 'prefs.dart:backendBaseUrl',
           message: 'migrated_legacy_api_port',
           hypothesisId: 'H1',
-          data: <String, Object?>{
-            'next': next,
-            'normalizedBefore': normalized,
-          },
+          data: <String, Object?>{'next': next, 'normalizedBefore': normalized},
         ),
       );
       // #endregion
-      await _storage.write(key: _keyBackendUrl, value: next);
+      await writeBackendUrl(_storage, _keyBackendUrl, next);
     }
     return next;
   }
@@ -202,7 +201,11 @@ class SecurePrefs {
     final url = normalized.isEmpty
         ? defaultBackendUrl
         : (normalized.startsWith('http') ? normalized : 'http://$normalized');
-    await _storage.write(key: _keyBackendUrl, value: url.endsWith('/') ? url : '$url/');
+    await writeBackendUrl(
+      _storage,
+      _keyBackendUrl,
+      url.endsWith('/') ? url : '$url/',
+    );
   }
 
   Future<bool> get fingerprintEnabled async {

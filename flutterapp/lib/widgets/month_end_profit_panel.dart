@@ -54,25 +54,6 @@ DateTime focusedMonthFromProfitSnapshots(List<BotProfitSnapshot> raw) {
   return _defaultFocusedMonth(sorted);
 }
 
-/// 将 [DailyRealizedPnlResponse.days] 中的 `YYYY-MM-DD` 转为当月「日序 -> 平仓笔数」。
-Map<int, int> dailyCloseCountsMapForMonth(
-  List<DailyRealizedPnlDayRow> rows,
-  int year,
-  int month,
-) {
-  final out = <int, int>{};
-  for (final r in rows) {
-    final p = r.day.split('-');
-    if (p.length != 3) continue;
-    final y = int.tryParse(p[0]);
-    final m = int.tryParse(p[1]);
-    final d = int.tryParse(p[2]);
-    if (y == null || m == null || d == null) continue;
-    if (y == year && m == month) out[d] = r.closeCount;
-  }
-  return out;
-}
-
 /// 将 [DailyRealizedPnlDayRow] 转为当月「日序 -> 变动值」（仅含 pick 返回有限值的日期）。
 Map<int, double> dailyPerfChangeMapForMonth(
   List<DailyRealizedPnlDayRow> rows,
@@ -343,18 +324,27 @@ DateTime _clampEndMonthToData(List<_MonthStat> monthly, DateTime candidate) {
   return DateTime(candidate.year, candidate.month);
 }
 
+/// 日历单元格高度相对公式值的缩放。
+const _kCalendarCellHeightScale = 0.7;
+
+/// 在缩放后的格高上再乘此系数（约 +20% 日期格高度）。
+const _kCalendarCellHeightBoost = 1.2;
+
 /// 与 [_MonthEndValueCalendarPanelState._cellHeightForGrid] 使用同一套常数：
 /// 在传入 [MonthEndValueCalendarPanel.gridMaxHeight] 为 [gridMaxHeight] 时，日历网格（表头 + 六行单元格）实际像素高度。
-/// [compact] 须与对应面板的 [MonthEndValueCalendarPanel.compact] 一致（行间距 4 / 6）。
+/// [compact] 须与对应面板的 [MonthEndValueCalendarPanel.compact] 一致（行间距 1.5 / 3）。
 double calendarGridPixelHeightForCap(
   double gridMaxHeight, {
   bool compact = true,
 }) {
   const headerH = 22.0;
   const rows = 6;
-  final rowSpacing = compact ? 4.0 : 6.0;
+  final rowSpacing = compact ? 1.5 : 3.0;
   final avail = gridMaxHeight - headerH - rowSpacing - rows * rowSpacing;
-  final cellHeight = (avail / rows).clamp(28.0, 116.0);
+  final cellHeight = ((avail / rows) *
+          _kCalendarCellHeightScale *
+          _kCalendarCellHeightBoost)
+      .clamp(24.0, 138.0);
   return headerH + rowSpacing + rows * (cellHeight + rowSpacing);
 }
 
@@ -912,9 +902,6 @@ class MonthEndValueCalendarPanel extends StatefulWidget {
     /// 限制日历网格最大高度时，按比例缩小单元格（与柱图/折线同卡无内滚动）。
     this.gridMaxHeight,
 
-    /// 按「日」索引的平仓笔数（与后端北京时间 ledger 日一致）；与 [snapshots] 日损益并列展示。
-    this.dailyCloseCounts,
-
     /// 为 true 时日历网格在父级有限高度内 [Expanded] 铺满，与折线/柱图三列对齐。
     this.expandGridArea = false,
 
@@ -939,7 +926,6 @@ class MonthEndValueCalendarPanel extends StatefulWidget {
   final DateTime? focusedMonth;
   final ValueChanged<DateTime>? onFocusedMonthChanged;
   final double? gridMaxHeight;
-  final Map<int, int>? dailyCloseCounts;
   final bool expandGridArea;
   final double titleToBodyExtraGap;
   final bool centerCalendarGridInExpanded;
@@ -988,14 +974,20 @@ class _MonthEndValueCalendarPanelState
 
   double _cellHeightForGrid() {
     if (widget.gridMaxHeight == null) {
-      return widget.compact ? 34 : 48;
+      return ((widget.compact ? 34.0 : 48.0) *
+              _kCalendarCellHeightScale *
+              _kCalendarCellHeightBoost)
+          .clamp(24.0, 68.0);
     }
     const headerH = 22.0;
     const rows = 6;
-    final rowSpacing = widget.compact ? 4.0 : 6.0;
+    final rowSpacing = widget.compact ? 1.5 : 3.0;
     final avail =
         widget.gridMaxHeight! - headerH - rowSpacing - rows * rowSpacing;
-    return (avail / rows).clamp(28.0, 116.0);
+    return ((avail / rows) *
+            _kCalendarCellHeightScale *
+            _kCalendarCellHeightBoost)
+        .clamp(24.0, 138.0);
   }
 
   @override
@@ -1117,9 +1109,9 @@ class _MonthEndValueCalendarPanelState
                 ),
               ],
             ),
-            SizedBox(height: widget.compact ? 4 : 8),
+            SizedBox(height: widget.compact ? 2 : 6),
           ] else
-            SizedBox(height: widget.compact ? 8 : 12),
+            SizedBox(height: widget.compact ? 6 : 10),
           if (widget.expandGridArea)
             Expanded(
               child: LayoutBuilder(
@@ -1128,19 +1120,21 @@ class _MonthEndValueCalendarPanelState
                     focus.year,
                     focus.month,
                   );
-                  final rs = widget.compact ? 4.0 : 6.0;
+                  final rs = widget.compact ? 1.5 : 3.0;
                   const headerH = 22.0;
                   final raw =
                       (cons.maxHeight - headerH - rs - nRows * rs) / nRows;
-                  final ch = raw.clamp(24.0, 80.0);
-                  final hPad = widget.compact ? 6.0 : 12.0;
+                  final ch = (raw *
+                          _kCalendarCellHeightScale *
+                          _kCalendarCellHeightBoost)
+                      .clamp(24.0, 96.0);
+                  final hPad = widget.compact ? 2.0 : 6.0;
                   final grid = Padding(
                     padding: EdgeInsets.symmetric(horizontal: hPad),
                     child: _CalendarGrid(
                       year: focus.year,
                       month: focus.month,
                       dailyPnL: daily,
-                      dailyCloseCounts: widget.dailyCloseCounts,
                       cellHeight: ch,
                       compact: widget.compact,
                       headerFontSize: widget.compact ? 10 : 12,
@@ -1162,17 +1156,16 @@ class _MonthEndValueCalendarPanelState
               alignment: Alignment.center,
               child: Padding(
                 padding: EdgeInsets.symmetric(
-                  horizontal: widget.compact ? 6 : 12,
+                  horizontal: widget.compact ? 4 : 8,
                 ),
                 child: _CalendarGrid(
                   year: focus.year,
                   month: focus.month,
                   dailyPnL: daily,
-                  dailyCloseCounts: widget.dailyCloseCounts,
                   cellHeight: _cellHeightForGrid(),
                   compact: widget.compact,
                   headerFontSize: widget.compact ? 10 : 12,
-                  rowSpacing: widget.compact ? 4 : 6,
+                  rowSpacing: widget.compact ? 1.5 : 3,
                 ),
               ),
             ),
@@ -1197,17 +1190,15 @@ class _CalendarGrid extends StatelessWidget {
     required this.year,
     required this.month,
     required this.dailyPnL,
-    this.dailyCloseCounts,
     this.cellHeight = 44,
     this.compact = false,
     this.headerFontSize = 12,
-    this.rowSpacing = 6,
+    this.rowSpacing = 3,
   });
 
   final int year;
   final int month;
   final Map<int, double> dailyPnL;
-  final Map<int, int>? dailyCloseCounts;
   final double cellHeight;
   final bool compact;
   final double headerFontSize;
@@ -1276,24 +1267,19 @@ class _CalendarGrid extends StatelessWidget {
     final profitColor = !has
         ? AppFinanceStyle.labelColor
         : (pnl >= 0 ? AppFinanceStyle.chartProfit : _kCalendarDayLossAccent);
-    final profitFontSize = (cellHeight * 0.44).clamp(
-      compact ? 16.0 : 18.0,
-      compact ? 22.0 : 26.0,
+    final profitFontSize = (cellHeight * 0.5).clamp(
+      compact ? 17.0 : 19.0,
+      compact ? 24.0 : 30.0,
     );
-    final dayFontSize = (cellHeight * 0.26).clamp(
-      compact ? 10.0 : 11.0,
-      compact ? 12.0 : 14.0,
+    final dayFontSize = (cellHeight * 0.22).clamp(
+      compact ? 9.0 : 10.0,
+      compact ? 11.0 : 12.0,
     );
-    final closeFontSize = (profitFontSize * 0.38).clamp(
-      compact ? 6.0 : 6.5,
-      compact ? 8.0 : 9.0,
-    );
-    final closes = dailyCloseCounts?[day];
 
     if (!has) {
       return Container(
         height: cellHeight,
-        margin: const EdgeInsets.symmetric(horizontal: 2),
+        margin: const EdgeInsets.symmetric(horizontal: 0.5),
         decoration: BoxDecoration(
           color: Colors.white.withValues(alpha: 0.04),
           borderRadius: BorderRadius.circular(8),
@@ -1312,35 +1298,37 @@ class _CalendarGrid extends StatelessWidget {
       );
     }
 
+    final dateToAmountGap = compact ? 6.0 : 9.0;
+
     return Container(
       height: cellHeight,
-      margin: const EdgeInsets.symmetric(horizontal: 2),
+      margin: const EdgeInsets.symmetric(horizontal: 0.5),
       decoration: BoxDecoration(
         color: pnl >= 0 ? _kCalendarDayProfitBg : _kCalendarDayLossBg,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: borderColor, width: 1),
       ),
-      clipBehavior: Clip.none,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          Positioned(
-            top: 4,
-            right: 6,
-            child: Text(
-              '$day',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: dayFontSize,
-                fontWeight: FontWeight.w700,
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(3, 4, 5, 5),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Align(
+              alignment: Alignment.centerRight,
+              child: Text(
+                '$day',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.72),
+                  fontSize: dayFontSize,
+                  fontWeight: FontWeight.w500,
+                  height: 1.0,
+                ),
               ),
             ),
-          ),
-          Positioned.fill(
-            child: Align(
-              alignment: const Alignment(0, 0.2),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 2),
+            SizedBox(height: dateToAmountGap),
+            Expanded(
+              child: Center(
                 child: FittedBox(
                   fit: BoxFit.scaleDown,
                   child: Text(
@@ -1350,28 +1338,23 @@ class _CalendarGrid extends StatelessWidget {
                     style: TextStyle(
                       color: profitColor,
                       fontSize: profitFontSize,
-                      fontWeight: FontWeight.w800,
-                      height: 1.05,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 0.35,
+                      height: 1.0,
+                      shadows: const [
+                        Shadow(
+                          color: Color(0x66000000),
+                          blurRadius: 4,
+                          offset: Offset(0, 1),
+                        ),
+                      ],
                     ),
                   ),
                 ),
               ),
             ),
-          ),
-          if (closes != null && closes > 0)
-            Positioned(
-              right: 5,
-              bottom: 3,
-              child: Text(
-                '$closes 笔平仓',
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.55),
-                  fontSize: closeFontSize,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }

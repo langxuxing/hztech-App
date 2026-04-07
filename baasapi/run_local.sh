@@ -9,11 +9,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
-# 与当前 `python3` 一致安装依赖（避免系统 Python 未装 PyJWT 导致 ModuleNotFoundError: jwt）
-if ! python3 -c "import jwt" 2>/dev/null; then
-  echo "检测到当前 python3 未安装 PyJWT 等依赖，正在执行: python3 -m pip install -r baasapi/requirements.txt"
-  python3 -m pip install -r "$SCRIPT_DIR/requirements.txt" || exit 1
-fi
+# 与当前 python3 一致安装依赖（与 deploy2Local 共用 install_python_deps.sh）
+case "${HZTECH_SKIP_PIP_INSTALL:-}" in
+1 | true | yes) ;;
+*)
+  if ! python3 -c "import flask, jwt, requests, ccxt" 2>/dev/null; then
+    echo "检测到缺少 BaasAPI 运行时依赖，正在安装 baasapi/requirements.txt ..."
+    "$SCRIPT_DIR/install_python_deps.sh" || exit 1
+  fi
+  ;;
+esac
 
 _hztech_lan_ip() {
   local ip=""

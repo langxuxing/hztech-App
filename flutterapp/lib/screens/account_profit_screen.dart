@@ -64,7 +64,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
   double _calendarGridMaxHeightDoubled(double lineBarPlotHeight) {
     const headerH = 22.0;
     const rows = 6.0;
-    const rowSpacing = 6.0;
+    const rowSpacing = 4.0;
     final overhead = headerH + rowSpacing + rows * rowSpacing;
     final baseCell = ((lineBarPlotHeight - overhead) / rows).clamp(28.0, 58.0);
     final tallCell = baseCell * 4;
@@ -73,8 +73,6 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
 
   DateTime? _equityMetricsMonth;
   DateTime? _cashMetricsMonth;
-  Map<int, int>? _equityCalendarCloseCounts;
-  Map<int, int>? _cashCalendarCloseCounts;
   final TextEditingController _noDropdownAccountController =
       TextEditingController();
 
@@ -128,7 +126,6 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
         _equityMetricsMonth = null;
         _cashMetricsMonth = null;
       });
-      unawaited(_syncCalendarCloseCounts());
       _syncOkxTickerSubscription();
     } catch (_) {
       // 后台轮询失败不打扰主流程
@@ -213,7 +210,6 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
             _equityMetricsMonth = null;
             _cashMetricsMonth = null;
           });
-          unawaited(_syncCalendarCloseCounts());
           _syncOkxTickerSubscription();
         } else {
           final profitResp = await api.getAccountProfit();
@@ -224,7 +220,6 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
             _equityMetricsMonth = null;
             _cashMetricsMonth = null;
           });
-          unawaited(_syncCalendarCloseCounts());
         }
       } catch (e) {
         if (mounted) {
@@ -268,7 +263,6 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
         _equityMetricsMonth = null;
         _cashMetricsMonth = null;
       });
-      unawaited(_syncCalendarCloseCounts());
 
       final phase2 = await api.getTradingbotPositions(botId);
       if (!mounted || g != _accountSwitchGeneration) return;
@@ -434,70 +428,6 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
     return clampMonthToSnapshots(snap, seed);
   }
 
-  Future<void> _syncCalendarCloseCounts() async {
-    final gen = _accountSwitchGeneration;
-    final list = _bots.isNotEmpty ? _bots : widget.sharedBots;
-    final botId =
-        _selectedBotId ??
-        (list.isNotEmpty ? list.first.tradingbotId : null) ??
-        _defaultBotId;
-    final snap = _snapshots;
-    if (snap.isEmpty) {
-      if (!mounted || gen != _accountSwitchGeneration) return;
-      setState(() {
-        _equityCalendarCloseCounts = null;
-        _cashCalendarCloseCounts = null;
-      });
-      return;
-    }
-    try {
-      final baseUrl = await _prefs.backendBaseUrl;
-      final token = await _prefs.authToken;
-      if (!mounted || gen != _accountSwitchGeneration) return;
-      final api = ApiClient(baseUrl, token: token);
-      final eq = _equityMonthFor(snap);
-      final cash = _cashMonthFor(snap);
-      if (eq.year == cash.year && eq.month == cash.month) {
-        final r = await api.getDailyRealizedPnl(botId, eq.year, eq.month);
-        if (!mounted || gen != _accountSwitchGeneration) return;
-        if (!r.success) {
-          setState(() {
-            _equityCalendarCloseCounts = null;
-            _cashCalendarCloseCounts = null;
-          });
-          return;
-        }
-        final m = dailyCloseCountsMapForMonth(r.days, eq.year, eq.month);
-        setState(() {
-          _equityCalendarCloseCounts = m;
-          _cashCalendarCloseCounts = m;
-        });
-      } else {
-        final rEq = await api.getDailyRealizedPnl(botId, eq.year, eq.month);
-        final rCash = await api.getDailyRealizedPnl(
-          botId,
-          cash.year,
-          cash.month,
-        );
-        if (!mounted || gen != _accountSwitchGeneration) return;
-        setState(() {
-          _equityCalendarCloseCounts = rEq.success
-              ? dailyCloseCountsMapForMonth(rEq.days, eq.year, eq.month)
-              : null;
-          _cashCalendarCloseCounts = rCash.success
-              ? dailyCloseCountsMapForMonth(rCash.days, cash.year, cash.month)
-              : null;
-        });
-      }
-    } catch (_) {
-      if (!mounted || gen != _accountSwitchGeneration) return;
-      setState(() {
-        _equityCalendarCloseCounts = null;
-        _cashCalendarCloseCounts = null;
-      });
-    }
-  }
-
   void _syncNoDropdownAccountLabel() {
     final isCustomer = _appUserRole == AppUserRole.customer;
     // 非客户且存在 bot 列表时用下拉框，此处不维护只读文案
@@ -641,7 +571,11 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
               dropdownColor: AppFinanceStyle.cardBackground.withValues(
                 alpha: 0.98,
               ),
-              style: const TextStyle(color: AppFinanceStyle.valueColor),
+              style: const TextStyle(
+                color: AppFinanceStyle.valueColor,
+                fontSize: AppFinanceStyle.accountProfitBotDropdownFontSize,
+                fontWeight: FontWeight.w500,
+              ),
               items: list
                   .map(
                     (b) => DropdownMenuItem<String>(
@@ -650,6 +584,9 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
                         b.tradingbotName ?? b.tradingbotId,
                         style: const TextStyle(
                           color: AppFinanceStyle.valueColor,
+                          fontSize:
+                              AppFinanceStyle.accountProfitBotDropdownFontSize,
+                          fontWeight: FontWeight.w500,
                         ),
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -692,20 +629,32 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
         if (_appUserRole != AppUserRole.customer &&
             _effectiveBots.isNotEmpty) ...[
           _buildBotSelector(),
-          const SizedBox(height: 24),
+          const SizedBox(height: 20),
         ] else if ((_appUserRole == AppUserRole.customer &&
                 _effectiveBots.isNotEmpty) ||
             _selectedAccount != null) ...[
           _buildNoDropdownAccountField(),
-          const SizedBox(height: 24),
+          const SizedBox(height: 20),
         ],
         if (_accounts.isEmpty && _error == null)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 24),
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 24),
             child: Center(
-              child: Text(
-                '暂无账户数据，请确认后端 accounts 已配置交易账户',
-                style: TextStyle(color: AppFinanceStyle.textDefault),
+              // 垂直居中
+              // 用垂直方向的 Expanded + Center 实现内容垂直居中
+              child: Expanded(
+                child: Center(
+                  child: Text(
+                    _appUserRole == AppUserRole.customer
+                        ? '请让管理员在用户管理中核对：绑定的 account_id 须与 Account_List 里的 account_id 完全一致（与 OKX 密钥 JSON 里的 name 无关）。执行 baasapi 下 python3 seed_team_users.py 可同步团队客户绑定。'
+                        : '暂无账户数据，请确认后端 accounts 已配置交易账户',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Color.fromARGB(255, 125, 18, 31),
+                      fontSize: 16,
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
@@ -722,7 +671,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
 
   Widget _buildBodyScrollable() {
     return ListView(
-      padding: const EdgeInsets.fromLTRB(32, 32, 32, 32),
+      padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
       children: [_buildAccountPageContent()],
     );
   }
@@ -799,101 +748,60 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
     );
   }
 
-  /// 1. 账户盈利总览（与 Web 账户画像核心指标一致，不含机器人/交易所细节）
+  /// 1. 账户盈利总览（与 [AccountsList] 顶栏一致：三列标签上、数值下、列内居中）
   Widget _buildProfitOverview() {
     final a = _selectedAccount;
     if (a == null) return const SizedBox.shrink();
-    final equity = a.equityUsdt;
-    final assetBal = a.cashBalance ?? a.balanceUsdt;
-    final singleInst =
-        _positions.isNotEmpty &&
-        _positions.map((p) => p.instId).toSet().length == 1;
-    final curPx = singleInst && _positions.isNotEmpty
-        ? (_liveLastPx ?? _singleInstQuotePx())
-        : 0.0;
-    final floating = singleInst && curPx > 0
-        ? _totalDynUpl(_positions, curPx)
-        : a.floatingProfit;
     final rate = a.profitPercent;
     final rateColor = rate >= 0
         ? AppFinanceStyle.textProfit
         : AppFinanceStyle.textLoss;
-    final titleSize =
-        (Theme.of(context).textTheme.titleLarge?.fontSize ?? 22) + 2;
 
-    return _glassCard(
-      Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _sectionTitle('账户盈利总览'),
-          const SizedBox(height: 16),
-          LayoutBuilder(
-            builder: (context, c) {
-              final chipBal = _overviewChip(
-                context,
-                '余额',
-                _fmt(assetBal),
-                titleSize: titleSize,
-                valueColor: AppFinanceStyle.profitGreenEnd,
-              );
-              final chipEq = _overviewChip(
-                context,
-                '权益',
-                _fmt(equity),
-                titleSize: titleSize,
-                valueColor: AppFinanceStyle.profitGreenEnd,
-              );
-              final chipFl = _overviewChip(
-                context,
-                '浮动盈亏',
-                formatUiSignedInteger(floating),
-                titleSize: titleSize,
-                valueColor: floating >= 0
-                    ? AppFinanceStyle.profitGreenEnd
-                    : AppFinanceStyle.textLoss,
-              );
-              final chipIni = _overviewChip(
-                context,
-                '期初',
-                _fmt(a.initialBalance),
-                titleSize: titleSize,
-                valueColor: AppFinanceStyle.profitGreenEnd,
-              );
-              final chipRate = _overviewChip(
-                context,
-                '收益率',
-                _fmtPct(rate),
-                titleSize: titleSize,
-                valueColor: rateColor,
-              );
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(child: chipIni),
-                      const SizedBox(width: 8),
-                      Expanded(child: chipBal),
-                      const SizedBox(width: 8),
-                      Expanded(child: chipRate),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(child: chipEq),
-                      const SizedBox(width: 12),
-                      Expanded(child: chipFl),
-                    ],
-                  ),
-                ],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _sectionTitle('账户盈利总览'),
+        const SizedBox(height: 12),
+        FinanceCard(
+          padding: AppFinanceStyle.mobileSummaryStripPadding,
+          child: Builder(
+            builder: (context) {
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: AppFinanceStyle.mobileSummaryStackCell(
+                        context,
+                        label: '月初',
+                        value: _fmt(a.initialBalance),
+                        valueColor: AppFinanceStyle.valueColor,
+                      ),
+                    ),
+                    Expanded(
+                      child: AppFinanceStyle.mobileSummaryStackCell(
+                        context,
+                        label: '资产余额',
+                        value: _fmt(a.equityUsdt),
+                        valueColor: AppFinanceStyle.valueColor,
+                      ),
+                    ),
+                    Expanded(
+                      child: AppFinanceStyle.mobileSummaryStackCell(
+                        context,
+                        label: '盈利率',
+                        value: _fmtPct(rate),
+                        valueColor: rateColor,
+                      ),
+                    ),
+                  ],
+                ),
               );
             },
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -956,7 +864,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
                         '· $side · ${formatUiInteger(p.pos)}',
                         style: AppFinanceStyle.labelTextStyle(
                           context,
-                        ).copyWith(fontSize: 12),
+                        ).copyWith(fontSize: 16),
                       ),
                     ),
                     Text(
@@ -969,7 +877,6 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
                             color: lineUpl >= 0
                                 ? AppFinanceStyle.profitGreenEnd
                                 : AppFinanceStyle.textLoss,
-                            fontSize: 12,
                           ),
                     ),
                   ],
@@ -989,7 +896,6 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
     final month = _cashMonthFor(snap);
     void setCashMonth(DateTime d) {
       setState(() => _cashMetricsMonth = clampMonthToSnapshots(snap, d));
-      unawaited(_syncCalendarCloseCounts());
     }
 
     final calCap = _kUnifiedChartBandHeight;
@@ -1021,7 +927,6 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
             focusedMonth: month,
             onFocusedMonthChanged: setCashMonth,
             gridMaxHeight: calendarGridH,
-            dailyCloseCounts: _cashCalendarCloseCounts,
           ),
         ),
         const SizedBox(height: 20),
@@ -1070,7 +975,6 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
     final month = _equityMonthFor(snap);
     void setEquityMonth(DateTime d) {
       setState(() => _equityMetricsMonth = clampMonthToSnapshots(snap, d));
-      unawaited(_syncCalendarCloseCounts());
     }
 
     final calCap = _kUnifiedChartBandHeight;
@@ -1102,7 +1006,6 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
             focusedMonth: month,
             onFocusedMonthChanged: setEquityMonth,
             gridMaxHeight: calendarGridH,
-            dailyCloseCounts: _equityCalendarCloseCounts,
           ),
         ),
         const SizedBox(height: 20),
@@ -1138,41 +1041,6 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
             barChartHeight: plotH,
             maxBars: 8,
             useDailyBarsForEndMonth: true,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _overviewChip(
-    BuildContext context,
-    String label,
-    String value, {
-    Color? valueColor,
-    required double titleSize,
-  }) {
-    final color = valueColor ?? AppFinanceStyle.profitGreenEnd;
-    final numberStyle =
-        (Theme.of(context).textTheme.titleLarge ?? const TextStyle()).copyWith(
-          fontWeight: FontWeight.bold,
-          fontSize: titleSize,
-          color: color,
-        );
-    final labelStyle = AppFinanceStyle.labelTextStyle(context);
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.baseline,
-      textBaseline: TextBaseline.alphabetic,
-      children: [
-        Text(label, style: labelStyle),
-        const SizedBox(width: 6),
-        Flexible(
-          child: Text(
-            value,
-            style: numberStyle,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.start,
           ),
         ),
       ],

@@ -33,15 +33,15 @@ def load_base_url() -> str:
         with open(cfg_path, encoding="utf-8") as f:
             c = json.load(f)
         scheme = c.get("scheme", "http")
-        ba = c.get("baas_api")
+        ba = c.get("baasapi")
         if not isinstance(ba, dict):
             ba = c.get("api") if isinstance(c.get("api"), dict) else {}
         if isinstance(ba, dict) and ba.get("host"):
             host = ba["host"]
         else:
             host = c.get("host", "127.0.0.1")
-        # BaasAPI 端口；flutter_app_port(9000) 为 FlutterApp 静态站
-        port = int(c.get("baas_api_port", c.get("app_port", c.get("web_port", 9001))))
+        # BaasAPI 端口；flutterapp_port(9000) 为 FlutterApp 静态站
+        port = int(c.get("baasapi_port", c.get("app_port", c.get("web_port", 9001))))
         return f"{scheme}://{host}:{port}"
     return "http://127.0.0.1:9001"
 
