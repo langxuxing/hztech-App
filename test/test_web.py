@@ -26,11 +26,11 @@ class TestIndexFlutterWeb:
 
 
 class TestSpaFallback:
-    """前端路由回退 index.html"""
+    """BaasAPI（main.py）不提供 Flutter Web 子路径；前端路由由 serve_web_static 托管。"""
 
-    def test_dashboard_path_returns_200(self, client):
+    def test_dashboard_path_not_on_api_server(self, client):
         r = client.get("/dashboard")
-        assert r.status_code == 200
+        assert r.status_code == 404
 
 
 class TestResBg:

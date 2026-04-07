@@ -4,7 +4,7 @@ from __future__ import annotations
 import sys
 import os
 
-_server = os.path.join(os.path.dirname(__file__), "..", "server")
+_server = os.path.join(os.path.dirname(__file__), "..", "baasapi")
 sys.path.insert(0, os.path.abspath(_server))
 
 import strategy_efficiency as se  # noqa: E402

@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 import pytest
 
 _server_dir = __import__("os").path.join(
-    __import__("os").path.dirname(__file__), "..", "server"
+    __import__("os").path.dirname(__file__), "..", "baasapi"
 )
 sys.path.insert(0, __import__("os").path.abspath(_server_dir))
 

@@ -12,7 +12,7 @@ import sys
 import pytest
 
 _server_dir = __import__("os").path.join(
-    __import__("os").path.dirname(__file__), "..", "server"
+    __import__("os").path.dirname(__file__), "..", "baasapi"
 )
 sys.path.insert(0, __import__("os").path.abspath(_server_dir))
 
@@ -26,7 +26,7 @@ def _first_okx_account_id(bots: list) -> str | None:
 
 
 class TestAppAccountFlowLikeFlutter:
-    """与 flutter_app/lib/api/client.dart 中账户相关接口调用顺序一致。"""
+    """与 flutterapp/lib/api/client.dart 中账户相关接口调用顺序一致。"""
 
     def test_login_then_account_apis_match_app_contract(self, client, auth_headers):
         # 1) account-profit（账户盈亏页）

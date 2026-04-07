@@ -6,34 +6,53 @@
       "request": "launch",
       "type": "dart",
       "program": "lib/main.dart",
-      "cwd": "${workspaceFolder}/flutter_app",
-      "args": ["-d", "chrome"],
-      "toolArgs": ["--dart-define-from-file=dart_defines/local.json"]
+      "cwd": "${workspaceFolder}/flutterapp",
+      "args": [
+        "-d",
+        "chrome"
+      ],
+      "toolArgs": [
+        "--dart-define-from-file=dart_defines/local.json"
+      ]
     },
     {
       "name": "Flutter (Android / APK)",
       "request": "launch",
       "type": "dart",
       "program": "lib/main.dart",
-      "cwd": "${workspaceFolder}/flutter_app",
-      "args": ["-d", "android"],
-      "toolArgs": ["--dart-define-from-file=dart_defines/local.json"]
+      "cwd": "${workspaceFolder}/flutterapp",
+      "args": [
+        "-d",
+        "android"
+      ],
+      "toolArgs": [
+        "--dart-define-from-file=dart_defines/local.json"
+      ]
     },
     {
       "name": "Flutter (debug)",
       "request": "launch",
       "type": "dart",
       "program": "lib/main.dart",
-      "cwd": "${workspaceFolder}/flutter_app",
-      "toolArgs": ["--dart-define-from-file=dart_defines/local.json"]
+      "cwd": "${workspaceFolder}/flutterapp",
+      "toolArgs": [
+        "--dart-define-from-file=dart_defines/local.json"
+      ]
     },
     {
       "name": "Flutter (profile)",
       "request": "launch",
       "type": "dart",
       "program": "lib/main.dart",
-      "cwd": "${workspaceFolder}/flutter_app",
+      "cwd": "${workspaceFolder}/flutterapp",
       "flutterMode": "profile"
+    },
+    {
+      "name": "Flutter (lib/screens/account_profit_screen.dart)",
+      "type": "dart",
+      "request": "launch",
+      "cwd": "flutterapp",
+      "program": "lib/screens/account_profit_screen.dart"
     }
   ]
 }

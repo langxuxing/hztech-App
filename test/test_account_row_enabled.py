@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-_server = Path(__file__).resolve().parent.parent / "server"
+_server = Path(__file__).resolve().parent.parent / "baasapi"
 sys.path.insert(0, str(_server))
 
 

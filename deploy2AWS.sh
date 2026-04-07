@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 # Ops 一键部署：构建 Flutter → rsync →（可选）远程 DB 迁移 → 重启远端进程
 #
+# 目录约定：运维脚本在项目根；Python/配置在 baasapi/（server_mgr、deploy-aws.json、main.py 等）。
+# 双 AWS 节点：deploy-aws.json 中 flutter_app（Web 静态）与 baas_api（后端）可指向不同 host/key/path；
+# 单机 legacy：仅顶层 host 或只配一段时由 server_mgr 合并为单主机双进程。
+#
 # 环境变量（DevOps）：
-#   DEPLOY_CONFIG          部署 JSON，默认 server/deploy-aws.json
-#   HZTECH_API_BASE_URL    传给 flutter build 的 API 基址
-#   FLUTTER_DART_DEFINE_FILE
+#   DEPLOY_CONFIG          部署 JSON，默认 baasapi/deploy-aws.json（可用绝对路径）
+#   HZTECH_API_BASE_URL    传给 flutter build 的 API 基址；未设置时由 deploy-aws.json 推导为
+#                          {scheme}://{baas_api.host}:{baas_api_port}/（双机时即后端公网地址）
+#   FLUTTER_DART_DEFINE_FILE  若已设置且 HZTECH_API_BASE_URL 未设置，则仍走 dart-define-from-file
 #   HZTECH_SKIP_BUILD=1    跳过步骤 1–2（移动端 + Web 构建），直接同步与重启
 #   HZTECH_SKIP_DB_SYNC=1  跳过步骤 4（远程 init_db）
 #   HZTECH_POST_DEPLOY_VERIFY=1  部署结束后 curl 探测 BaasAPI /api/health 与 FlutterApp /
 #   HZTECH_SKIP_IOS_BUILD  仅移动端构建时传给 server_mgr（与原先一致）
-#
-# deploy-aws.json：FlutterApp（flutter_app）、BaasAPI（baas_api）分主机配置；详见 server/README-DEPLOY.md
 #
 # 依赖：SSH 密钥、Flutter/Android；IPA 需 macOS + Xcode
 set -euo pipefail
@@ -19,7 +22,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR"
 cd "$PROJECT_ROOT"
 
-DEPLOY_CONFIG="${DEPLOY_CONFIG:-server/deploy-aws.json}"
+DEPLOY_CONFIG="${DEPLOY_CONFIG:-baasapi/deploy-aws.json}"
 if [[ ! -f "$DEPLOY_CONFIG" ]]; then
   echo "错误: 未找到部署配置: $DEPLOY_CONFIG" >&2
   exit 1
@@ -31,7 +34,8 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 # 一次读取 deploy JSON，供结尾展示 URL / 日志路径（避免硬编码 remote_path）
-eval "$(python3 <<'PY' "$DEPLOY_CONFIG"
+# 须用 python3 -：若写成 python3 <<PY "$CFG"，bash 会把 CFG 当脚本文件执行，heredoc 不会生效。
+eval "$(python3 - "$DEPLOY_CONFIG" <<'PY'
 import json, shlex, sys
 
 path = sys.argv[1]
@@ -85,12 +89,22 @@ out("_D_DUAL", dual)
 PY
 )"
 
-export HZTECH_API_BASE_URL="${HZTECH_API_BASE_URL:-http://54.66.108.150:9001/}"
-export FLUTTER_DART_DEFINE_FILE="${FLUTTER_DART_DEFINE_FILE:-flutter_app/dart_defines/production.json}"
+# 与 deploy-aws.json 中 BaasAPI 监听地址一致（双机时即后端 host）。仅当「未 export」时自动填充；
+# 若需完全使用 dart-define 文件中的 API_BASE_URL，可执行: export HZTECH_API_BASE_URL="" （空串会走 server_mgr 的文件分支）
+if [ "${HZTECH_API_BASE_URL+x}" = "" ]; then
+  export HZTECH_API_BASE_URL="${_D_SCHEME}://${_D_API_HOST}:${_D_API_PORT}/"
+fi
+export FLUTTER_DART_DEFINE_FILE="${FLUTTER_DART_DEFINE_FILE:-flutterapp/dart_defines/production.json}"
 
 echo "=============================================="
 echo "  Ops 部署：Flutter 构建 → AWS 同步 → 服务重启"
 echo "  配置: $DEPLOY_CONFIG"
+if [[ "$_D_DUAL" == "1" ]]; then
+  echo "  双机: Web@${_D_WEB_HOST}  API@${_D_API_HOST}"
+else
+  echo "  单机: ${_D_WEB_HOST}（Web ${_D_WEB_PORT}  API ${_D_API_PORT}）"
+fi
+echo "  构建 API_BASE_URL: ${HZTECH_API_BASE_URL}"
 echo "=============================================="
 
 if [[ "${HZTECH_SKIP_BUILD:-0}" == "1" ]]; then
@@ -99,14 +113,14 @@ if [[ "${HZTECH_SKIP_BUILD:-0}" == "1" ]]; then
 else
   echo ""
   echo "=== 1/5 构建 Flutter 移动端 (release APK + macOS 上 IPA) ==="
-  python3 "$PROJECT_ROOT/server/server_mgr.py" build
+  python3 "$PROJECT_ROOT/baasapi/server_mgr.py" build
   echo "  APK: $PROJECT_ROOT/apk/"
   echo "  IPA: $PROJECT_ROOT/ipa/"
 
   echo ""
   echo "=== 2/5 构建 Flutter Web (release) ==="
-  if python3 "$PROJECT_ROOT/server/server_mgr.py" build-web; then
-    echo "  Web: $PROJECT_ROOT/flutter_app/build/web/"
+  if python3 "$PROJECT_ROOT/baasapi/server_mgr.py" build-web; then
+    echo "  Web: $PROJECT_ROOT/flutterapp/build/web/"
   else
     echo "  （Web 构建失败或跳过；远端 Web 静态可能 503，API 仍可用）" >&2
   fi
@@ -114,12 +128,12 @@ fi
 
 echo ""
 echo "=== 3/5 上传到 AWS（rsync，--no-start）==="
-python3 "$PROJECT_ROOT/server/server_mgr.py" deploy --no-start
+python3 "$PROJECT_ROOT/baasapi/server_mgr.py" deploy --no-start
 
 if [[ "${HZTECH_SKIP_DB_SYNC:-0}" != "1" ]]; then
   echo ""
   echo "=== 4/5 同步远程数据库（用户迁移）==="
-  python3 "$PROJECT_ROOT/server/server_mgr.py" db-sync
+  python3 "$PROJECT_ROOT/baasapi/server_mgr.py" db-sync
 else
   echo ""
   echo "=== 4/5 跳过远程 DB（HZTECH_SKIP_DB_SYNC=1）==="
@@ -127,7 +141,7 @@ fi
 
 echo ""
 echo "=== 5/5 重启 AWS 后台服务 ==="
-python3 "$PROJECT_ROOT/server/server_mgr.py" restart
+python3 "$PROJECT_ROOT/baasapi/server_mgr.py" restart
 
 echo ""
 echo "=============================================="

@@ -3,10 +3,10 @@
 # =============================================================================
 **/okx.json
 src/res/okx.json
-server/accounts/account_api.json
-server/accounts/.bot_run/
-server/sqlite/
-server/data.db
+baasapi/accounts/account_api.json
+baasapi/accounts/.bot_run/
+baasapi/sqlite/
+baasapi/data.db
 
 # =============================================================================
 # Python（server、test）
@@ -48,8 +48,8 @@ build/
 *.dex
 .keychain
 
-# Flutter web：OKX 1m 标记价格 K 线同步 JSON（由 server kline_web_sync 生成）
-flutter_app/web/kline/*.json
+# Flutter web：OKX 1m 标记价格 K 线同步 JSON（由 baasapi/kline_web_sync 生成）
+flutterapp/web/kline/*.json
 
 # =============================================================================
 # 通用
