@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#000000</color>
+    <!-- 与 Flutter AppFinanceStyle.backgroundDark 一致，避免启动/引擎初始化白屏 -->
+    <color name="splash_background">#0a0a0f</color>
 </resources>

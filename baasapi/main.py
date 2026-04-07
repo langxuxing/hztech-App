@@ -910,22 +910,33 @@ def api_login():
     username = (data.get("username") or "").strip()
     password = (data.get("password") or "").strip()
     if not username or not password:
-        _db.log_insert(
-            "WARN",
-            "login_fail",
-            source="login",
-            extra={"reason": "missing_username_or_password"},
-        )
+        try:
+            _db.log_insert(
+                "WARN",
+                "login_fail",
+                source="login",
+                extra={"reason": "missing_username_or_password"},
+            )
+        except Exception:
+            app.logger.warning("login_fail 写日志失败", exc_info=True)
         return jsonify({"success": False, "message": "请输入用户名和密码"}), 400
     if not _check_password(username, password):
-        _db.log_insert(
-            "WARN", "login_fail", source="login", extra={"username": username}
-        )
+        try:
+            _db.log_insert(
+                "WARN", "login_fail", source="login", extra={"username": username}
+            )
+        except Exception:
+            app.logger.warning("login_fail 写日志失败", exc_info=True)
         return jsonify({"success": False, "message": "用户名或密码错误"}), 401
     token = _issue_token(username)
     if isinstance(token, bytes):
         token = token.decode()
-    _db.log_insert("INFO", "login_ok", source="login", extra={"username": username})
+    try:
+        _db.log_insert(
+            "INFO", "login_ok", source="login", extra={"username": username}
+        )
+    except Exception:
+        app.logger.warning("login_ok 写日志失败（不影响登录）", exc_info=True)
     role = _db.user_get_role(username)
     linked = (
         _db.user_get_linked_account_ids(username) if role == "customer" else []

@@ -66,6 +66,10 @@ String migrateLegacyBackendApiPort(String raw) {
   if (!uri.hasPort) return normalized;
   final h = uri.host.toLowerCase();
   final p = uri.port;
+  // Web 机 54.252.181.151:9000 为静态页；后台 API 在 54.66.108.150:9001（与 deploy-aws.json 双机一致）
+  if (h == '54.252.181.151' && p == 9000) {
+    return _normalizeBackendBaseUrl('http://54.66.108.150:9001/');
+  }
   int? newPort;
   if (_isLocalDevHost(h) && (p == 8080 || p == 9000)) {
     newPort = 9001;
@@ -85,7 +89,7 @@ String _migrateLegacyBackendApiPortStringFallback(String normalized) {
     MapEntry('localhost:8080', 'localhost:9001'),
     MapEntry('localhost:9000', 'localhost:9001'),
     MapEntry('54.66.108.150:9000', '54.66.108.150:9001'),
-    MapEntry('54.252.181.151:9000', '54.252.181.151:9001'),
+    MapEntry('54.252.181.151:9000', '54.66.108.150:9001'),
   ]) {
     s = s.replaceAll(entry.key, entry.value);
   }

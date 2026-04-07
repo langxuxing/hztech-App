@@ -1,5 +1,6 @@
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 /// 与 aa.html 一致的金融卡片风格：深色背景、毛玻璃卡片、标签/数值/盈利色。
@@ -73,6 +74,25 @@ class AppFinanceStyle {
 
   /// 汇总条内宽屏列间距。
   static const double webSummaryWideGap = 32;
+
+  /// Web 宽表/对比表网格线（与毛玻璃卡协调，避免生硬纯灰线）。
+  static const Color webDataGridLine = Color.fromRGBO(255, 255, 255, 0.08);
+
+  /// Web 数据表左侧指标列背景。
+  static const Color webDataTableLabelBg = Color.fromRGBO(255, 255, 255, 0.035);
+
+  /// Web 数据表数据区背景。
+  static const Color webDataTableCellBg = Color.fromRGBO(0, 0, 0, 0.2);
+
+  /// Web 数据表行 hover（略亮于 [webDataTableCellBg]）。
+  static const Color webDataTableRowHoverBg = Color.fromRGBO(255, 255, 255, 0.04);
+
+  /// Web 子页 Tab 条外框（赛季 Hub、策略能效卡片内等与侧栏页一致）。
+  static BoxDecoration webSubtleInsetPanelDecoration() => BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: cardBorder),
+      );
 
   /// 汇总条主数值字号（与条高度配套；相对上一版 48 再 +50% → 72）。
   static const double webSummaryValueFontSize = 72;
@@ -168,11 +188,21 @@ class AppFinanceStyle {
   /// 毛玻璃模糊 sigma
   static const double cardBlurSigma = 14;
 
-  /// 账户盈利详情（APK）交易账户 [DropdownButton] 字号，略高于 [labelTextStyle] 便于选读。
-  static const double accountProfitBotDropdownFontSize = 15;
-
-  /// Web 账户画像同位置下拉框字号（大屏略增）。
+  /// Web 部分页面次级下拉（赛季/历史等）用略小字号，避免喧宾夺主。
   static const double webAccountProfitBotDropdownFontSize = 16;
+
+  /// 与「账户概览」列表标题、账户收益/画像章节 [_sectionTitle] 同级：**App** `titleLarge`+2，**Web** +4。
+  /// 用于账户选择 [DropdownButton]，避免因单独写死 14–16px 而比卡片标题明显更小（并非控件高度限制）。
+  static TextStyle accountProfitOverviewHeadingStyle(BuildContext context) {
+    final tl = Theme.of(context).textTheme.titleLarge;
+    final bump = kIsWeb ? 4 : 2;
+    return (tl ?? const TextStyle()).copyWith(
+      color: labelColor,
+      fontSize: (tl?.fontSize ?? 22) + bump,
+      fontWeight: FontWeight.w600,
+      letterSpacing: 0.35,
+    );
+  }
 
   /// 标签字体 14px, font-weight 500
   static TextStyle labelTextStyle(BuildContext context) {

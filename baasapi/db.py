@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 
 try:
     import sqlite3
@@ -1270,17 +1272,43 @@ def user_update_profile(
 def log_insert(
     level: str, message: str, source: str | None = None, extra: dict | None = None
 ) -> None:
-    """写入一条日志。level 建议: INFO, WARN, ERROR。"""
-    conn = get_conn()
-    try:
-        extra_str = json.dumps(extra, ensure_ascii=False) if extra else None
-        conn.execute(
-            "INSERT INTO logs (level, message, source, extra) VALUES (?, ?, ?, ?)",
-            (level, message, source or "app", extra_str),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    """写入一条日志。level 建议: INFO, WARN, ERROR。
+
+    SQLite 遇「database is locked」时会按 HZTECH_LOG_INSERT_MAX_ATTEMPTS（默认 8）
+    与 HZTECH_LOG_INSERT_BACKOFF_SEC（默认 0.05，指数退避）重试，减轻与后台同步线程的竞争。
+    """
+    extra_str = json.dumps(extra, ensure_ascii=False) if extra else None
+    max_attempts = int((os.environ.get("HZTECH_LOG_INSERT_MAX_ATTEMPTS") or "8").strip())
+    if max_attempts < 1:
+        max_attempts = 1
+    backoff = float((os.environ.get("HZTECH_LOG_INSERT_BACKOFF_SEC") or "0.05").strip())
+    if backoff < 0:
+        backoff = 0.0
+    for attempt in range(max_attempts):
+        conn = get_conn()
+        try:
+            conn.execute(
+                "INSERT INTO logs (level, message, source, extra) VALUES (?, ?, ?, ?)",
+                (level, message, source or "app", extra_str),
+            )
+            conn.commit()
+            return
+        except DB_OPERATIONAL_ERRORS as e:
+            try:
+                conn.rollback()
+            except DB_OPERATIONAL_ERRORS:
+                pass
+            locked_sqlite = (
+                not IS_POSTGRES
+                and isinstance(e, sqlite3.OperationalError)
+                and "locked" in str(e).lower()
+            )
+            if locked_sqlite and attempt + 1 < max_attempts:
+                time.sleep(backoff * (2**attempt))
+                continue
+            raise
+        finally:
+            conn.close()
 
 
 def log_query(

@@ -554,7 +554,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
     );
 
     return FinanceCard(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -603,7 +603,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
               Text('#${s.id}', style: _label(context, fs: 12)),
             ],
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           LayoutBuilder(
             builder: (ctx, bc) {
               final wide = bc.maxWidth >= 520;
@@ -689,7 +689,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
     );
 
     return FinanceCard(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -738,7 +738,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
               Text('#${s.id}', style: _label(context, fs: 12)),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           LayoutBuilder(
             builder: (ctx, bc) {
               final wide = bc.maxWidth >= 520;
@@ -808,7 +808,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
     );
 
     return FinanceCard(
-      padding: const EdgeInsets.all(14),
+      padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -919,45 +919,76 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
         children: [
           if (widget.accountIdFromParent == null)
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-              child: DropdownButtonFormField<String>(
-                value:
-                    _botId != null && _bots.any((b) => b.tradingbotId == _botId)
-                    ? _botId
-                    : null,
-                decoration: InputDecoration(
-                  labelText: '账户',
-                  labelStyle: AppFinanceStyle.labelTextStyle(context),
-                  filled: true,
-                  fillColor: Colors.white.withValues(alpha: 0.06),
-                ),
-                dropdownColor: const Color(0xFF1a1a24),
-                style: TextStyle(color: AppFinanceStyle.valueColor),
-                items: _bots
-                    .map(
-                      (b) => DropdownMenuItem(
-                        value: b.tradingbotId,
-                        child: Text(
-                          (b.tradingbotName != null &&
-                                  b.tradingbotName!.isNotEmpty)
-                              ? b.tradingbotName!
-                              : b.tradingbotId,
-                          overflow: TextOverflow.ellipsis,
+              padding: EdgeInsets.fromLTRB(
+                24,
+                widget.embedInShell ? 12 : 24 + AppFinanceStyle.webSummaryTitleSpacing,
+                24,
+                12,
+              ),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: (MediaQuery.sizeOf(context).width * 0.5)
+                        .clamp(200.0, 360.0),
+                  ),
+                  child: FinanceCard(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                    child: DropdownButtonFormField<String>(
+                      value: _botId != null &&
+                              _bots.any((b) => b.tradingbotId == _botId)
+                          ? _botId
+                          : null,
+                      decoration: InputDecoration(
+                        labelText: '账户',
+                        labelStyle: AppFinanceStyle.labelTextStyle(context),
+                        border: InputBorder.none,
+                        filled: false,
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 4,
+                          vertical: 6,
                         ),
                       ),
-                    )
-                    .toList(),
-                onChanged: (v) {
-                  setState(() => _botId = v);
-                  _load();
-                },
+                      dropdownColor: AppFinanceStyle.cardBackground
+                          .withValues(alpha: 0.98),
+                      style: const TextStyle(
+                        color: AppFinanceStyle.valueColor,
+                        fontSize:
+                            AppFinanceStyle.webAccountProfitBotDropdownFontSize,
+                        fontWeight: FontWeight.w500,
+                      ),
+                      items: _bots
+                          .map(
+                            (b) => DropdownMenuItem(
+                              value: b.tradingbotId,
+                              child: Text(
+                                (b.tradingbotName != null &&
+                                        b.tradingbotName!.isNotEmpty)
+                                    ? b.tradingbotName!
+                                    : b.tradingbotId,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (v) {
+                        setState(() => _botId = v);
+                        _load();
+                      },
+                    ),
+                  ),
+                ),
               ),
             )
           else
             const SizedBox(height: 8),
           if (_activeCount != null && _activeCount! > 0)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
               child: Text(
                 '进行中赛季数：$_activeCount（请在「策略启停」使用赛季开始/停止）',
                 style: AppFinanceStyle.labelTextStyle(
@@ -967,7 +998,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
             ),
           if (_error != null)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 24),
               child: Text(
                 _error!,
                 style: TextStyle(color: AppFinanceStyle.textLoss, fontSize: 13),
@@ -998,15 +1029,20 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
                             hi != null &&
                             _isCurrentBeijingWeekMonday(hi);
                         return ListView(
-                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                          padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
                           children: [
                             Padding(
-                              padding: const EdgeInsets.only(bottom: 12),
+                              padding: const EdgeInsets.only(bottom: 14),
                               child: Text(
                                 '当前账户未配置赛季，已按北京时间自然周（周一至周日）汇总最近约 2 年的平仓；'
                                 '在「策略启停」使用赛季开始/停止后可改为正式赛季统计。',
                                 style: AppFinanceStyle.labelTextStyle(context)
-                                    .copyWith(fontSize: 13, height: 1.35),
+                                    .copyWith(
+                                  fontSize: 13,
+                                  height: 1.4,
+                                  color: AppFinanceStyle.textDefault
+                                      .withValues(alpha: 0.58),
+                                ),
                               ),
                             ),
                             if (hi == null)
@@ -1024,10 +1060,11 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
                                 hiCurrent ? '当前自然周' : '最近自然周',
                                 style: AppFinanceStyle.labelTextStyle(context)
                                     .copyWith(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w600,
-                                      color: AppFinanceStyle.valueColor,
-                                    ),
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppFinanceStyle.labelColor,
+                                  letterSpacing: 0.35,
+                                ),
                               ),
                               const SizedBox(height: 8),
                               _buildWeeklyCard(
@@ -1043,10 +1080,11 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
                                   '更早自然周',
                                   style: AppFinanceStyle.labelTextStyle(context)
                                       .copyWith(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w600,
-                                        color: AppFinanceStyle.valueColor,
-                                      ),
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppFinanceStyle.labelColor,
+                                    letterSpacing: 0.35,
+                                  ),
                                 ),
                                 const SizedBox(height: 8),
                                 ...others.map((mon) {
@@ -1070,7 +1108,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
                       final hi = _highlightSeason();
                       final others = _otherSeasons(hi);
                       return ListView(
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                        padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
                         children: [
                           if (_seasons.isEmpty)
                             Padding(
@@ -1086,10 +1124,11 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
                                 hi.isActive == true ? '当前赛季' : '最近赛季',
                                 style: AppFinanceStyle.labelTextStyle(context)
                                     .copyWith(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w600,
-                                      color: AppFinanceStyle.valueColor,
-                                    ),
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppFinanceStyle.labelColor,
+                                  letterSpacing: 0.35,
+                                ),
                               ),
                               const SizedBox(height: 8),
                               _buildHighlightCard(ctx, hi, _aggForSeason(hi)),
@@ -1100,10 +1139,11 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
                                 '历史赛季',
                                 style: AppFinanceStyle.labelTextStyle(context)
                                     .copyWith(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w600,
-                                      color: AppFinanceStyle.valueColor,
-                                    ),
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppFinanceStyle.labelColor,
+                                  letterSpacing: 0.35,
+                                ),
                               ),
                               const SizedBox(height: 8),
                               ...others.map((s) {
@@ -1121,9 +1161,16 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
           ),
         ],
       );
+    final bounded = Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 1600),
+        child: column,
+      ),
+    );
     final content = widget.accountIdFromParent != null
-        ? column
-        : WaterBackground(child: column);
+        ? bounded
+        : WaterBackground(child: bounded);
 
     if (widget.embedInShell) {
       return content;

@@ -5,6 +5,7 @@ import '../api/models.dart';
 import '../auth/app_user_role.dart';
 import '../secure/prefs.dart';
 import '../theme/finance_style.dart';
+import '../widgets/water_background.dart';
 
 /// 用户管理弹窗内主文字（与全局 textDefault 一致）
 const Color _kUserDialogText = AppFinanceStyle.textDefault;
@@ -615,20 +616,87 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     }
   }
 
-  Widget _embedHintBanner() {
+  Widget _embedHeaderCard(BuildContext context) {
+    final titleStyle =
+        (Theme.of(context).textTheme.titleLarge ?? const TextStyle()).copyWith(
+      color: AppFinanceStyle.labelColor,
+      fontSize:
+          (Theme.of(context).textTheme.titleLarge?.fontSize ?? 22) + 2,
+      fontWeight: FontWeight.w600,
+    );
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      child: Material(
-        color: const Color(0xFF1e1e2a),
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Text(
-            '在此维护登录账号、角色与客户可见账户。请勿删除全部管理员；至少保留一名可登录的管理员账号。',
-            style: TextStyle(
-              color: AppFinanceStyle.labelColor.withValues(alpha: 0.95),
-              fontSize: 13,
-              height: 1.45,
+      padding: EdgeInsets.fromLTRB(
+        24,
+        24 + AppFinanceStyle.webSummaryTitleSpacing,
+        24,
+        8,
+      ),
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1600),
+          child: FinanceCard(
+            padding: const EdgeInsets.fromLTRB(20, 22, 20, 18),
+            child: LayoutBuilder(
+              builder: (context, c) {
+                final narrow = c.maxWidth < 560;
+                final actions = FilledButton.tonalIcon(
+                  onPressed: _addUser,
+                  style: FilledButton.styleFrom(
+                    foregroundColor: AppFinanceStyle.profitGreenEnd,
+                    backgroundColor:
+                        AppFinanceStyle.profitGreenEnd.withValues(alpha: 0.14),
+                  ),
+                  icon: const Icon(Icons.person_add_outlined, size: 22),
+                  label: const Text('新增用户'),
+                );
+                final headline = Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('用户管理', style: titleStyle),
+                    const SizedBox(height: 6),
+                    Text(
+                      '维护登录账号、角色类型与客户可见交易账户',
+                      style: AppFinanceStyle.labelTextStyle(context).copyWith(
+                        fontSize: 13,
+                        color: AppFinanceStyle.textDefault.withValues(
+                          alpha: 0.55,
+                        ),
+                        fontWeight: FontWeight.w400,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      '请勿删除全部管理员，至少保留一名可登录的管理员账号。',
+                      style: AppFinanceStyle.labelTextStyle(context).copyWith(
+                        fontSize: 12,
+                        height: 1.45,
+                        color: AppFinanceStyle.textDefault.withValues(
+                          alpha: 0.48,
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+                if (narrow) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      headline,
+                      const SizedBox(height: 16),
+                      actions,
+                    ],
+                  );
+                }
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: headline),
+                    const SizedBox(width: 16),
+                    actions,
+                  ],
+                );
+              },
             ),
           ),
         ),
@@ -636,168 +704,383 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     );
   }
 
-  Widget _emptyState() {
+  Widget _roleBadge(String roleLabel) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: AppFinanceStyle.profitGreenEnd.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: AppFinanceStyle.profitGreenEnd.withValues(alpha: 0.32),
+        ),
+      ),
+      child: Text(
+        roleLabel,
+        style: const TextStyle(
+          color: AppFinanceStyle.profitGreenEnd,
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+
+  Widget _detailRow(String label, String value, {int maxLines = 3}) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 48, 24, 24),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+      padding: const EdgeInsets.only(top: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(
-            Icons.group_add_outlined,
-            size: 56,
-            color: AppFinanceStyle.labelColor.withValues(alpha: 0.5),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            '暂无用户',
-            style: AppFinanceStyle.labelTextStyle(context).copyWith(
-                  color: AppFinanceStyle.valueColor,
-                  fontSize: 17,
-                  fontWeight: FontWeight.w600,
-                ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '点击右下角「新增用户」创建第一个账号',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: AppFinanceStyle.labelColor.withValues(alpha: 0.9),
-              fontSize: 14,
-              height: 1.4,
+          SizedBox(
+            width: 96,
+            child: Text(
+              label,
+              style: TextStyle(
+                color: AppFinanceStyle.labelColor.withValues(alpha: 0.62),
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ),
-          const SizedBox(height: 24),
-          FilledButton.icon(
-            onPressed: _addUser,
-            icon: const Icon(Icons.person_add_outlined),
-            label: const Text('新增用户'),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(
+                color: AppFinanceStyle.valueColor,
+                fontSize: 14,
+                height: 1.4,
+              ),
+              maxLines: maxLines,
+              overflow: TextOverflow.ellipsis,
+            ),
           ),
         ],
       ),
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final body = _loading
-        ? const Center(child: CircularProgressIndicator())
-        : _error != null
-            ? Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        _error!,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: AppFinanceStyle.labelColor),
-                      ),
-                      const SizedBox(height: 16),
-                      FilledButton(onPressed: _reload, child: const Text('重试')),
-                    ],
-                  ),
-                ),
-              )
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+  Widget _userCard(ManagedUserRow u) {
+    final roleEnum = AppUserRole.fromApi(u.role);
+    final roleLabel = AppUserRole.label(roleEnum);
+    final phoneDisp = u.phone.isEmpty ? '—' : u.phone;
+    final nameDisp =
+        u.fullName.trim().isEmpty ? '—' : u.fullName.trim();
+    final accounts = u.linkedAccountIds;
+    final accountsEmptyHint = roleEnum == AppUserRole.customer
+        ? '未绑定'
+        : '—';
+    final accountsText = accounts.isEmpty
+        ? accountsEmptyHint
+        : accounts.join('，');
+
+    final profileParts = <String>[];
+    if (nameDisp != '—') profileParts.add(nameDisp);
+    if (phoneDisp != '—') profileParts.add(phoneDisp);
+    final profileSub = profileParts.isEmpty ? null : profileParts.join(' · ');
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _editUser(u),
+        borderRadius: BorderRadius.circular(AppFinanceStyle.cardRadius),
+        child: FinanceCard(
+          padding: const EdgeInsets.fromLTRB(20, 18, 8, 18),
+          child: LayoutBuilder(
+            builder: (context, c) {
+              final narrow = c.maxWidth < 520;
+              final actions = Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (widget.embedInShell) _embedHintBanner(),
-                  Expanded(
-                    child: RefreshIndicator(
-                      onRefresh: _reload,
-                      child: _users.isEmpty
-                          ? ListView(
-                              physics: const AlwaysScrollableScrollPhysics(),
-                              padding: const EdgeInsets.only(bottom: 88),
-                              children: [_emptyState()],
-                            )
-                          : ListView.separated(
-                              physics: const AlwaysScrollableScrollPhysics(),
-                              padding: const EdgeInsets.fromLTRB(16, 16, 16, 88),
-                              itemCount: _users.length,
-                              separatorBuilder: (_, __) => const SizedBox(height: 8),
-                              itemBuilder: (ctx, i) {
-                                final u = _users[i];
-                                return Material(
-                                  color: const Color(0xFF16161f),
-                                  borderRadius: BorderRadius.circular(12),
-                                  child: ListTile(
-                                    title: Text(
-                                      u.username,
-                                      style: const TextStyle(
-                                        color: AppFinanceStyle.valueColor,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                    subtitle: Text(
-                                      () {
-                                        final parts = <String>[
-                                          AppUserRole.label(AppUserRole.fromApi(u.role)),
-                                          if (u.fullName.isNotEmpty) u.fullName,
-                                          if (u.phone.isNotEmpty) u.phone,
-                                          if (u.linkedAccountIds.isNotEmpty)
-                                            '${u.linkedAccountIds.length} 个绑定账户',
-                                        ];
-                                        return parts.join(' · ');
-                                      }(),
-                                      style: TextStyle(
-                                        color: AppFinanceStyle.labelColor.withValues(alpha: 0.95),
-                                        fontSize: 13,
-                                      ),
-                                    ),
-                                    trailing: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        IconButton(
-                                          tooltip: '编辑资料、角色与可见账户',
-                                          icon: const Icon(Icons.edit_outlined,
-                                              color: AppFinanceStyle.labelColor),
-                                          onPressed: () => _editUser(u),
-                                        ),
-                                        IconButton(
-                                          tooltip: '删除用户',
-                                          icon: Icon(Icons.delete_outline,
-                                              color: AppFinanceStyle.textLoss),
-                                          onPressed: () => _deleteUser(u),
-                                        ),
-                                      ],
-                                    ),
-                                    onTap: () => _editUser(u),
-                                  ),
-                                );
-                              },
-                            ),
+                  IconButton(
+                    tooltip: '编辑资料、角色与可见账户',
+                    icon: const Icon(
+                      Icons.edit_outlined,
+                      color: AppFinanceStyle.labelColor,
                     ),
+                    onPressed: () => _editUser(u),
+                  ),
+                  IconButton(
+                    tooltip: '删除用户',
+                    icon: Icon(
+                      Icons.delete_outline,
+                      color: AppFinanceStyle.textLoss.withValues(alpha: 0.92),
+                    ),
+                    onPressed: () => _deleteUser(u),
                   ),
                 ],
               );
+              final titleBlock = Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    u.username,
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          fontWeight: FontWeight.w800,
+                          fontSize: (Theme.of(context)
+                                      .textTheme
+                                      .titleLarge
+                                      ?.fontSize ??
+                                  22) +
+                              2,
+                          color: AppFinanceStyle.valueColor,
+                          letterSpacing: -0.35,
+                        ),
+                  ),
+                  if (profileSub != null) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      profileSub,
+                      style: AppFinanceStyle.labelTextStyle(context).copyWith(
+                        fontSize: 13,
+                        color: AppFinanceStyle.textDefault.withValues(
+                          alpha: 0.5,
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              );
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (narrow)
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(child: titleBlock),
+                            actions,
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: _roleBadge(roleLabel),
+                        ),
+                      ],
+                    )
+                  else
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: titleBlock),
+                        const SizedBox(width: 12),
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: _roleBadge(roleLabel),
+                        ),
+                        actions,
+                      ],
+                    ),
+                  _detailRow('中文名', nameDisp),
+                  _detailRow('手机号', phoneDisp),
+                  _detailRow(
+                    roleEnum == AppUserRole.customer ? '可访问账户' : '账户范围',
+                    roleEnum == AppUserRole.customer
+                        ? accountsText
+                        : '非客户角色不按账户过滤',
+                    maxLines: roleEnum == AppUserRole.customer ? 5 : 2,
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _emptyState() {
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 1600),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
+          child: FinanceCard(
+            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 40),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.group_add_outlined,
+                  size: 52,
+                  color: AppFinanceStyle.labelColor.withValues(alpha: 0.45),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  '暂无用户',
+                  style: AppFinanceStyle.labelTextStyle(context).copyWith(
+                        color: AppFinanceStyle.valueColor,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                      ),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  widget.embedInShell
+                      ? '使用上方「新增用户」创建第一个登录账号'
+                      : '点击下方按钮创建第一个登录账号',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: AppFinanceStyle.labelColor.withValues(alpha: 0.72),
+                    fontSize: 14,
+                    height: 1.45,
+                  ),
+                ),
+                if (!widget.embedInShell) ...[
+                  const SizedBox(height: 24),
+                  FilledButton.tonalIcon(
+                    onPressed: _addUser,
+                    style: FilledButton.styleFrom(
+                      foregroundColor: AppFinanceStyle.profitGreenEnd,
+                      backgroundColor: AppFinanceStyle.profitGreenEnd
+                          .withValues(alpha: 0.14),
+                    ),
+                    icon: const Icon(Icons.person_add_outlined),
+                    label: const Text('新增用户'),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final showFab = !widget.embedInShell &&
+        !_loading &&
+        _error == null &&
+        _users.isNotEmpty;
+
+    late final Widget main;
+    if (_loading) {
+      main = const Center(
+        child: CircularProgressIndicator(color: AppFinanceStyle.profitGreenEnd),
+      );
+    } else if (_error != null) {
+      main = Center(
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.all(24),
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 480),
+              child: FinanceCard(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _error!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: AppFinanceStyle.labelColor),
+                    ),
+                    const SizedBox(height: 16),
+                    FilledButton(
+                      onPressed: _reload,
+                      child: const Text('重试'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    } else {
+      main = Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (widget.embedInShell) _embedHeaderCard(context),
+          Expanded(
+            child: RefreshIndicator(
+              color: AppFinanceStyle.profitGreenEnd,
+              onRefresh: _reload,
+              child: _users.isEmpty
+                  ? ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: const EdgeInsets.only(bottom: 48),
+                      children: [_emptyState()],
+                    )
+                  : ListView.builder(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      padding: EdgeInsets.fromLTRB(
+                        24,
+                        widget.embedInShell ? 8 : 16,
+                        24,
+                        showFab ? 88 : 32,
+                      ),
+                      itemCount: _users.length,
+                      itemBuilder: (ctx, i) {
+                        final gap = i < _users.length - 1 ? 14.0 : 0.0;
+                        return Align(
+                          alignment: Alignment.topCenter,
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 1600),
+                            child: Padding(
+                              padding: EdgeInsets.only(bottom: gap),
+                              child: _userCard(_users[i]),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+          ),
+        ],
+      );
+    }
 
     return Scaffold(
       backgroundColor: AppFinanceStyle.backgroundDark,
-      floatingActionButton: _loading || _error != null || _users.isEmpty
-          ? null
-          : FloatingActionButton.extended(
+      floatingActionButton: showFab
+          ? FloatingActionButton.extended(
               onPressed: _addUser,
               icon: const Icon(Icons.person_add_outlined),
               label: const Text('新增用户'),
-              backgroundColor: AppFinanceStyle.profitGreenEnd.withValues(alpha: 0.85),
-            ),
+              backgroundColor:
+                  AppFinanceStyle.profitGreenEnd.withValues(alpha: 0.85),
+            )
+          : null,
       appBar: widget.embedInShell
           ? null
           : AppBar(
               title: Text(
                 '用户管理',
                 style: AppFinanceStyle.labelTextStyle(context).copyWith(
-                      color: AppFinanceStyle.valueColor,
-                      fontSize: 18,
-                    ),
+                  color: AppFinanceStyle.valueColor,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
+              actions: [
+                if (!_loading && _error == null)
+                  IconButton(
+                    tooltip: '新增用户',
+                    icon: Icon(
+                      Icons.person_add_outlined,
+                      color: AppFinanceStyle.profitGreenEnd.withValues(
+                        alpha: 0.95,
+                      ),
+                    ),
+                    onPressed: _addUser,
+                  ),
+              ],
               backgroundColor: AppFinanceStyle.backgroundDark,
               foregroundColor: AppFinanceStyle.valueColor,
               surfaceTintColor: Colors.transparent,
             ),
-      body: body,
+      body: ColoredBox(
+        color: AppFinanceStyle.backgroundDark,
+        child: WaterBackground(child: main),
+      ),
     );
   }
 }

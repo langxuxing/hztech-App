@@ -7,6 +7,7 @@ import '../../api/models.dart';
 import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
 import '../../utils/number_display_format.dart';
+import '../../widgets/account_detail_loading_overlay.dart';
 import '../../widgets/water_background.dart';
 
 /// Web：Account_List 全账户对比；持仓/成本线来自 [account_open_positions_snapshots]。
@@ -205,12 +206,14 @@ class _WebAccountPerformanceScreenState
             physics: const AlwaysScrollableScrollPhysics(),
             padding: EdgeInsets.fromLTRB(
               24,
-              widget.embedInShell ? 16 : 12,
+              widget.embedInShell
+                  ? 24 + AppFinanceStyle.webSummaryTitleSpacing
+                  : 16,
               24,
               48,
             ),
             child: Align(
-              alignment: Alignment.topLeft,
+              alignment: Alignment.topCenter,
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 1600),
                 child: Column(
@@ -229,7 +232,7 @@ class _WebAccountPerformanceScreenState
                         _load();
                       },
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 20),
                     if (_loadError != null)
                       FinanceCard(
                         padding: const EdgeInsets.all(16),
@@ -242,15 +245,23 @@ class _WebAccountPerformanceScreenState
                       )
                     else if (_loading)
                       const Padding(
-                        padding: EdgeInsets.all(48),
-                        child: Center(child: CircularProgressIndicator()),
+                        padding: EdgeInsets.symmetric(
+                          vertical: 48,
+                          horizontal: 24,
+                        ),
+                        child: Center(
+                          child: FinanceInlineLoadingBlock(
+                            message: '正在加载各账户月度对比数据…',
+                            subtitle: '请稍候，数据量较大时可能需要数秒',
+                          ),
+                        ),
                       )
                     else
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           FinanceCard(
-                            padding: const EdgeInsets.all(12),
+                            padding: const EdgeInsets.fromLTRB(20, 22, 20, 22),
                             child: _ComparisonGrid(
                               dateCompact: _snapshotDateCompact(),
                               refPrice: _refPrice,
@@ -350,38 +361,111 @@ class _MonthToolbar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
-        Text(
-          '对比月份',
-          style: AppFinanceStyle.labelTextStyle(
-            context,
-          ).copyWith(fontWeight: FontWeight.w600),
-        ),
-        IconButton(
-          onPressed: onPrev,
-          icon: const Icon(Icons.chevron_left),
-          color: AppFinanceStyle.valueColor,
-          tooltip: '上一月',
-        ),
-        Text(
-          title,
-          style: Theme.of(context).textTheme.titleSmall?.copyWith(
+    final titleStyle =
+        (Theme.of(context).textTheme.titleLarge ?? const TextStyle()).copyWith(
+          color: AppFinanceStyle.labelColor,
+          fontSize:
+              (Theme.of(context).textTheme.titleLarge?.fontSize ?? 22) + 2,
+          fontWeight: FontWeight.w600,
+        );
+    final monthNav = DecoratedBox(
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.04),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppFinanceStyle.cardBorder),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            onPressed: onPrev,
+            icon: const Icon(Icons.chevron_left, size: 22),
             color: AppFinanceStyle.valueColor,
-            fontWeight: FontWeight.w700,
+            tooltip: '上一月',
+            visualDensity: VisualDensity.compact,
           ),
-        ),
-        IconButton(
-          onPressed: onNext,
-          icon: const Icon(Icons.chevron_right),
-          color: AppFinanceStyle.valueColor,
-          tooltip: '下一月',
-        ),
-        TextButton(onPressed: onThisMonth, child: const Text('本月')),
-      ],
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Text(
+              title,
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    color: AppFinanceStyle.valueColor,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.2,
+                  ),
+            ),
+          ),
+          IconButton(
+            onPressed: onNext,
+            icon: const Icon(Icons.chevron_right, size: 22),
+            color: AppFinanceStyle.valueColor,
+            tooltip: '下一月',
+            visualDensity: VisualDensity.compact,
+          ),
+          Padding(
+            padding: const EdgeInsets.only(right: 6),
+            child: TextButton(
+              onPressed: onThisMonth,
+              style: TextButton.styleFrom(
+                foregroundColor: AppFinanceStyle.profitGreenEnd,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              ),
+              child: const Text('本月'),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    return FinanceCard(
+      padding: const EdgeInsets.fromLTRB(22, 20, 22, 20),
+      child: LayoutBuilder(
+        builder: (context, c) {
+          final narrow = c.maxWidth < 560;
+          if (narrow) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('账户绩效对比', style: titleStyle),
+                const SizedBox(height: 6),
+                Text(
+                  '按月对比各账户持仓、成交与收益率',
+                  style: AppFinanceStyle.labelTextStyle(context).copyWith(
+                    fontSize: 13,
+                    color: AppFinanceStyle.textDefault.withValues(alpha: 0.55),
+                    fontWeight: FontWeight.w400,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Center(child: monthNav),
+              ],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('账户绩效对比', style: titleStyle),
+                    const SizedBox(height: 6),
+                    Text(
+                      '按月对比各账户持仓、成交与收益率',
+                      style: AppFinanceStyle.labelTextStyle(context).copyWith(
+                        fontSize: 13,
+                        color: AppFinanceStyle.textDefault.withValues(alpha: 0.55),
+                        fontWeight: FontWeight.w400,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              monthNav,
+            ],
+          );
+        },
+      ),
     );
   }
 }
@@ -514,11 +598,11 @@ class _ComparisonGrid extends StatelessWidget {
   final int year;
   final int month;
 
-  static const Color _gridColor = Color(0xFF3a3a48);
+  static const Color _gridColor = AppFinanceStyle.webDataGridLine;
   /// 左侧指标列底色
-  static const Color _labelColumnBg = Color(0xFF1c1c28);
+  static const Color _labelColumnBg = AppFinanceStyle.webDataTableLabelBg;
   /// 右侧账号数据区底色
-  static const Color _accountColumnBg = Color(0xFF13131c);
+  static const Color _accountColumnBg = AppFinanceStyle.webDataTableCellBg;
   static const double _labelW = 168.0;
   static const double _minDataColW = 72.0;
 
@@ -597,12 +681,12 @@ class _ComparisonGrid extends StatelessWidget {
             bold: false,
           ),
           (
-            label: '成交金额-(${month}月)',
+            label: '成交金额-($month月)',
             value: (c) => formatUiSignedUsdt2(c.monthPnl),
             bold: false,
           ),
           (
-            label: '收益率-(${month}月)',
+            label: '收益率-($month月)',
             value: (c) => formatUiPercentLabel(c.monthReturnPct),
             bold: true,
           ),

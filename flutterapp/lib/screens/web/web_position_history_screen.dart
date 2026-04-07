@@ -80,16 +80,17 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
 
   static const Color _tableHeaderFg = AppFinanceStyle.textDefault;
   static const Color _tableCellFg = AppFinanceStyle.textDefault;
-  static const Color _tableBorder = Color(0x44FFFFFF);
+  static const Color _tableBorder = AppFinanceStyle.webDataGridLine;
 
   TextStyle get _headerStyle => const TextStyle(
     color: _tableHeaderFg,
-    fontWeight: FontWeight.w700,
-    fontSize: 12,
+    fontWeight: FontWeight.w600,
+    fontSize: 13,
+    letterSpacing: 0.2,
   );
 
   TextStyle get _cellStyle =>
-      const TextStyle(color: _tableCellFg, fontSize: 12, height: 1.2);
+      const TextStyle(color: _tableCellFg, fontSize: 12, height: 1.25);
 
   String _formatBjMs(String? ms) => formatEpochMsAsBeijing(ms);
 
@@ -241,70 +242,103 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
         children: [
           if (widget.accountIdFromParent == null || _isAdmin)
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-              child: Row(
-                children: [
-                  if (widget.accountIdFromParent == null)
-                    Expanded(
-                      child: DropdownButtonFormField<String>(
-                        value:
-                            _botId != null &&
-                                _bots.any((b) => b.tradingbotId == _botId)
-                            ? _botId
-                            : null,
-                        decoration: InputDecoration(
-                          labelText: '账户',
-                          labelStyle: AppFinanceStyle.labelTextStyle(context),
-                          filled: true,
-                          fillColor: Colors.white.withValues(alpha: 0.06),
-                        ),
-                        dropdownColor: const Color(0xFF1a1a24),
-                        style: TextStyle(color: AppFinanceStyle.valueColor),
-                        items: _bots
-                            .map(
-                              (b) => DropdownMenuItem(
-                                value: b.tradingbotId,
-                                child: Text(
-                                  (b.tradingbotName != null &&
-                                          b.tradingbotName!.isNotEmpty)
-                                      ? b.tradingbotName!
-                                      : b.tradingbotId,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (v) {
-                          setState(() => _botId = v);
-                          _load();
-                        },
-                      ),
-                    )
-                  else
-                    const Spacer(),
-                  if (_isAdmin) ...[
+              padding: EdgeInsets.fromLTRB(
+                24,
+                widget.accountIdFromParent != null
+                    ? 12
+                    : 24 + AppFinanceStyle.webSummaryTitleSpacing,
+                24,
+                12,
+              ),
+              child: FinanceCard(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
                     if (widget.accountIdFromParent == null)
-                      const SizedBox(width: 8),
-                    IconButton.filledTonal(
-                      onPressed: _syncing ? null : _syncNow,
-                      icon: _syncing
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.cloud_download_outlined),
-                      tooltip: '从 OKX 同步历史仓位',
-                    ),
+                      Expanded(
+                        child: DropdownButtonFormField<String>(
+                          value:
+                              _botId != null &&
+                                  _bots.any((b) => b.tradingbotId == _botId)
+                              ? _botId
+                              : null,
+                          decoration: InputDecoration(
+                            labelText: '账户',
+                            labelStyle:
+                                AppFinanceStyle.labelTextStyle(context),
+                            border: InputBorder.none,
+                            filled: false,
+                            isDense: true,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 4,
+                              vertical: 6,
+                            ),
+                          ),
+                          dropdownColor: AppFinanceStyle.cardBackground
+                              .withValues(alpha: 0.98),
+                          style: const TextStyle(
+                            color: AppFinanceStyle.valueColor,
+                            fontSize:
+                                AppFinanceStyle.webAccountProfitBotDropdownFontSize,
+                            fontWeight: FontWeight.w500,
+                          ),
+                          items: _bots
+                              .map(
+                                (b) => DropdownMenuItem(
+                                  value: b.tradingbotId,
+                                  child: Text(
+                                    (b.tradingbotName != null &&
+                                            b.tradingbotName!.isNotEmpty)
+                                        ? b.tradingbotName!
+                                        : b.tradingbotId,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: (v) {
+                            setState(() => _botId = v);
+                            _load();
+                          },
+                        ),
+                      )
+                    else
+                      const Spacer(),
+                    if (_isAdmin) ...[
+                      if (widget.accountIdFromParent == null)
+                        const SizedBox(width: 10),
+                      IconButton.filledTonal(
+                        onPressed: _syncing ? null : _syncNow,
+                        style: IconButton.styleFrom(
+                          foregroundColor: AppFinanceStyle.valueColor,
+                        ),
+                        icon: _syncing
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: AppFinanceStyle.profitGreenEnd,
+                                ),
+                              )
+                            : Icon(
+                                Icons.cloud_download_outlined,
+                                color: AppFinanceStyle.profitGreenEnd
+                                    .withValues(alpha: 0.9),
+                              ),
+                        tooltip: '从 OKX 同步历史仓位',
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
             )
           else
             const SizedBox(height: 8),
           if (_error != null)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 24),
               child: Text(
                 _error!,
                 style: TextStyle(color: AppFinanceStyle.textLoss, fontSize: 13),
@@ -325,44 +359,47 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
                     ),
                   )
                 : Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    padding: const EdgeInsets.fromLTRB(24, 4, 24, 12),
                     child: LayoutBuilder(
                       builder: (context, constraints) {
                         final w = constraints.maxWidth;
                         final minTableW = w.isFinite && w > 0 ? w : 200.0;
-                        return Scrollbar(
-                          child: SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            child: ConstrainedBox(
-                              constraints: BoxConstraints(minWidth: minTableW),
-                              child: SingleChildScrollView(
-                                child: Theme(
-                                  data: Theme.of(context).copyWith(
-                                    dividerColor: _tableBorder,
-                                    dataTableTheme: DataTableThemeData(
-                                      headingTextStyle: _headerStyle,
-                                      dataTextStyle: _cellStyle,
-                                      dividerThickness: 1,
-                                      horizontalMargin: 8,
-                                      columnSpacing: 10,
+                        return FinanceCard(
+                          padding: const EdgeInsets.fromLTRB(8, 14, 8, 10),
+                          child: Scrollbar(
+                            child: SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: ConstrainedBox(
+                                constraints:
+                                    BoxConstraints(minWidth: minTableW),
+                                child: SingleChildScrollView(
+                                  child: Theme(
+                                    data: Theme.of(context).copyWith(
+                                      dividerColor: _tableBorder,
+                                      dataTableTheme: DataTableThemeData(
+                                        headingTextStyle: _headerStyle,
+                                        dataTextStyle: _cellStyle,
+                                        dividerThickness: 1,
+                                        horizontalMargin: 10,
+                                        columnSpacing: 12,
+                                      ),
                                     ),
-                                  ),
-                                  child: DataTable(
+                                    child: DataTable(
                                     headingRowColor: WidgetStateProperty.all(
-                                      const Color(0xFF252532),
+                                      AppFinanceStyle.webDataTableLabelBg,
                                     ),
                                     dataRowColor:
                                         WidgetStateProperty.resolveWith(
                                       (states) => states.contains(
                                             WidgetState.hovered,
                                           )
-                                          ? const Color(0xFF1A1A22)
-                                          : const Color(0xFF12121a),
+                                          ? AppFinanceStyle.webDataTableRowHoverBg
+                                          : AppFinanceStyle.webDataTableCellBg,
                                     ),
                                     border: TableBorder.symmetric(
                                       inside: BorderSide(
                                         color: _tableBorder,
-                                        width: 0.5,
+                                        width: 1,
                                       ),
                                     ),
                                     columns: [
@@ -435,6 +472,7 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
                               ),
                             ),
                           ),
+                        ),
                         );
                       },
                     ),
@@ -442,17 +480,37 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
           ),
           if (_nextBefore != null && _rows.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.all(16),
-              child: OutlinedButton(
-                onPressed: _loading ? null : () => _load(append: true),
-                child: Text(_loading ? '加载中…' : '加载更多'),
+              padding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
+              child: Align(
+                alignment: Alignment.center,
+                child: OutlinedButton(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppFinanceStyle.valueColor,
+                    side: BorderSide(
+                      color: AppFinanceStyle.cardBorder,
+                    ),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 28,
+                      vertical: 14,
+                    ),
+                  ),
+                  onPressed: _loading ? null : () => _load(append: true),
+                  child: Text(_loading ? '加载中…' : '加载更多'),
+                ),
               ),
             ),
         ],
       );
+    final bounded = Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 1600),
+        child: column,
+      ),
+    );
     final content = widget.accountIdFromParent != null
-        ? column
-        : WaterBackground(child: column);
+        ? bounded
+        : WaterBackground(child: bounded);
 
     if (widget.embedInShell) {
       return content;

@@ -123,6 +123,8 @@ class AccountProfitResponse {
 
 class AccountProfit {
   final String botId;
+  /// 与 Account_List / 后台 account_name 一致，用于界面展示（区别于 exchange_account 如 OKX）
+  final String? accountName;
   final String exchangeAccount;
   final double initialBalance;
   final double currentBalance;
@@ -151,6 +153,7 @@ class AccountProfit {
   final double? usedMargin;
 
   AccountProfit({
+    this.accountName,
     required this.exchangeAccount,
     required this.initialBalance,
     required this.currentBalance,
@@ -174,6 +177,7 @@ class AccountProfit {
   factory AccountProfit.fromJson(Map<String, dynamic> json) {
     return AccountProfit(
       botId: json['bot_id'] as String?,
+      accountName: json['account_name'] as String?,
       exchangeAccount: json['exchange_account'] as String? ?? '',
       initialBalance: (json['initial_balance'] as num?)?.toDouble() ?? 0,
       currentBalance: (json['current_balance'] as num?)?.toDouble() ?? 0,

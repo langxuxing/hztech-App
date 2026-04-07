@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
@@ -340,12 +341,28 @@ class _AccountsListState extends State<AccountsList> {
                   ],
                 )
               : ListView(
-                  padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+                  padding: EdgeInsets.fromLTRB(
+                    24,
+                    kIsWeb
+                        ? 24 + AppFinanceStyle.webSummaryTitleSpacing
+                        : 24,
+                    24,
+                    32,
+                  ),
                   physics: const AlwaysScrollableScrollPhysics(),
                   children: [
+                    Align(
+                      alignment: Alignment.topCenter,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 1680),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
                     if (_accounts.isNotEmpty)
                       FinanceCard(
-                        padding: AppFinanceStyle.mobileSummaryStripPadding,
+                        padding: kIsWeb
+                            ? AppFinanceStyle.webSummaryStripPadding
+                            : AppFinanceStyle.mobileSummaryStripPadding,
                         child: Builder(
                           builder: (context) {
                             final pct = _aggregateReturnPercent;
@@ -384,24 +401,14 @@ class _AccountsListState extends State<AccountsList> {
                           },
                         ),
                       ),
-                    if (_accounts.isNotEmpty) const SizedBox(height: 20),
+                    if (_accounts.isNotEmpty) const SizedBox(height: 24),
                     Text(
                       '账户概览',
-                      style:
-                          (Theme.of(context).textTheme.titleLarge ??
-                                  const TextStyle())
-                              .copyWith(
-                                color: AppFinanceStyle.labelColor,
-                                fontSize:
-                                    (Theme.of(
-                                          context,
-                                        ).textTheme.titleLarge?.fontSize ??
-                                        22) +
-                                    2,
-                                fontWeight: FontWeight.w600,
-                              ),
+                      style: AppFinanceStyle.accountProfitOverviewHeadingStyle(
+                        context,
+                      ),
                     ),
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 14),
                     if (_accounts.isEmpty)
                       Padding(
                         padding: const EdgeInsets.symmetric(vertical: 24),
@@ -415,7 +422,7 @@ class _AccountsListState extends State<AccountsList> {
                     else
                       ..._orderedAccounts.map(
                         (a) => Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
+                          padding: const EdgeInsets.only(bottom: 14),
                           child: Material(
                             color: Colors.transparent,
                             child: InkWell(
@@ -431,11 +438,13 @@ class _AccountsListState extends State<AccountsList> {
                                   ),
                                 );
                               },
-                              borderRadius: BorderRadius.circular(12),
+                              borderRadius: BorderRadius.circular(
+                                AppFinanceStyle.cardRadius,
+                              ),
                               child: FinanceCard(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 14,
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: kIsWeb ? 20 : 16,
+                                  vertical: kIsWeb ? 16 : 14,
                                 ),
                                 child: Builder(
                                   builder: (context) {
@@ -586,6 +595,10 @@ class _AccountsListState extends State<AccountsList> {
                           ),
                         ),
                       ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ],
                 ),
         ),

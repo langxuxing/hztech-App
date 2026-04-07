@@ -1001,7 +1001,7 @@ class _WebStrategyPerformanceScreenState
     };
 
     return FinanceCard(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(22),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1011,21 +1011,22 @@ class _WebStrategyPerformanceScreenState
               Container(
                 width: 10,
                 height: 10,
-                margin: const EdgeInsets.only(top: 4),
+                margin: const EdgeInsets.only(top: 5),
                 decoration: BoxDecoration(
                   color: _bandColor(bundle.band),
-                  borderRadius: BorderRadius.circular(2),
+                  borderRadius: BorderRadius.circular(3),
                 ),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 12),
               Expanded(
                 child: Text(
                   title,
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: AppFinanceStyle.valueColor,
-                    fontWeight: FontWeight.w600,
-                    fontSize: 24,
-                  ),
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        color: AppFinanceStyle.valueColor,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 22,
+                        letterSpacing: -0.3,
+                      ),
                 ),
               ),
               Text(
@@ -1038,34 +1039,61 @@ class _WebStrategyPerformanceScreenState
               ),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
           Text(
             '${eff.instId}：每日波动率% = |最高−最低|÷收盘 × 100%；'
             '策略/权益能效 = 当日增量÷（最高−最低） × 1e9；',
             style: AppFinanceStyle.labelTextStyle(context).copyWith(
-              fontSize: 14,
-              color: AppFinanceStyle.textDefault.withValues(alpha: 0.65),
+              fontSize: 13,
+              height: 1.45,
+              color: AppFinanceStyle.textDefault.withValues(alpha: 0.58),
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
+          Text(
+            cashNote,
+            style: AppFinanceStyle.labelTextStyle(context).copyWith(
+              fontSize: 12,
+              height: 1.4,
+              color: AppFinanceStyle.textDefault.withValues(alpha: 0.42),
+            ),
+          ),
+          const SizedBox(height: 16),
           DefaultTabController(
             length: 2,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                TabBar(
-                  labelColor: AppFinanceStyle.valueColor,
-                  unselectedLabelColor: AppFinanceStyle.labelColor.withValues(
-                    alpha: 0.65,
+                Material(
+                  color: Colors.transparent,
+                  child: DecoratedBox(
+                    decoration:
+                        AppFinanceStyle.webSubtleInsetPanelDecoration(),
+                    child: TabBar(
+                      labelColor: AppFinanceStyle.profitGreenEnd,
+                      unselectedLabelColor:
+                          AppFinanceStyle.labelColor.withValues(
+                        alpha: 0.55,
+                      ),
+                      labelStyle: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      unselectedLabelStyle: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                      indicatorColor: AppFinanceStyle.profitGreenEnd,
+                      indicatorWeight: 2.5,
+                      indicatorSize: TabBarIndicatorSize.tab,
+                      overlayColor:
+                          WidgetStateProperty.all(Colors.transparent),
+                      tabs: const [
+                        Tab(text: '图表'),
+                        Tab(text: '数据'),
+                      ],
+                    ),
                   ),
-                  labelStyle: const TextStyle(fontSize: 14),
-                  unselectedLabelStyle: const TextStyle(fontSize: 14),
-                  indicatorColor: AppFinanceStyle.profitGreenEnd,
-                  indicatorSize: TabBarIndicatorSize.label,
-                  tabs: const [
-                    Tab(text: '图表'),
-                    Tab(text: '数据'),
-                  ],
                 ),
                 SizedBox(
                   height: 460,
@@ -1186,7 +1214,7 @@ class _WebStrategyPerformanceScreenState
       final i = e.key;
       final w = e.value;
       if (i < sections.length - 1) {
-        return [w, const SizedBox(height: 20)];
+        return [w, const SizedBox(height: 24)];
       }
       return [w];
     });
@@ -1207,14 +1235,25 @@ class _WebStrategyPerformanceScreenState
             slivers: [
               if (_loadError != null)
                 SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
+                  padding: EdgeInsets.fromLTRB(
+                    24,
+                    24 + AppFinanceStyle.webSummaryTitleSpacing,
+                    24,
+                    8,
+                  ),
                   sliver: SliverToBoxAdapter(
-                    child: FinanceCard(
-                      padding: const EdgeInsets.all(20),
-                      child: Text(
-                        _loadError!,
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.error,
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 1600),
+                        child: FinanceCard(
+                          padding: const EdgeInsets.all(20),
+                          child: Text(
+                            _loadError!,
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.error,
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -1235,51 +1274,88 @@ class _WebStrategyPerformanceScreenState
                 )
               else ...[
                 SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+                  padding: EdgeInsets.fromLTRB(
+                    24,
+                    24 + AppFinanceStyle.webSummaryTitleSpacing,
+                    24,
+                    0,
+                  ),
                   sliver: SliverToBoxAdapter(
-                    child: FinanceCard(
-                      padding: EdgeInsets.zero,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(20, 20, 20, 6),
-                            child: Text(
-                              '全账户策略能效对比',
-                              style: Theme.of(context).textTheme.titleMedium
-                                  ?.copyWith(
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 1600),
+                        child: FinanceCard(
+                          padding: EdgeInsets.zero,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(22, 22, 22, 8),
+                                child: Text(
+                                  '全账户策略能效对比',
+                                  style:
+                                      (Theme.of(context).textTheme.titleLarge ??
+                                              const TextStyle())
+                                          .copyWith(
                                     color: AppFinanceStyle.labelColor,
+                                    fontSize: (Theme.of(context)
+                                                .textTheme
+                                                .titleLarge
+                                                ?.fontSize ??
+                                            22) +
+                                        2,
                                     fontWeight: FontWeight.w600,
                                   ),
-                            ),
+                                ),
+                              ),
+                              Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(22, 0, 22, 12),
+                                child: Text(
+                                  '默认展示最近约一个月（31 天、按 UTC 自然日）各账户「策略能效」'
+                                  '（当日现金增量 ÷ (价格波幅×1e9)）。'
+                                  '折线持续走弱，需要交易员人工干预。',
+                                  style: AppFinanceStyle.labelTextStyle(
+                                    context,
+                                  ).copyWith(
+                                    fontSize: 13,
+                                    height: 1.4,
+                                    color: AppFinanceStyle.textDefault
+                                        .withValues(alpha: 0.55),
+                                  ),
+                                ),
+                              ),
+                              Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(22, 0, 22, 16),
+                                child: _buildBandLegend(context),
+                              ),
+                              _buildComparisonChart(context),
+                              const SizedBox(height: 20),
+                            ],
                           ),
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-                            child: Text(
-                              '默认展示最近约一个月（31 天、按 UTC 自然日）各账户「策略能效」'
-                              '（当日现金增量 ÷ (价格波幅×1e9)）。'
-                              '折线持续走弱，需要交易员人工干预。',
-                              style: AppFinanceStyle.labelTextStyle(
-                                context,
-                              ).copyWith(fontSize: 12),
-                            ),
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-                            child: _buildBandLegend(context),
-                          ),
-                          _buildComparisonChart(context),
-                          const SizedBox(height: 20),
-                        ],
+                        ),
                       ),
                     ),
                   ),
                 ),
                 SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(24, 20, 24, 48),
+                  padding: const EdgeInsets.fromLTRB(24, 24, 24, 48),
                   sliver: SliverList(
                     delegate: SliverChildListDelegate(
-                      _accountCardsWithSpacing(context).toList(),
+                      _accountCardsWithSpacing(context)
+                          .map(
+                            (w) => Align(
+                              alignment: Alignment.topCenter,
+                              child: ConstrainedBox(
+                                constraints:
+                                    const BoxConstraints(maxWidth: 1600),
+                                child: w,
+                              ),
+                            ),
+                          )
+                          .toList(),
                     ),
                   ),
                 ),

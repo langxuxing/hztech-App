@@ -11,6 +11,7 @@ import '../../theme/finance_style.dart';
 import '../../utils/number_display_format.dart';
 import '../../widgets/equity_cash_percent_line_chart.dart';
 import '../../widgets/month_end_profit_panel.dart';
+import '../../widgets/account_detail_loading_overlay.dart';
 import '../../widgets/water_background.dart';
 
 /// OKX 部分合约标价极小，[formatUiInteger] 四舍五入会落成 0；展示时乘以 1e9（内部盈亏比例仍用原价）。
@@ -61,6 +62,10 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   List<OkxPosition> _positions = [];
   List<BotSeason> _seasons = [];
   bool _loading = true;
+  /// 阶段二：收益/历史/持仓/赛季等与账户列表并行请求期间为 true。
+  bool _detailLoading = false;
+  /// 用户切换账户时为 true，用于遮罩主副标题区分「切换」与「首屏加载」。
+  bool _switchingAccount = false;
   String? _error;
   String? _positionsLoadError;
   Map<String, dynamic>? _positionsOkxDebug;
@@ -149,7 +154,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
 
   /// 保持当前选中账户，拉取最新收益、曲线、持仓与赛季（用于定时刷新与下拉切换后的全量刷新）
   Future<void> _refreshLatestData() async {
-    if (!mounted || _loading) return;
+    if (!mounted || _loading || _detailLoading) return;
     final list = _bots.isNotEmpty ? _bots : widget.sharedBots;
     final botId =
         _selectedBotId ??
@@ -195,6 +200,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     if (!mounted) return;
     setState(() {
       _loading = true;
+      _detailLoading = false;
+      _switchingAccount = false;
       _error = null;
     });
     try {
@@ -218,6 +225,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         _bots = bots;
         _selectedBotId = botId;
         _loading = false;
+        _detailLoading = true;
       });
 
       // 阶段二：收益、历史、持仓、赛季并行（缩短首屏等待）
@@ -244,12 +252,18 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
           _cashMetricsMonth = null;
           _equityPerfDays = const [];
           _cashPerfDays = const [];
+          _detailLoading = false;
+          _switchingAccount = false;
         });
         unawaited(_syncDailyPerformanceForCharts());
         _syncOkxTickerSubscription();
       } catch (e) {
         if (mounted) {
-          setState(() => _error = '收益/历史/持仓/赛季加载失败: $e');
+          setState(() {
+            _error = '收益/历史/持仓/赛季加载失败: $e';
+            _detailLoading = false;
+            _switchingAccount = false;
+          });
         }
       }
     } catch (e) {
@@ -257,6 +271,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
       setState(() {
         _error = e.toString();
         _loading = false;
+        _detailLoading = false;
+        _switchingAccount = false;
       });
     }
   }
@@ -271,6 +287,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
       _positionsLoadError = null;
       _positionsOkxDebug = null;
       _error = null;
+      _detailLoading = true;
+      _switchingAccount = true;
     });
     try {
       final baseUrl = await _prefs.backendBaseUrl;
@@ -305,11 +323,17 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         _positionsLoadError = positionsResp.positionsError;
         _positionsOkxDebug = positionsResp.okxDebug;
         _seasons = seasonsResp.seasons;
+        _detailLoading = false;
+        _switchingAccount = false;
       });
       _syncOkxTickerSubscription();
     } catch (e) {
       if (mounted && g == _accountSwitchGeneration) {
-        setState(() => _error = '切换账户后加载失败: $e');
+        setState(() {
+          _error = '切换账户后加载失败: $e';
+          _detailLoading = false;
+          _switchingAccount = false;
+        });
       }
     }
   }
@@ -617,12 +641,29 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     return a.initialBalance;
   }
 
+  /// 与移动端 AccountProfitScreen 一致：优先展示 account_name / tradingbot_name
+  String _displayAccountTitle(AccountProfit a) {
+    final fromApi = a.accountName?.trim();
+    if (fromApi != null && fromApi.isNotEmpty) return fromApi;
+    final id = a.botId;
+    if (id.isNotEmpty) {
+      for (final b in _effectiveBots) {
+        if (b.tradingbotId == id) {
+          final tn = b.tradingbotName?.trim();
+          if (tn != null && tn.isNotEmpty) return tn;
+          break;
+        }
+      }
+    }
+    if (id.isNotEmpty) return id;
+    final ex = a.exchangeAccount.trim();
+    return ex.isNotEmpty ? ex : '';
+  }
+
   void _syncNoDropdownAccountLabel() {
     if (_effectiveBots.isNotEmpty) return;
     final a = _selectedAccount;
-    final text = a == null
-        ? ''
-        : (a.exchangeAccount.trim().isNotEmpty ? a.exchangeAccount : a.botId);
+    final text = a == null ? '' : _displayAccountTitle(a);
     if (_noDropdownAccountController.text != text) {
       _noDropdownAccountController.text = text;
     }
@@ -680,7 +721,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     );
   }
 
-  /// 无机器人下拉列表时，用只读输入框展示当前账户标识（交易所账户名或 botId）。
+  /// 无机器人下拉列表时，用只读输入框展示当前账户（优先账户名称，而非 exchange 简称）。
   Widget _buildNoDropdownAccountField() {
     final a = _selectedAccount;
     if (a == null) return const SizedBox.shrink();
@@ -732,37 +773,43 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         ),
         child: _glassCard(
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-            child: DropdownButton<String>(
-              value: _selectedBotId ?? list.first.tradingbotId,
-              isExpanded: true,
-              dropdownColor: AppFinanceStyle.cardBackground.withValues(
-                alpha: 0.98,
-              ),
-              style: const TextStyle(
-                color: AppFinanceStyle.valueColor,
-                fontSize: AppFinanceStyle.webAccountProfitBotDropdownFontSize,
-                fontWeight: FontWeight.w500,
-              ),
-              items: list
-                  .map(
-                    (b) => DropdownMenuItem<String>(
-                      value: b.tradingbotId,
-                      child: Text(
-                        b.tradingbotName ?? b.tradingbotId,
-                        style: const TextStyle(
-                          color: AppFinanceStyle.valueColor,
-                          fontSize: AppFinanceStyle
-                              .webAccountProfitBotDropdownFontSize,
-                          fontWeight: FontWeight.w500,
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+            child: Builder(
+              builder: (context) {
+                final heading =
+                    AppFinanceStyle.accountProfitOverviewHeadingStyle(context);
+                return DropdownButton<String>(
+                  value: _selectedBotId ?? list.first.tradingbotId,
+                  isExpanded: true,
+                  padding: EdgeInsets.zero,
+                  iconSize: 30,
+                  itemHeight: 54,
+                  underline: const SizedBox.shrink(),
+                  icon: Icon(
+                    Icons.arrow_drop_down,
+                    color: heading.color,
+                    size: 30,
+                  ),
+                  dropdownColor: AppFinanceStyle.cardBackground.withValues(
+                    alpha: 0.98,
+                  ),
+                  style: heading,
+                  items: list
+                      .map(
+                        (b) => DropdownMenuItem<String>(
+                          value: b.tradingbotId,
+                          child: Text(
+                            b.tradingbotName ?? b.tradingbotId,
+                            style: heading,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (v) {
-                if (v != null) _loadForBot(v);
+                      )
+                      .toList(),
+                  onChanged: (v) {
+                    if (v != null) _loadForBot(v);
+                  },
+                );
               },
             ),
           ),
@@ -824,10 +871,25 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
 
   Widget _buildBodyScrollable() {
     final wide = MediaQuery.sizeOf(context).width >= _kLayoutWideBp;
-    return SingleChildScrollView(
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(32, 32, 32, 32),
-      child: _buildAccountPageContent(wide),
+    return Stack(
+      children: [
+        Positioned.fill(
+          child: SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(32, 32, 32, 32),
+            child: _buildAccountPageContent(wide),
+          ),
+        ),
+        AccountDetailLoadingOverlay(
+          visible: _detailLoading,
+          message: _switchingAccount
+              ? '正在切换账户…'
+              : '正在加载账户画像…',
+          subtitle: _switchingAccount
+              ? '正在拉取该账户的收益、持仓、赛季与曲线'
+              : null,
+        ),
+      ],
     );
   }
 

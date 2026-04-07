@@ -1109,17 +1109,18 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
     import exchange.okx as okx_mod
 
     rows = iter_okx_accounts(enabled_only=True)
-    prep: list[tuple[str, str, Any, Any, float, dict | None]] = []
+    prep: list[tuple[str, str, Any, Any, float, dict | None, str]] = []
     for row in rows:
         aid = str(row.get("account_id") or "").strip()
         ex_name = (row.get("exchange_account") or "OKX").strip()
+        acc_name = (row.get("account_name") or "").strip()
         path = resolve_okx_config_path(aid)
         snap = db_module.account_snapshot_latest_by_account(aid)
         meta_row = db_module.account_list_get(aid)
         initial = float(meta_row["initial_capital"]) if meta_row else _initial_capital(row)
         ym = datetime.now(timezone.utc).strftime("%Y-%m")
         month_row = db_module.account_month_open_get(aid, ym)
-        prep.append((aid, ex_name, path, snap, initial, month_row))
+        prep.append((aid, ex_name, path, snap, initial, month_row, acc_name))
 
     live_by_aid: dict[str, dict | None] = {}
     fetch_jobs = [(p[0], p[2]) for p in prep if p[2] is not None]
@@ -1135,7 +1136,7 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
                 live_by_aid[aid] = live
 
     out: list[dict] = []
-    for aid, ex_name, path, snap, initial, month_row in prep:
+    for aid, ex_name, path, snap, initial, month_row, acc_name in prep:
         month_open = float(month_row["open_equity"]) if month_row else None
         month_open_cash = (
             float(month_row["initial_balance"])
@@ -1154,6 +1155,7 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
                 {
                     "bot_id": aid,
                     "account_id": aid,
+                    "account_name": acc_name,
                     "exchange_account": ex_name,
                     "initial_balance": initial,
                     "current_balance": total_eq,
@@ -1189,6 +1191,7 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
                 {
                     "bot_id": aid,
                     "account_id": aid,
+                    "account_name": acc_name,
                     "exchange_account": ex_name,
                     "initial_balance": initial,
                     "current_balance": eq,
@@ -1212,6 +1215,7 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
                 {
                     "bot_id": aid,
                     "account_id": aid,
+                    "account_name": acc_name,
                     "exchange_account": ex_name,
                     "initial_balance": initial,
                     "current_balance": 0,

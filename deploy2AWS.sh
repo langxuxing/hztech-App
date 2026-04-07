@@ -2,8 +2,11 @@
 # Ops 一键部署：构建 Flutter → rsync →（可选）远程 DB 迁移 → 重启远端进程
 #
 # 目录约定：运维脚本在项目根；Python/配置在 baasapi/（server_mgr、deploy-aws.json、main.py 等）。
-# 双 AWS 节点：deploy-aws.json 中 flutterapp（Web 静态）与 baasapi（后端）可指向不同 host/key/path；
-# 单机 legacy：仅顶层 host 或只配一段时由 server_mgr 合并为单主机双进程。
+# 默认线上（见 baasapi/deploy-aws.json）：
+#   · App/Web 静态：54.252.181.151:9000（flutterapp 段）
+#   · BaasAPI：54.66.108.150:9001（baasapi 段）
+# 构建时 API_BASE_URL 默认为 http://54.66.108.150:9001/（双机时取 baasapi 主机 + 端口；与 production.json 一致）。
+# 单机：deploy-aws.json 仅顶层 host + remote_path、无 flutterapp/baasapi 分段子段时，server_mgr 单主机双进程。
 #
 # Python 依赖（与 baasapi/requirements.txt）：
 #   · rsync 会同步 baasapi/（含 requirements.txt）；不含 pytest（见该文件注释）。
@@ -111,6 +114,9 @@ else
   echo "  单机: ${_D_WEB_HOST}（Web ${_D_WEB_PORT}  API ${_D_API_PORT}）"
 fi
 echo "  构建 API_BASE_URL: ${HZTECH_API_BASE_URL}"
+echo "  缺省 BaasAPI（App/Web → 后端；与 deploy-aws.json 中 baasapi 一致）:"
+echo "    Debug 构建默认:   ${HZTECH_API_BASE_URL}"
+echo "    Release 构建默认: ${HZTECH_API_BASE_URL}"
 echo "=============================================="
 
 if [[ "${HZTECH_SKIP_BUILD:-0}" == "1" ]]; then
@@ -152,6 +158,8 @@ python3 "$PROJECT_ROOT/baasapi/server_mgr.py" restart
 echo ""
 echo "=============================================="
 echo "  部署完成（FlutterApp + BaasAPI）"
+echo "  缺省 BaasAPI（App/Web → 后端）: ${HZTECH_API_BASE_URL}"
+echo "    Debug / Release 构建均使用上述 API 根地址（见 production.json / dart-define）"
 if [[ "$_D_DUAL" == "1" ]]; then
   echo "  FlutterApp（Web 静态）: ${_D_SCHEME}://${_D_WEB_HOST}:${_D_WEB_PORT}/"
   echo "  BaasAPI（后端）:       ${_D_SCHEME}://${_D_API_HOST}:${_D_API_PORT}/"

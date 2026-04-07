@@ -14,8 +14,8 @@
 #   HZTECH_SKIP_DB_SYNC=1       跳过本地 init_db
 #   HZTECH_LOCAL_API_PORT / HZTECH_LOCAL_WEB_PORT / HZTECH_LOCAL_WEB_STATIC
 #   HZTECH_ACCOUNT_SYNC_INTERVAL_SEC  账户 OKX 定时同步间隔（秒）；未设置时 main.py 默认 300
-#   HZTECH_API_BASE_URL         未设置时默认 http://127.0.0.1:{HZTECH_LOCAL_API_PORT}/（与 dart_defines/local.json）
-#                                真机连本机 API 时请 export HZTECH_API_BASE_URL=http://<局域网IP>:端口/
+#   HZTECH_API_BASE_URL         未设置时默认 http://192.168.3.41:9001/（局域网联调；与 dart_defines/local.json）
+#                                仅用本机 API 时: export HZTECH_API_BASE_URL=http://127.0.0.1:${HZTECH_LOCAL_API_PORT}/
 #   FLUTTER_DART_DEFINE_FILE    传给 Flutter 构建；HZTECH_API_BASE_URL 优先于文件内 API_BASE_URL
 #   PORT                        与 HZTECH_LOCAL_API_PORT 共用时的回退
 #
@@ -35,7 +35,7 @@ export HZTECH_LOCAL_API_PORT="${HZTECH_LOCAL_API_PORT:-${PORT:-9001}}"
 export HZTECH_LOCAL_WEB_PORT="${HZTECH_LOCAL_WEB_PORT:-9000}"
 export HZTECH_LOCAL_WEB_STATIC="${HZTECH_LOCAL_WEB_STATIC:-1}"
 
-export HZTECH_API_BASE_URL="${HZTECH_API_BASE_URL:-http://127.0.0.1:${HZTECH_LOCAL_API_PORT}/}"
+export HZTECH_API_BASE_URL="${HZTECH_API_BASE_URL:-http://192.168.3.41:9001/}"
 export FLUTTER_DART_DEFINE_FILE="${FLUTTER_DART_DEFINE_FILE:-flutterapp/dart_defines/local.json}"
 
 echo "=============================================="
@@ -45,6 +45,8 @@ echo "  HZTECH_LOCAL_WEB_STATIC=${HZTECH_LOCAL_WEB_STATIC}"
 echo "    1 = 同时启动 API + Flutter Web 静态 (双进程)"
 echo "    0 = 仅 API (与单独运行 baasapi/run_local.sh 默认一致)"
 echo "  构建用 API_BASE_URL: ${HZTECH_API_BASE_URL}"
+echo "  局域网约定 Web/App → BaasAPI（Debug 与 Release 构建缺省一致）:"
+echo "    http://192.168.3.41:9001/"
 echo "=============================================="
 
 case "${HZTECH_SKIP_PIP_INSTALL:-}" in
