@@ -8,13 +8,13 @@ import '../api/client.dart';
 import '../app_update_prompt.dart';
 import '../debug_ingest_log.dart';
 import '../secure/prefs.dart';
+import '../theme/finance_style.dart';
 import '../widgets/water_background.dart';
 
-/// 科技金融色系：深空蓝、电光青、银灰
+/// 科技金融色系：深空蓝、电光青；正文与全局 textDefault 一致
 const Color _deepBlue = Color(0xFF0A1628);
 const Color _electricCyan = Color(0xFF00D4FF);
 const Color _electricPurple = Color(0xFF6366F1);
-const Color _silver = Color(0xFF94A3B8);
 
 /// 登录页固定表单宽度
 const double _formWidth = 320;
@@ -145,7 +145,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       '此处填写 API 根地址（默认本机 9001）。浏览器打开 Flutter Web 使用静态站端口（本地多为 9000）。',
                       style: TextStyle(
                         fontSize: 12,
-                        color: Colors.grey.shade700,
+                        color: AppFinanceStyle.textDefault,
                         height: 1.35,
                       ),
                     ),
@@ -175,7 +175,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                       ),
                                       style: TextStyle(
                                         fontSize: 11,
-                                        color: Colors.grey.shade600,
+                                        color: AppFinanceStyle.textDefault,
                                       ),
                                     ),
                                   ],
@@ -383,16 +383,19 @@ class _LoginScreenState extends State<LoginScreen> {
     final inputDecoration = InputDecoration(
       labelText: '',
       hintStyle: TextStyle(
-        color: _silver.withValues(alpha: 0.7),
+        color: AppFinanceStyle.textDefault.withValues(alpha: 0.7),
         fontStyle: FontStyle.italic,
       ),
-      labelStyle: TextStyle(color: _silver.withValues(alpha: 0.8)),
+      labelStyle:
+          TextStyle(color: AppFinanceStyle.textDefault.withValues(alpha: 0.8)),
       filled: true,
       fillColor: Colors.white.withValues(alpha: 0.06),
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: _silver.withValues(alpha: 0.3)),
+        borderSide: BorderSide(
+          color: AppFinanceStyle.textDefault.withValues(alpha: 0.3),
+        ),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(12),
@@ -420,7 +423,10 @@ class _LoginScreenState extends State<LoginScreen> {
               children: [
                 Text(
                   '使用指纹解锁',
-                  style: TextStyle(fontSize: 18, color: Colors.grey.shade300),
+                  style: const TextStyle(
+                    fontSize: 18,
+                    color: AppFinanceStyle.textDefault,
+                  ),
                 ),
                 const SizedBox(height: 24),
                 FilledButton.icon(
@@ -530,7 +536,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                                   _obscurePassword
                                                       ? Icons.visibility_off
                                                       : Icons.visibility,
-                                                  color: _silver,
+                                                  color: AppFinanceStyle.textDefault,
                                                   size: 22,
                                                 ),
                                                 onPressed: () => setState(
@@ -628,7 +634,8 @@ class _LoginScreenState extends State<LoginScreen> {
                                                 Icons.fingerprint,
                                                 color: enabled
                                                     ? _electricCyan
-                                                    : _silver.withValues(alpha: 0.4),
+                                                    : AppFinanceStyle.textDefault
+                                                        .withValues(alpha: 0.4),
                                               ),
                                             ),
                                           );
@@ -666,7 +673,8 @@ class _LoginScreenState extends State<LoginScreen> {
                                       .textTheme
                                       .bodySmall
                                       ?.copyWith(
-                                        color: _silver.withValues(alpha: 0.85),
+                                        color: AppFinanceStyle.textDefault
+                                            .withValues(alpha: 0.85),
                                         height: 1.45,
                                       ),
                                 ),

@@ -254,7 +254,7 @@ class _CustomerAccountSetupScreenState extends State<CustomerAccountSetupScreen>
               style: TextStyle(
                 color: ok
                     ? AppFinanceStyle.labelColor
-                    : Colors.red.shade200,
+                    : AppFinanceStyle.textLoss,
                 fontSize: 12,
                 height: 1.35,
                 fontFamily: 'monospace',
@@ -300,7 +300,7 @@ class _CustomerAccountSetupScreenState extends State<CustomerAccountSetupScreen>
                     padding: const EdgeInsets.all(12),
                     child: Text(
                       _error!,
-                      style: TextStyle(color: Colors.red.shade300),
+                      style: TextStyle(color: AppFinanceStyle.textLoss),
                     ),
                   ),
                 Padding(
@@ -350,7 +350,8 @@ class _CustomerAccountSetupScreenState extends State<CustomerAccountSetupScreen>
                               if (missing)
                                 Text(
                                   '服务端 Account_List 中无此账户，请联系管理员',
-                                  style: TextStyle(color: Colors.orange.shade200),
+                                  style:
+                                      TextStyle(color: AppFinanceStyle.textDefault),
                                 )
                               else ...[
                                 Text(

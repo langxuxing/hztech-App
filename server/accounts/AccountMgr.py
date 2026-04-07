@@ -14,7 +14,7 @@ positions / profit-history / ticker / pending-orders 等通过本模块解析密
 - 多时点快照经 strategy_efficiency.daily_cash_delta_by_utc_day 汇总为 UTC 自然日现金增量，再算现金收益率%、策略能效
 - OKX 历史仓位 → account_positions_history（SWAP+FUTURES 合并去重，深分页；自库内最大 uTime 起向前重叠 60s 增量拉取；
   统计口径与接口一致：时间用 uTime 平仓/更新时刻，非 cTime；净盈亏优先 realizedPnl）；
-  再汇总写入 account_daily_performance（按 UTC 日平仓净盈亏、权益口径日收益率%、对标合约 TR 的策略能效）
+  再汇总写入 account_daily_performance（按北京时间日历日平仓净盈亏、权益口径日收益率%、对标 TR 近似映射）
 - 各账户静态字段（与 SQLite account_list 同步）；UTC 每月 1 日 00:10 定时任务写入 account_month_open（不再由余额同步顺带插入）
 """
 from __future__ import annotations

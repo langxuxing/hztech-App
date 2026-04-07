@@ -345,7 +345,9 @@ class _WebTradingBotControlScreenState
             child: const Text('取消'),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppFinanceStyle.textLoss,
+            ),
             onPressed: () {
               Navigator.pop(ctx);
               _doStop(bot);
@@ -539,7 +541,9 @@ class _WebTradingBotControlScreenState
                 child: const Text('取消'),
               ),
               FilledButton(
-                style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                style: FilledButton.styleFrom(
+              backgroundColor: AppFinanceStyle.textLoss,
+            ),
                 onPressed: () => Navigator.pop(ctx, true),
                 child: const Text('确定'),
               ),
@@ -800,7 +804,7 @@ class _GlobalBotStatsBar extends StatelessWidget {
         AppFinanceStyle.valueTextStyle(context, fontSize: fs);
     final stoppedStyle = v(24).copyWith(color: AppFinanceStyle.labelColor);
     final errorStyle = v(24).copyWith(
-      color: errorCount > 0 ? Colors.redAccent : AppFinanceStyle.labelColor,
+      color: errorCount > 0 ? AppFinanceStyle.textLoss : AppFinanceStyle.labelColor,
     );
 
     final bulkActions = Row(
@@ -809,13 +813,14 @@ class _GlobalBotStatsBar extends StatelessWidget {
         FilledButton.tonalIcon(
           onPressed: bulkBusy ? null : onBulkStart,
           style: FilledButton.styleFrom(
-            foregroundColor: const Color(0xFF3DFF9C),
-            backgroundColor: const Color(0xFF3DFF9C).withValues(alpha: 0.14),
+            foregroundColor: AppFinanceStyle.textProfit,
+            backgroundColor:
+                AppFinanceStyle.textProfit.withValues(alpha: 0.14),
           ),
           icon: Icon(
             Icons.play_circle_outline,
             size: 20,
-            color: bulkBusy ? null : const Color(0xFF3DFF9C),
+            color: bulkBusy ? null : AppFinanceStyle.textProfit,
           ),
           label: const Text('全部启动'),
         ),
@@ -823,13 +828,13 @@ class _GlobalBotStatsBar extends StatelessWidget {
         FilledButton.tonalIcon(
           onPressed: bulkBusy ? null : onBulkStop,
           style: FilledButton.styleFrom(
-            foregroundColor: Colors.red,
-            backgroundColor: Colors.red.withValues(alpha: 0.12),
+            foregroundColor: AppFinanceStyle.textLoss,
+            backgroundColor: AppFinanceStyle.textLoss.withValues(alpha: 0.12),
           ),
           icon: Icon(
             Icons.stop_circle_outlined,
             size: 20,
-            color: bulkBusy ? null : Colors.red,
+            color: bulkBusy ? null : AppFinanceStyle.textLoss,
           ),
           label: const Text('全部停止'),
         ),
@@ -1005,7 +1010,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
     with SingleTickerProviderStateMixin {
   static const _labelMuted = AppFinanceStyle.labelColor;
   /// 顶部「运行中」角标与脉冲点（略亮以保证可读）
-  static const _greenRun = Color(0xFF3DFF9C);
+  static const _greenRun = AppFinanceStyle.textProfit;
 
   /// 赛季/策略控制区外层 box：底色与空日历格一致；赛季描边 RGB(32,64,21)，策略描边 RGB(72,33,46)。
   static BoxDecoration get _seasonControlBoxDecoration => BoxDecoration(
@@ -1028,9 +1033,9 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
 
   /// 赛季/策略控制圆钮：与概览区「全部启动/停止」同款——深色实底 + 亮色图标
   static const _ctrlStartFill = Color(0xFF16352A);
-  static const _ctrlStartIcon = Color(0xFF3DFF9C);
+  static const _ctrlStartIcon = AppFinanceStyle.textProfit;
   static const _ctrlStopFill = Color(0xFF3A1F22);
-  static const _ctrlStopIcon = Color(0xFFFF8A84);
+  static const _ctrlStopIcon = AppFinanceStyle.textLoss;
   static const _ctrlRestartFill = Color(0xFF3A3214);
   static const _ctrlRestartIcon = Color(0xFFFFD54F);
   static const _durationMuted = Color(0xFF8FA9A5);

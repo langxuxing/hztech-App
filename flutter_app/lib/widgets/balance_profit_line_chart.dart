@@ -31,7 +31,8 @@ class CashBalanceLineChart extends StatelessWidget {
     final pad = (maxY - minY) * 0.08 + 1.0;
     final isPositive = snapshots.isNotEmpty &&
         (snapshots.last.currentBalance >= snapshots.first.currentBalance);
-    final lineColor = isPositive ? AppFinanceStyle.profitGreenEnd : Colors.red;
+    final lineColor =
+        isPositive ? AppFinanceStyle.textProfit : AppFinanceStyle.textLoss;
     return LineChart(
       LineChartData(
         minX: 0,
@@ -68,7 +69,9 @@ class CashBalanceLineChart extends StatelessWidget {
             dotData: const FlDotData(show: false),
             belowBarData: BarAreaData(
               show: true,
-              color: (isPositive ? AppFinanceStyle.profitGreenEnd : Colors.red)
+              color: (isPositive
+                      ? AppFinanceStyle.textProfit
+                      : AppFinanceStyle.textLoss)
                   .withValues(alpha: 0.35),
             ),
           ),
@@ -106,7 +109,8 @@ class EquityUsdtLineChart extends StatelessWidget {
     final pad = (maxY - minY) * 0.08 + 1.0;
     final isPositive =
         snapshots.isNotEmpty && (snapshots.last.equityUsdt >= snapshots.first.equityUsdt);
-    final lineColor = isPositive ? AppFinanceStyle.profitGreenEnd : Colors.red;
+    final lineColor =
+        isPositive ? AppFinanceStyle.textProfit : AppFinanceStyle.textLoss;
     return LineChart(
       LineChartData(
         minX: 0,
@@ -143,7 +147,9 @@ class EquityUsdtLineChart extends StatelessWidget {
             dotData: const FlDotData(show: false),
             belowBarData: BarAreaData(
               show: true,
-              color: (isPositive ? AppFinanceStyle.profitGreenEnd : Colors.red)
+              color: (isPositive
+                      ? AppFinanceStyle.textProfit
+                      : AppFinanceStyle.textLoss)
                   .withValues(alpha: 0.35),
             ),
           ),

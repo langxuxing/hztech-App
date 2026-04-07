@@ -292,7 +292,7 @@ class _AccountsListState extends State<AccountsList> {
                                                   .bodyMedium
                                                   ?.copyWith(
                                                     color: AppFinanceStyle
-                                                        .profitGreenEnd,
+                                                        .textProfit,
                                                     fontWeight: FontWeight.w600,
                                                   ),
                                             ),
@@ -305,8 +305,9 @@ class _AccountsListState extends State<AccountsList> {
                                                   .copyWith(
                                                     color: a.profitPercent >= 0
                                                         ? AppFinanceStyle
-                                                            .profitGreenEnd
-                                                        : Colors.redAccent,
+                                                            .textProfit
+                                                        : AppFinanceStyle
+                                                            .textLoss,
                                                   ),
                                             ),
                                           ],

@@ -18,23 +18,28 @@ class AppFinanceStyle {
   /// 卡片内顶部高光
   static const Color cardHighlight = Color.fromRGBO(255, 255, 255, 0.2);
 
-  /// 标签/副标题色 #A0A0B0
-  static const Color labelColor = Color(0xFFA0A0B0);
+  /// 全局正文/标签缺省文字色 RGB(247,247,247)
+  static const Color textDefault = Color(0xFFF7F7F7);
 
-  /// 主数值色 #E8E8F0
-  static const Color valueColor = Color(0xFFE8E8F0);
+  /// 盈利/多/正向文案与图表正色 RGB(2,125,32)
+  static const Color textProfit = Color(0xFF027D20);
 
-  /// 盈利绿渐变起点 #A8FF78
-  static const Color profitGreenStart = Color(0xFFA8FF78);
+  /// 亏损/空/负向文案与图表负色 RGB(188,74,101)
+  static const Color textLoss = Color(0xFFBC4A65);
 
-  /// 盈利绿渐变终点 #7EC850
-  static const Color profitGreenEnd = Color(0xFF7EC850);
+  /// 标签/副标题（与缺省正文统一）
+  static const Color labelColor = textDefault;
 
-  /// 图表（柱/折线/日历盈亏强调）：盈利 RGB(51, 118, 41)
-  static const Color chartProfit = Color(0xFF337629);
+  /// 主数值色（与缺省正文统一）
+  static const Color valueColor = textDefault;
 
-  /// 图表（柱/折线/日历盈亏强调）：亏损 RGB(79, 38, 44)
-  static const Color chartLoss = Color(0xFF4F262C);
+  /// ShaderMask 渐变用盈利色（两端同色，保持 API 兼容）
+  static const Color profitGreenStart = textProfit;
+  static const Color profitGreenEnd = textProfit;
+
+  /// 图表柱/折线与文案盈亏色一致
+  static const Color chartProfit = textProfit;
+  static const Color chartLoss = textLoss;
 
   /// 外阴影
   static const List<BoxShadow> cardShadow = [

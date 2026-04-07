@@ -1,18 +1,20 @@
 {
-  "name": "aws-sydney",
+  "name": "BaasAPI-FlutterApp-aws-sydney",
   "scheme": "http",
-  "web_port": 9000,
-  "app_port": 9001,
+  "flutter_app_port": 9000,
+  "baas_api_port": 9001,
   "user": "ec2-user",
   "key": "/Volumes/HZTech/aws-sydney/aws-defi.pem",
   "ssh_opts": ["-o", "StrictHostKeyChecking=accept-new"],
-  "web": {
+  "flutter_app": {
+    "app_name": "FlutterApp",
     "host": "54.252.181.151",
     "port": 22,
     "remote_path": "/home/ec2-user/hztechapp",
     "key": "/Volumes/HZTech/aws-sydney/aws-defi.pem"
   },
-  "api": {
+  "baas_api": {
+    "app_name": "BaasAPI",
     "host": "54.66.108.150",
     "port": 22,
     "remote_path": "/home/ec2-user/Apiserver",

@@ -78,8 +78,8 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
     return v.round().toString();
   }
 
-  static const Color _tableHeaderFg = Color(0xFFF2F2F8);
-  static const Color _tableCellFg = Color(0xFFE8E8F0);
+  static const Color _tableHeaderFg = AppFinanceStyle.textDefault;
+  static const Color _tableCellFg = AppFinanceStyle.textDefault;
   static const Color _tableBorder = Color(0x44FFFFFF);
 
   TextStyle get _headerStyle => const TextStyle(
@@ -113,8 +113,8 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
     if (pnlText == null || pnlText.isEmpty) return null;
     final v = double.tryParse(pnlText);
     if (v == null) return null;
-    if (v > 0) return AppFinanceStyle.profitGreenEnd;
-    if (v < 0) return const Color(0xFFFF6B6B);
+    if (v > 0) return AppFinanceStyle.textProfit;
+    if (v < 0) return AppFinanceStyle.textLoss;
     return null;
   }
 
@@ -125,11 +125,11 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
     String label;
     if (s == 'long') {
       label = '多 long';
-      fg = const Color(0xFF7EE787);
+      fg = AppFinanceStyle.textProfit;
       bg = const Color(0xFF1A3D24);
     } else if (s == 'short') {
       label = '空 short';
-      fg = const Color(0xFFFF8A8A);
+      fg = AppFinanceStyle.textLoss;
       bg = const Color(0xFF3D1A1A);
     } else {
       label = side ?? '—';
@@ -307,7 +307,7 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Text(
                 _error!,
-                style: TextStyle(color: Colors.red.shade300, fontSize: 13),
+                style: TextStyle(color: AppFinanceStyle.textLoss, fontSize: 13),
               ),
             ),
           Expanded(

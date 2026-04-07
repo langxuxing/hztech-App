@@ -6,8 +6,8 @@ import '../auth/app_user_role.dart';
 import '../secure/prefs.dart';
 import '../theme/finance_style.dart';
 
-/// 用户管理弹窗内主文字 rgb(220,220,220)
-const Color _kUserDialogText = Color(0xFFDCDCDC);
+/// 用户管理弹窗内主文字（与全局 textDefault 一致）
+const Color _kUserDialogText = AppFinanceStyle.textDefault;
 
 const TextStyle _userDialogLabel = TextStyle(
   fontSize: 14,
@@ -454,7 +454,9 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
             child: const Text('取消'),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red.shade800),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppFinanceStyle.textLoss,
+            ),
             onPressed: () => Navigator.pop(ctx, true),
             child: const Text('删除'),
           ),
@@ -756,7 +758,7 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                                         IconButton(
                                           tooltip: '删除用户',
                                           icon: Icon(Icons.delete_outline,
-                                              color: Colors.red.shade300),
+                                              color: AppFinanceStyle.textLoss),
                                           onPressed: () => _deleteUser(u),
                                         ),
                                       ],

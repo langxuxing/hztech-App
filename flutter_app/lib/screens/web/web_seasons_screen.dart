@@ -362,7 +362,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
         ? null
         : (pnl > 0
               ? AppFinanceStyle.profitGreenEnd
-              : (pnl < 0 ? const Color(0xFFFF6B6B) : null));
+              : (pnl < 0 ? AppFinanceStyle.textLoss : null));
     final side = (r.posSide ?? '').toLowerCase();
     final sideLabel = side == 'long'
         ? '多'
@@ -501,7 +501,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
     final mkt = _marketLabel ?? '—';
     final profitColor = (s.profitAmount ?? 0) >= 0
         ? AppFinanceStyle.profitGreenEnd
-        : Colors.red.shade300;
+        : AppFinanceStyle.textLoss;
 
     final metricsColumn = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -642,7 +642,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
     final agg = _aggForSeason(s);
     final profitColor = agg.profitSum >= 0
         ? AppFinanceStyle.profitGreenEnd
-        : const Color(0xFFFF6B6B);
+        : AppFinanceStyle.textLoss;
 
     final metricsColumn = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -663,7 +663,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
               s.profitAmount!.toStringAsFixed(1),
               valueColor: (s.profitAmount ?? 0) >= 0
                   ? AppFinanceStyle.profitGreenEnd
-                  : Colors.red.shade300,
+                  : AppFinanceStyle.textLoss,
             ),
           if (s.profitPercent != null)
             _metricChip(
@@ -781,7 +781,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
   }) {
     final profitColor = agg.profitSum >= 0
         ? AppFinanceStyle.profitGreenEnd
-        : const Color(0xFFFF6B6B);
+        : AppFinanceStyle.textLoss;
     final range = _beijingWeekRangeLabel(mondayCalUtc);
 
     final metricsColumn = Column(
@@ -970,7 +970,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Text(
                 _error!,
-                style: TextStyle(color: Colors.red.shade300, fontSize: 13),
+                style: TextStyle(color: AppFinanceStyle.textLoss, fontSize: 13),
               ),
             ),
           Expanded(

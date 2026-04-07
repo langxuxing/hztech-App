@@ -322,8 +322,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onPressed: () => _logout(context),
                   style: FilledButton.styleFrom(
                     minimumSize: const Size(double.infinity, 48),
-                    backgroundColor: Colors.red.withValues(alpha: 0.25),
-                    foregroundColor: Colors.red.shade300,
+                    backgroundColor:
+                        AppFinanceStyle.textLoss.withValues(alpha: 0.25),
+                    foregroundColor: AppFinanceStyle.textLoss,
                   ),
                   child: const Text('退出登录'),
                 ),

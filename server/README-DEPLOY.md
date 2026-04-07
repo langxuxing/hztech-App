@@ -2,16 +2,15 @@
 
 ## 配置
 
-- `server/deploy-aws.json`：主机 54.252.181.151、端口 22、密钥 `/Volumes/HZTech/aws-sydney/aws-defi.pem`、远程目录 `/home/ec2-user/hztechapp`。
+- `server/deploy-aws.json`：定义两台应用（可同机或分服务器）
+  - **FlutterApp**：`flutter_app` 段（`host`、`remote_path`、密钥等），监听 **`flutter_app_port`**（默认 9000），托管 `serve_web_static`。
+  - **BaasAPI**：`baas_api` 段，监听 **`baas_api_port`**（默认 9001），运行 `server/main.py`。
+  - 兼容旧键 `web` / `app_port` / `web_port`。
+- 每段可设 **`app_name`**（展示用）：如 `"app_name": "FlutterApp"`、`"BaasAPI"`。
 
 ## Ops 一键部署（构建 + 上传 + 重启）
 
-三步合一：构建 Flutter APK → 同步 webserver/APK 到 AWS → 重启后台服务。
-
-```bash
-# 在项目根目录执行
-./server/ops_deploy.sh
-```
+使用项目根目录 **`./deploy2AWS.sh`**（或 `python3 server/server_mgr.py deploy ...`）。
 
 ## 一键：编译 APK + 部署服务端 + 上传 APK
 
@@ -41,12 +40,12 @@ python3 server/server_mgr.py deploy --build
 2. 或在已安装 Gradle 的机器上在项目根执行：`gradle wrapper`。
 3. 然后执行 `./server/build_and_deploy.sh` 或 `python3 server/server_mgr.py deploy --build`。
 
-## 无法连接 Web(9000) / API(9001) 时
+## 无法连接 FlutterApp(9000) / BaasAPI(9001) 时
 
 当前服务端为 HTTP（Flask 直连）。连不上时按下面排查。
 
 1. **AWS 安全组（最常见）**  
-   EC2 控制台 → 该实例 → 安全组 → 入站规则：需有 **TCP 端口 9000（Web）** 和 **TCP 端口 9001（API）**，来源 `0.0.0.0/0`（或你的 IP）。若只有 22，外网访问 9000/9001 会被拦掉。
+   两台 EC2 各自安全组：FlutterApp 实例放行 **`flutter_app_port`**（如 9000），BaasAPI 实例放行 **`baas_api_port`**（如 9001）。来源按团队策略（如 `0.0.0.0/0` 或固定 IP）。
 
 2. **确认服务在跑**  
    SSH 上 EC2 后执行：
@@ -56,7 +55,7 @@ python3 server/server_mgr.py deploy --build
    curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9000/
    curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:9001/
    ```
-   API 根路径 `/` 应返回 200（JSON）；Web 静态 `/` 在已同步 `flutter build web` 时为 200，未构建时为 503。
+   BaasAPI 根路径 `/` 应返回 200（JSON）；FlutterApp `/` 在已同步 `flutter build web` 时为 200，未构建时为 503。
 
 3. **若进程没起来**  
    看日志：`cat /home/ec2-user/hztechapp/server.log`、`web_static.log`。若是 `_sqlite3` 等错误，按下一节处理。然后重新执行：  
@@ -79,7 +78,7 @@ python3 server/server_mgr.py deploy --build
 cd /home/ec2-user/hztechapp && bash server/install_on_aws.sh
 ```
 
-会安装 `server/requirements.txt`、创建 `apk` 等目录，并后台启动 **API**（`server/main.py`）与 **Web 静态**（`server/serve_web_static.py`）两个进程。
+会安装依赖、创建 `apk` 等目录，并后台启动 **BaasAPI**（`main.py`）与 **FlutterApp 静态**（`serve_web_static.py`）两个进程（单机示例）。
 
 ## 部署后测试
 
@@ -91,12 +90,12 @@ cd /home/ec2-user/hztechapp && bash server/install_on_aws.sh
 
 或指定地址：`BASE_URL=http://54.252.181.151:9001 ./server/test_server.sh`
 
-会请求 Web 静态根、API 根（JSON）、`/api/strategy/status`、`/api/login` 及登录后的 `/api/account-profit`。
+会请求 FlutterApp 根、BaasAPI 根（JSON）、`/api/strategy/status`、`/api/login` 等。
 
-## 部署后
+## 部署后（地址以 `deploy-aws.json` 为准）
 
-- Web（浏览器，Flutter 静态）：`http://54.252.181.151:9000`
-- API（App / Flutter Web 调用的后端）：`http://54.252.181.151:9001`
-- APK 下载（由 API 提供）：`http://54.252.181.151:9001/download/apk/禾正量化-release.apk`
-- 若需 HTTPS：在 EC2 前加 Nginx/Caddy 做 SSL 终结，再在 `deploy-aws.json` 中把 `scheme` 改为 `https`。
-- 日志：API `server.log`，Web 静态 `web_static.log`（路径均在部署根目录下）
+- **FlutterApp**（浏览器静态页）：`flutter_app.host` + `flutter_app_port` 示例 `http://54.252.181.151:9000`
+- **BaasAPI**（App / 前端调用的后端）：`baas_api.host` + `baas_api_port` 示例 `http://54.66.108.150:9001`
+- APK 下载（当前由 BaasAPI 提供）：`http://<baas_api.host>:<baas_api_port>/download/apk/禾正量化-release.apk`
+- HTTPS：在实例前加 Nginx/Caddy，并把 `scheme` 改为 `https`。
+- 日志：BaasAPI `server.log`；FlutterApp `web_static.log`（路径为各段 `remote_path` 下）。控制台每行带 **`[BaasAPI]`** / **`[FlutterApp]`** 前缀；可用环境变量 **`HZTECH_SERVICE_LOG_TAG`** 覆盖默认标签（两进程分别设置）。

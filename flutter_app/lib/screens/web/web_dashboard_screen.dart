@@ -268,8 +268,8 @@ class _SummaryStrip extends StatelessWidget {
               value: formatUiInteger(profit),
               valueStyle: v(24).copyWith(
                 color: profit >= 0
-                    ? AppFinanceStyle.profitGreenEnd
-                    : Colors.redAccent,
+                    ? AppFinanceStyle.textProfit
+                    : AppFinanceStyle.textLoss,
               ),
               trailingLabel: !narrow,
             ),
@@ -413,7 +413,7 @@ class _OverviewGlassCard extends StatelessWidget {
                           '测试',
                           style: Theme.of(context).textTheme.labelSmall
                               ?.copyWith(
-                                color: Colors.orange,
+                                color: AppFinanceStyle.textDefault,
                                 fontWeight: FontWeight.w600,
                               ),
                         ),

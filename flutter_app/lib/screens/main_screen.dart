@@ -11,9 +11,10 @@ import 'settings_screen.dart';
 import 'tradingbot_control.dart';
 import 'user_management_screen.dart';
 import 'customer_account_setup_screen.dart';
+import '../theme/finance_style.dart';
 import '../widgets/water_background.dart';
 
-const _navBarTextColor = Color(0xFFD8D8D8); // RGB(216,216,216)
+const _navBarTextColor = AppFinanceStyle.textDefault;
 
 class MainScreen extends StatefulWidget {
   const MainScreen({super.key, this.onLogout});

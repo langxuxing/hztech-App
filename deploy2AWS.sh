@@ -7,10 +7,12 @@
 #   FLUTTER_DART_DEFINE_FILE
 #   HZTECH_SKIP_BUILD=1    跳过步骤 1–2（移动端 + Web 构建），直接同步与重启
 #   HZTECH_SKIP_DB_SYNC=1  跳过步骤 4（远程 init_db）
-#   HZTECH_POST_DEPLOY_VERIFY=1  部署结束后 curl 探测 API /api/health 与 Web /
+#   HZTECH_POST_DEPLOY_VERIFY=1  部署结束后 curl 探测 BaasAPI /api/health 与 FlutterApp /
 #   HZTECH_SKIP_IOS_BUILD  仅移动端构建时传给 server_mgr（与原先一致）
 #
-# 依赖：server/deploy-aws.json、SSH 密钥、Flutter/Android；IPA 需 macOS + Xcode
+# deploy-aws.json：FlutterApp（flutter_app）、BaasAPI（baas_api）分主机配置；详见 server/README-DEPLOY.md
+#
+# 依赖：SSH 密钥、Flutter/Android；IPA 需 macOS + Xcode
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -36,28 +38,31 @@ path = sys.argv[1]
 with open(path, encoding="utf-8") as f:
     c = json.load(f)
 scheme = str(c.get("scheme") or "http")
-web_port = int(c.get("web_port", 9000))
-api_port = int(c.get("app_port", c.get("web_port", 9001)))
+web_port = int(c.get("flutter_app_port", c.get("web_port", 9000)))
+api_port = int(c.get("baas_api_port", c.get("app_port", c.get("web_port", 9001))))
 user = str(c.get("user") or "ec2-user")
-web = c.get("web") if isinstance(c.get("web"), dict) else {}
-api = c.get("api") if isinstance(c.get("api"), dict) else {}
+fa = c.get("flutter_app") if isinstance(c.get("flutter_app"), dict) else {}
+ba = c.get("baas_api") if isinstance(c.get("baas_api"), dict) else {}
+if not fa:
+    fa = c.get("web") if isinstance(c.get("web"), dict) else {}
+if not ba:
+    ba = c.get("api") if isinstance(c.get("api"), dict) else {}
 # 与 server_mgr.has_dual_deploy 一致
 dual = (
     "1"
-    if isinstance(c.get("api"), dict) and isinstance(c.get("web"), dict)
-    else "0"
+    if isinstance(fa, dict) and isinstance(ba, dict) else "0"
 )
 
 
 def out(name, val):
     print(f"export {name}={shlex.quote(str(val))}")
 
-wh = (web.get("host") or c.get("host") or "").strip()
-ah = (api.get("host") or "").strip()
-wrp = (web.get("remote_path") or "").strip()
-arp = (api.get("remote_path") or "").strip()
-wkey = (web.get("key") or c.get("key") or "").strip()
-akey = (api.get("key") or c.get("key") or "").strip()
+wh = (fa.get("host") or c.get("host") or "").strip()
+ah = (ba.get("host") or "").strip()
+wrp = (fa.get("remote_path") or "").strip()
+arp = (ba.get("remote_path") or "").strip()
+wkey = (fa.get("key") or c.get("key") or "").strip()
+akey = (ba.get("key") or c.get("key") or "").strip()
 if dual == "0":
     if not ah:
         ah = wh
@@ -126,25 +131,25 @@ python3 "$PROJECT_ROOT/server/server_mgr.py" restart
 
 echo ""
 echo "=============================================="
-echo "  部署完成"
+echo "  部署完成（FlutterApp + BaasAPI）"
 if [[ "$_D_DUAL" == "1" ]]; then
-  echo "  Web（Flutter 静态）: ${_D_SCHEME}://${_D_WEB_HOST}:${_D_WEB_PORT}/"
-  echo "  API:                  ${_D_SCHEME}://${_D_API_HOST}:${_D_API_PORT}/"
+  echo "  FlutterApp（Web 静态）: ${_D_SCHEME}://${_D_WEB_HOST}:${_D_WEB_PORT}/"
+  echo "  BaasAPI（后端）:       ${_D_SCHEME}://${_D_API_HOST}:${_D_API_PORT}/"
   if [[ -n "$_D_WEB_RP" ]]; then
-    echo "  日志 Web: ${_D_WEB_RP}/web_static.log"
+    echo "  日志 FlutterApp: ${_D_WEB_RP}/web_static.log"
   fi
   if [[ -n "$_D_API_RP" ]]; then
-    echo "  日志 API: ${_D_API_RP}/server.log"
+    echo "  日志 BaasAPI: ${_D_API_RP}/server.log"
   fi
   if [[ -n "$_D_WEB_KEY" && -n "$_D_WEB_HOST" ]]; then
-    echo "  SSH Web: ssh -i \"${_D_WEB_KEY}\" ${_D_USER}@${_D_WEB_HOST}"
+    echo "  SSH FlutterApp: ssh -i \"${_D_WEB_KEY}\" ${_D_USER}@${_D_WEB_HOST}"
   fi
   if [[ -n "$_D_API_KEY" && -n "$_D_API_HOST" ]]; then
-    echo "  SSH API: ssh -i \"${_D_API_KEY}\" ${_D_USER}@${_D_API_HOST}"
+    echo "  SSH BaasAPI: ssh -i \"${_D_API_KEY}\" ${_D_USER}@${_D_API_HOST}"
   fi
 else
-  echo "  Web: ${_D_SCHEME}://${_D_WEB_HOST}:${_D_WEB_PORT}/"
-  echo "  API: ${_D_SCHEME}://${_D_WEB_HOST}:${_D_API_PORT}/"
+  echo "  FlutterApp: ${_D_SCHEME}://${_D_WEB_HOST}:${_D_WEB_PORT}/"
+  echo "  BaasAPI:    ${_D_SCHEME}://${_D_WEB_HOST}:${_D_API_PORT}/"
   if [[ -n "$_D_WEB_RP" ]]; then
     echo "  日志: ${_D_WEB_RP}/server.log  ${_D_WEB_RP}/web_static.log"
   fi
@@ -166,10 +171,10 @@ if [[ "${HZTECH_POST_DEPLOY_VERIFY:-0}" == "1" ]]; then
     fi
   }
   if [[ "$_D_DUAL" == "1" ]]; then
-    _curl_ok "${_D_SCHEME}://${_D_API_HOST}:${_D_API_PORT}/api/health" "API health"
-    _curl_ok "${_D_SCHEME}://${_D_WEB_HOST}:${_D_WEB_PORT}/" "Web /"
+    _curl_ok "${_D_SCHEME}://${_D_API_HOST}:${_D_API_PORT}/api/health" "BaasAPI health"
+    _curl_ok "${_D_SCHEME}://${_D_WEB_HOST}:${_D_WEB_PORT}/" "FlutterApp /"
   else
-    _curl_ok "${_D_SCHEME}://${_D_WEB_HOST}:${_D_API_PORT}/api/health" "API health"
-    _curl_ok "${_D_SCHEME}://${_D_WEB_HOST}:${_D_WEB_PORT}/" "Web /"
+    _curl_ok "${_D_SCHEME}://${_D_WEB_HOST}:${_D_API_PORT}/api/health" "BaasAPI health"
+    _curl_ok "${_D_SCHEME}://${_D_WEB_HOST}:${_D_WEB_PORT}/" "FlutterApp /"
   fi
 fi

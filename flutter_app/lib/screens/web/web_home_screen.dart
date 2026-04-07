@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../theme/finance_style.dart';
+
 /// Web 首页：本地洛伦兹吸引子图作为全屏背景。
 class WebHomeScreen extends StatelessWidget {
   const WebHomeScreen({super.key});
@@ -39,7 +41,7 @@ class WebHomeScreen extends StatelessWidget {
                           textAlign: TextAlign.center,
                           style: Theme.of(context).textTheme.headlineMedium
                               ?.copyWith(
-                                color: const Color(0xFFE8E8F0),
+                                color: AppFinanceStyle.textDefault,
                                 fontWeight: FontWeight.bold,
                                 letterSpacing: 2,
                               ),

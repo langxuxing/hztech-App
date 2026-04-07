@@ -29,7 +29,8 @@ class ProfitPercentLineChart extends StatelessWidget {
     }
     final isPositive =
         snapshots.isNotEmpty && (snapshots.last.profitPercent >= 0);
-    final lineColor = isPositive ? AppFinanceStyle.profitGreenEnd : Colors.red;
+    final lineColor =
+        isPositive ? AppFinanceStyle.textProfit : AppFinanceStyle.textLoss;
     return LineChart(
       LineChartData(
         minX: 0,
@@ -66,7 +67,9 @@ class ProfitPercentLineChart extends StatelessWidget {
             dotData: const FlDotData(show: false),
             belowBarData: BarAreaData(
               show: true,
-              color: (isPositive ? AppFinanceStyle.profitGreenEnd : Colors.red)
+              color: (isPositive
+                      ? AppFinanceStyle.textProfit
+                      : AppFinanceStyle.textLoss)
                   .withValues(alpha: 0.35),
             ),
           ),

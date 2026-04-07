@@ -80,7 +80,7 @@ class _WebServiceStatusScreenState extends State<WebServiceStatusScreen> {
                 if (_error != null && _health == null)
                   Text(
                     _error!,
-                    style: TextStyle(color: Colors.red.shade300),
+                    style: TextStyle(color: AppFinanceStyle.textLoss),
                   ),
                 if (_health != null) ...[
                   Text('健康检查', style: AppFinanceStyle.labelTextStyle(context)),
@@ -133,7 +133,7 @@ class _WebServiceStatusScreenState extends State<WebServiceStatusScreen> {
                             child: Text(
                               '周期异常: ${_status!.lastLoopError}',
                               style: TextStyle(
-                                color: Colors.orange.shade300,
+                                color: AppFinanceStyle.textDefault,
                                 fontSize: 13,
                               ),
                             ),
@@ -156,7 +156,7 @@ class _WebServiceStatusScreenState extends State<WebServiceStatusScreen> {
                           final color = ok == true
                               ? AppFinanceStyle.profitGreenEnd
                               : ok == false
-                                  ? Colors.red.shade300
+                                  ? AppFinanceStyle.textLoss
                                   : AppFinanceStyle.labelColor;
                           return Padding(
                             padding: const EdgeInsets.only(bottom: 8),
@@ -182,7 +182,7 @@ class _WebServiceStatusScreenState extends State<WebServiceStatusScreen> {
                                         Text(
                                           s.error!,
                                           style: TextStyle(
-                                            color: Colors.orange.shade200,
+                                            color: AppFinanceStyle.textDefault,
                                             fontSize: 12,
                                           ),
                                         ),

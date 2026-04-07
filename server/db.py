@@ -582,10 +582,45 @@ def _ensure_account_month_open_initial_balance(
         )
 
 
+def _drop_account_daily_performance_equity_base(
+    conn: sqlite3.Connection | PgConnectionWrapper,
+) -> None:
+    """account_daily_performance 废弃列 equity_base（分母取自 account_month_open，不落库）。"""
+    if IS_POSTGRES:
+        try:
+            conn.execute(
+                "ALTER TABLE account_daily_performance "
+                "DROP COLUMN IF EXISTS equity_base"
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        return
+    if not isinstance(conn, sqlite3.Connection):
+        return
+    cur = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name='account_daily_performance'"
+    )
+    if not cur.fetchone():
+        return
+    cur = conn.execute("PRAGMA table_info(account_daily_performance)")
+    cols = {str(r[1]) for r in cur.fetchall()}
+    if "equity_base" not in cols:
+        return
+    try:
+        conn.execute(
+            "ALTER TABLE account_daily_performance DROP COLUMN equity_base"
+        )
+    except (sqlite3.OperationalError, OSError):
+        pass
+
+
 def _ensure_account_daily_performance_v3(
     conn: sqlite3.Connection | PgConnectionWrapper,
 ) -> None:
-    """日绩效：补 equity_change/cash_change；equity_base 为当月 account_month_open 口径分母（见重建逻辑）。"""
+    """日绩效：补 equity_change/cash_change；并移除已废弃列 equity_base。"""
+    _drop_account_daily_performance_equity_base(conn)
     if IS_POSTGRES:
         try:
             cur = conn.execute(
@@ -598,11 +633,6 @@ def _ensure_account_daily_performance_v3(
             cols = {str(r[0]) for r in cur.fetchall()}
             if not cols:
                 return
-            if "equity_base" not in cols:
-                conn.execute(
-                    "ALTER TABLE account_daily_performance "
-                    "ADD COLUMN equity_base DOUBLE PRECISION"
-                )
             if "equity_change" not in cols:
                 conn.execute(
                     "ALTER TABLE account_daily_performance "
@@ -627,10 +657,6 @@ def _ensure_account_daily_performance_v3(
         return
     cur = conn.execute("PRAGMA table_info(account_daily_performance)")
     cols = {str(r[1]) for r in cur.fetchall()}
-    if "equity_base" not in cols:
-        conn.execute(
-            "ALTER TABLE account_daily_performance ADD COLUMN equity_base REAL"
-        )
     if "equity_change" not in cols:
         conn.execute(
             "ALTER TABLE account_daily_performance ADD COLUMN equity_change REAL"
@@ -847,7 +873,6 @@ def init_db() -> None:
                 day TEXT NOT NULL,
                 net_realized_pnl REAL NOT NULL DEFAULT 0,
                 close_count INTEGER NOT NULL DEFAULT 0,
-                equity_base REAL,
                 equity_change REAL,
                 cash_change REAL,
                 pnl_pct REAL,
@@ -2572,25 +2597,17 @@ def account_positions_daily_realized(
     account_id: str, year: int, month: int
 ) -> list[dict[str, Any]]:
     """
-    按 UTC 自然日汇总历史平仓盈亏与笔数。
-    归属日：由 u_time_ms（OKX uTime，仓位更新时间/平仓记录上的平仓时刻）落在的 UTC 日历日决定，非 cTime。
-    单笔净盈亏：优先 realized_pnl（OKX realizedPnl），否则 pnl+fee+funding_fee。
+    按北京时间（Asia/Shanghai）自然日汇总历史平仓盈亏与笔数。
+    筛选窗：当月北京 00:00 至次月北京 00:00 之间的 u_time_ms（OKX uTime，平仓时刻）。
+    归属日：该瞬时对应的北京日历日；非 cTime。单笔净盈亏优先 realized_pnl（OKX realizedPnl）。
     """
-    from datetime import datetime, timezone
-
     aid = (account_id or "").strip()
     if not aid or year < 2000 or year > 2100 or month < 1 or month > 12:
         return []
-    try:
-        start = datetime(year, month, 1, tzinfo=timezone.utc)
-    except ValueError:
+    bounds = _beijing_month_bounds_ms(year, month)
+    if bounds is None:
         return []
-    if month == 12:
-        end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
-    else:
-        end = datetime(year, month + 1, 1, tzinfo=timezone.utc)
-    start_ms = int(start.timestamp() * 1000)
-    end_ms = int(end.timestamp() * 1000)
+    start_ms, end_ms = bounds
 
     conn = get_conn()
     try:
@@ -2598,7 +2615,7 @@ def account_positions_daily_realized(
             cur = conn.execute(
                 """
                 SELECT to_char(
-                         timezone('UTC', to_timestamp((u_time_ms::bigint) / 1000.0)),
+                         timezone('Asia/Shanghai', to_timestamp((u_time_ms::bigint) / 1000.0)),
                          'YYYY-MM-DD'
                        ) AS d,
                        SUM(COALESCE(realized_pnl,
@@ -2617,7 +2634,7 @@ def account_positions_daily_realized(
             cur = conn.execute(
                 """
                 SELECT strftime('%Y-%m-%d',
-                       datetime(CAST(u_time_ms AS INTEGER) / 1000, 'unixepoch')) AS d,
+                       datetime(CAST(u_time_ms AS INTEGER) / 1000, 'unixepoch', '+8 hours')) AS d,
                        SUM(COALESCE(realized_pnl,
                                     COALESCE(pnl, 0) + COALESCE(fee, 0) + COALESCE(funding_fee, 0))) AS net_pnl,
                        COUNT(*) AS close_count
@@ -2703,10 +2720,56 @@ def _snapshots_sorted_dt_equity_cash(
     return out
 
 
-def _signed_equity_cash_delta_utc_day(
+def _beijing_month_bounds_ms(year: int, month: int) -> tuple[int, int] | None:
+    """北京时间当月 [start,end) 毫秒时间窗，用于按月筛选 u_time_ms。"""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    sh = ZoneInfo("Asia/Shanghai")
+    try:
+        start = datetime(year, month, 1, 0, 0, 0, tzinfo=sh)
+    except ValueError:
+        return None
+    if month == 12:
+        end = datetime(year + 1, 1, 1, 0, 0, 0, tzinfo=sh)
+    else:
+        end = datetime(year, month + 1, 1, 0, 0, 0, tzinfo=sh)
+    return int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+
+
+def _snapshot_iso_to_beijing_day(sa: str) -> str | None:
+    from zoneinfo import ZoneInfo
+
+    dt = _parse_snapshot_at_utc(sa)
+    if dt is None:
+        return None
+    sh = ZoneInfo("Asia/Shanghai")
+    bj = dt.astimezone(sh)
+    return f"{bj.year:04d}-{bj.month:02d}-{bj.day:02d}"
+
+
+def _tr_lookup_day_from_beijing_ledger_day(day: str) -> str:
+    """日绩效 `day` 为北京日历时，映射到 market_daily_bars.day（当前库为 K 线 UTC 日历日）的近似键。"""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    parts_on = (day or "").strip().split("-")
+    if len(parts_on) != 3:
+        return (day or "").strip()
+    try:
+        y, m, d = int(parts_on[0]), int(parts_on[1]), int(parts_on[2])
+    except ValueError:
+        return (day or "").strip()
+    sh = ZoneInfo("Asia/Shanghai")
+    noon_bj = datetime(y, m, d, 12, 0, 0, tzinfo=sh)
+    return noon_bj.astimezone(timezone.utc).strftime("%Y-%m-%d")
+
+
+def _signed_equity_cash_delta_beijing_day(
     snaps: list[tuple[Any, float, float]], day: str
 ) -> tuple[float | None, float | None]:
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
+    from zoneinfo import ZoneInfo
 
     parts = (day or "").strip().split("-")
     if len(parts) != 3:
@@ -2715,7 +2778,8 @@ def _signed_equity_cash_delta_utc_day(
         y, m, d = int(parts[0]), int(parts[1]), int(parts[2])
     except ValueError:
         return None, None
-    day_start = datetime(y, m, d, tzinfo=timezone.utc)
+    sh = ZoneInfo("Asia/Shanghai")
+    day_start = datetime(y, m, d, 0, 0, 0, tzinfo=sh).astimezone(timezone.utc)
     day_end = day_start + timedelta(days=1)
     in_day = [(dt, eq, cash) for dt, eq, cash in snaps if day_start <= dt < day_end]
     if not in_day:
@@ -2738,9 +2802,7 @@ def _signed_equity_cash_delta_utc_day(
 def _month_realized_denom_from_open(
     aid: str, year_month: str, initial_capital: float, cache: dict[str, dict | None]
 ) -> float | None:
-    """当月已实现/日绩效分母：与写入行 equity_base 一致。
-
-    优先 account_month_open.initial_balance（原 open_cash，OKX USDT 现金余额口径）；
+    """当月 pnl_pct 分母：优先 account_month_open.initial_balance（原 open_cash）；
     缺省或无效时依次 open_equity、account_list.initial_capital。
     """
     if year_month not in cache:
@@ -2759,28 +2821,24 @@ def _month_realized_denom_from_open(
 def account_daily_performance_query_month(
     account_id: str, year: int, month: int
 ) -> list[dict[str, Any]]:
-    """读库表 account_daily_performance（UTC 自然日）。"""
-    from datetime import datetime, timezone
-
+    """读库表 account_daily_performance（day 为北京日历日 YYYY-MM-DD）。"""
     aid = (account_id or "").strip()
     if not aid or year < 2000 or year > 2100 or month < 1 or month > 12:
         return []
     try:
-        start = datetime(year, month, 1, tzinfo=timezone.utc)
+        start_s = f"{year:04d}-{month:02d}-01"
     except ValueError:
         return []
     if month == 12:
-        end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        end_s = f"{year + 1:04d}-01-01"
     else:
-        end = datetime(year, month + 1, 1, tzinfo=timezone.utc)
-    start_s = start.strftime("%Y-%m-%d")
-    end_s = end.strftime("%Y-%m-%d")
+        end_s = f"{year:04d}-{month + 1:02d}-01"
 
     conn = get_conn()
     try:
         cur = conn.execute(
             """
-            SELECT day, net_realized_pnl, close_count, equity_base, equity_change, cash_change, pnl_pct,
+            SELECT day, net_realized_pnl, close_count, equity_change, cash_change, pnl_pct,
                    equity_base_realized_chain, pnl_pct_realized_chain,
                    benchmark_inst_id, market_tr, efficiency_ratio, updated_at
             FROM account_daily_performance
@@ -2794,20 +2852,19 @@ def account_daily_performance_query_month(
                 "day": str(r[0]),
                 "net_pnl": float(r[1] or 0),
                 "close_count": int(r[2] or 0),
-                "equity_base": float(r[3]) if r[3] is not None else None,
-                "equity_change": float(r[4]) if r[4] is not None else None,
-                "cash_change": float(r[5]) if r[5] is not None else None,
-                "pnl_pct": float(r[6]) if r[6] is not None else None,
+                "equity_change": float(r[3]) if r[3] is not None else None,
+                "cash_change": float(r[4]) if r[4] is not None else None,
+                "pnl_pct": float(r[5]) if r[5] is not None else None,
                 "equity_base_realized_chain": (
-                    float(r[7]) if r[7] is not None else None
+                    float(r[6]) if r[6] is not None else None
                 ),
                 "pnl_pct_realized_chain": (
-                    float(r[8]) if r[8] is not None else None
+                    float(r[7]) if r[7] is not None else None
                 ),
-                "benchmark_inst_id": str(r[9] or ""),
-                "market_tr": float(r[10]) if r[10] is not None else None,
-                "efficiency_ratio": float(r[11]) if r[11] is not None else None,
-                "updated_at": str(r[12] or ""),
+                "benchmark_inst_id": str(r[8] or ""),
+                "market_tr": float(r[9]) if r[9] is not None else None,
+                "efficiency_ratio": float(r[10]) if r[10] is not None else None,
+                "updated_at": str(r[11] or ""),
             }
             for r in cur.fetchall()
         ]
@@ -2822,15 +2879,14 @@ def account_daily_performance_rebuild_for_accounts(
     default_benchmark_inst: str = "PEPE-USDT-SWAP",
 ) -> None:
     """
-    写入 account_daily_performance（与持仓历史同步同周期，常在 UTC 日界前后完成）：
-    自然日 = 平仓 UTC 日 ∪ 余额快照 UTC 日期；
-    net_realized_pnl/close_count 来自 account_positions_history，按 u_time_ms（OKX uTime，平仓时刻）归入 UTC 日，
-    金额优先 realized_pnl（OKX realizedPnl），非 cTime；
-    equity_base = 当月 account_month_open 口径分母（与 _month_realized_denom_from_open 一致：
-    initial_balance 优先，次 open_equity，末 initial_capital），同一自然月内各日相同；
-    equity_change、cash_change 仍为 UTC 日内快照相对日界前的 signed 差分；
-    pnl_pct = net / equity_base ×100（分母无效则为 NULL）；
-    链式已实现：每月首行起点同 equity_base 逻辑，月内按上一日链末权益滚动。
+    写入 account_daily_performance（day = 北京日历日 YYYY-MM-DD）：
+    自然日 = 平仓北京日 ∪ 余额快照北京日；
+    net_realized_pnl/close_count 来自 account_positions_history：按 u_time_ms（OKX uTime，平仓时刻）折算为
+    Asia/Shanghai 当日，非 cTime；金额优先 realized_pnl（OKX realizedPnl）。
+    pnl_pct 分母为当月 account_month_open 口径（_month_realized_denom_from_open）；
+    equity_change、cash_change 为北京日 00:00–次日 00:00（上海时区）内快照的 signed 差分；
+    market_tr：日绩效北京日映射到 market_daily_bars 当前使用的 UTC 日键作近似查询；
+    链式已实现：每月首行起点同上述分母，月内按上一日链末权益滚动。
     """
     from datetime import datetime, timezone
 
@@ -2855,7 +2911,7 @@ def account_daily_performance_rebuild_for_accounts(
                     """
                     SELECT d, net_pnl, close_count FROM (
                         SELECT to_char(
-                                 timezone('UTC', to_timestamp((u_time_ms::bigint) / 1000.0)),
+                                 timezone('Asia/Shanghai', to_timestamp((u_time_ms::bigint) / 1000.0)),
                                  'YYYY-MM-DD'
                                ) AS d,
                                SUM(COALESCE(realized_pnl,
@@ -2874,7 +2930,7 @@ def account_daily_performance_rebuild_for_accounts(
                 cur = conn.execute(
                     """
                     SELECT strftime('%Y-%m-%d',
-                           datetime(CAST(u_time_ms AS INTEGER) / 1000, 'unixepoch')) AS d,
+                           datetime(CAST(u_time_ms AS INTEGER) / 1000, 'unixepoch', '+8 hours')) AS d,
                            SUM(COALESCE(realized_pnl,
                                         COALESCE(pnl, 0) + COALESCE(fee, 0) + COALESCE(funding_fee, 0))) AS net_pnl,
                            COUNT(*) AS close_count
@@ -2905,8 +2961,9 @@ def account_daily_performance_rebuild_for_accounts(
 
             day_set: set[str] = set(d for d, _, _ in day_rows)
             for sa, _, _ in snap_rows:
-                if len(sa) >= 10:
-                    day_set.add(sa[:10])
+                bd = _snapshot_iso_to_beijing_day(sa)
+                if bd:
+                    day_set.add(bd)
 
             conn.execute(
                 "DELETE FROM account_daily_performance WHERE account_id = ?",
@@ -2923,13 +2980,17 @@ def account_daily_performance_rebuild_for_accounts(
 
             tr_map: dict[str, float] = {}
             if day_list and bench:
-                placeholders = ",".join("?" * len(day_list))
+                tr_query_days = sorted(
+                    {_tr_lookup_day_from_beijing_ledger_day(d) for d in day_list}
+                    | set(day_list)
+                )
+                placeholders = ",".join("?" * len(tr_query_days))
                 cur_tr = conn.execute(
                     f"""
                     SELECT day, tr FROM market_daily_bars
                     WHERE inst_id = ? AND day IN ({placeholders})
                     """,
-                    (bench, *day_list),
+                    (bench, *tr_query_days),
                 )
                 for r in cur_tr.fetchall():
                     tr_map[str(r[0])] = float(r[1] or 0.0)
@@ -2940,7 +3001,7 @@ def account_daily_performance_rebuild_for_accounts(
 
             for day in day_list:
                 net_pnl, close_count = pnl_by_day.get(day, (0.0, 0))
-                eq_ch, cash_ch = _signed_equity_cash_delta_utc_day(snaps_dt, day)
+                eq_ch, cash_ch = _signed_equity_cash_delta_beijing_day(snaps_dt, day)
 
                 ym = day[:7]
                 if ym != prev_ym:
@@ -2949,11 +3010,10 @@ def account_daily_performance_rebuild_for_accounts(
                 month_denom = _month_realized_denom_from_open(
                     aid, ym, initial, mo_cache
                 )
-                equity_base = month_denom
 
                 pnl_pct: float | None = None
-                if equity_base is not None and float(equity_base) > 0:
-                    pnl_pct = float(net_pnl) / float(equity_base) * 100.0
+                if month_denom is not None and float(month_denom) > 0:
+                    pnl_pct = float(net_pnl) / float(month_denom) * 100.0
 
                 if chain_eq_after is not None:
                     chain_start = chain_eq_after
@@ -2978,7 +3038,10 @@ def account_daily_performance_rebuild_for_accounts(
                     else None
                 )
 
-                mtr = tr_map.get(day)
+                tr_k = _tr_lookup_day_from_beijing_ledger_day(day)
+                mtr = tr_map.get(tr_k)
+                if mtr is None:
+                    mtr = tr_map.get(day)
                 market_tr_v = float(mtr) if mtr is not None else None
                 eff = (
                     close_pnl_efficiency_ratio(net_pnl, market_tr_v)
@@ -2989,17 +3052,16 @@ def account_daily_performance_rebuild_for_accounts(
                 conn.execute(
                     """
                     INSERT INTO account_daily_performance
-                    (account_id, day, net_realized_pnl, close_count, equity_base, equity_change, cash_change, pnl_pct,
+                    (account_id, day, net_realized_pnl, close_count, equity_change, cash_change, pnl_pct,
                      equity_base_realized_chain, pnl_pct_realized_chain,
                      benchmark_inst_id, market_tr, efficiency_ratio, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         aid,
                         day,
                         net_pnl,
                         close_count,
-                        equity_base,
                         eq_ch,
                         cash_ch,
                         pnl_pct,

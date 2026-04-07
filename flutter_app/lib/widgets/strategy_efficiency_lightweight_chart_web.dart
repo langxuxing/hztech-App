@@ -100,7 +100,7 @@ html,body{margin:0;padding:0;height:100%;background:#141419;overflow:hidden;}
   var chart = LightweightCharts.createChart(el, {
     layout: {
       background: { type: 'solid', color: '#141419' },
-      textColor: '#A0A0B0',
+      textColor: '#F7F7F7',
     },
     grid: {
       vertLines: { color: 'rgba(42,42,53,0.55)' },

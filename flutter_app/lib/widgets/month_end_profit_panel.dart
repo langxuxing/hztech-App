@@ -912,7 +912,7 @@ class MonthEndValueCalendarPanel extends StatefulWidget {
     /// 限制日历网格最大高度时，按比例缩小单元格（与柱图/折线同卡无内滚动）。
     this.gridMaxHeight,
 
-    /// 按「日」索引的平仓笔数（与后端 UTC 日一致）；与 [snapshots] 日损益并列展示。
+    /// 按「日」索引的平仓笔数（与后端北京时间 ledger 日一致）；与 [snapshots] 日损益并列展示。
     this.dailyCloseCounts,
 
     /// 为 true 时日历网格在父级有限高度内 [Expanded] 铺满，与折线/柱图三列对齐。
@@ -1183,14 +1183,14 @@ class _MonthEndValueCalendarPanelState
 }
 
 /// 深色底上日历「星期 / 无数据日期」前景色（用户指定 RGB 200,200,200）。
-const _kCalendarGridMutedText = Color(0xFFC8C8C8);
+const _kCalendarGridMutedText = AppFinanceStyle.textDefault;
 
 /// 日历有数据日：盈利 / 亏损单元格底色（与 Web 参考一致）
 const _kCalendarDayProfitBg = Color.fromRGBO(32, 64, 21, 1);
 const _kCalendarDayLossBg = Color.fromRGBO(72, 33, 46, 1);
 
 /// 亏损日数字与边框色（chartLoss 与 loss 底色过近，改用亮粉以保证可读）
-const _kCalendarDayLossAccent = Color(0xFFFF8A94);
+const _kCalendarDayLossAccent = AppFinanceStyle.textLoss;
 
 class _CalendarGrid extends StatelessWidget {
   const _CalendarGrid({

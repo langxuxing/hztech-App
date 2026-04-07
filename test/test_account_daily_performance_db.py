@@ -55,9 +55,10 @@ def test_daily_performance_rebuild_equity_and_efficiency():
         "2026-04-01T00:00:00.000000Z",
         initial_balance=4000.0,
     )
+    # 落在北京时间 2026-04-05 内的 UTC 时刻（非 23:59 UTC，否则已是北京 4/6）
     db.account_snapshot_insert(
         aid,
-        "2026-04-05T23:59:59.000000Z",
+        "2026-04-05T12:00:00.000000Z",
         4000.0,
         4099.0,
         -901.0,
@@ -77,7 +78,6 @@ def test_daily_performance_rebuild_equity_and_efficiency():
     assert r["equity_change"] is not None and abs(r["equity_change"] - 99.0) < 1e-6
     exp_pct = 99.0 / 4000.0 * 100.0
     assert r["pnl_pct"] is not None and abs(r["pnl_pct"] - exp_pct) < 1e-6
-    assert r["equity_base"] is not None and abs(r["equity_base"] - 4000.0) < 1e-6
     assert r["equity_base_realized_chain"] == 4000.0
     assert r["pnl_pct_realized_chain"] is not None
     assert abs(r["pnl_pct_realized_chain"] - exp_pct) < 1e-6
@@ -88,7 +88,7 @@ def test_daily_performance_rebuild_equity_and_efficiency():
 
 
 def test_daily_performance_sparse_snapshot_chain_pct_differs_from_snapshot_pct():
-    """链式分母随上一日链末滚动；equity_base 与 pnl_pct 分母均为当月 account_month_open 口径（initial_balance 优先）。"""
+    """链式分母随上一日链末滚动；pnl_pct 分母为当月 account_month_open 口径（initial_balance 优先）。"""
     aid = "acct-perf-chain-2"
     ts1 = "2026-04-05T12:00:00.000000Z"
     ts2 = "2026-04-06T12:00:00.000000Z"
@@ -182,8 +182,6 @@ def test_daily_performance_sparse_snapshot_chain_pct_differs_from_snapshot_pct()
     assert abs(d6["net_pnl"] - net6) < 1e-6
     assert d5["pnl_pct"] is not None and abs(d5["pnl_pct"] - net5 / 4000.0 * 100.0) < 1e-6
     assert d6["pnl_pct"] is not None and abs(d6["pnl_pct"] - net6 / 4000.0 * 100.0) < 1e-6
-    assert d5["equity_base"] is not None and abs(d5["equity_base"] - 4000.0) < 1e-6
-    assert d6["equity_base"] is not None and abs(d6["equity_base"] - 4000.0) < 1e-6
     chain_after_5 = 4000.0 + net5
     assert d6["equity_base_realized_chain"] is not None
     assert abs(d6["equity_base_realized_chain"] - chain_after_5) < 1e-6

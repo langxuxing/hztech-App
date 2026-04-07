@@ -182,7 +182,7 @@ class _WebAutoNettingTestScreenState extends State<WebAutoNettingTestScreen> {
               SelectableText(
                 _error!,
                 style: TextStyle(
-                  color: Colors.redAccent.shade100,
+                  color: AppFinanceStyle.textLoss,
                   fontSize: 14,
                   height: 1.4,
                 ),

@@ -363,7 +363,7 @@ class BotProfitHistoryResponse {
   }
 }
 
-/// GET /api/tradingbots/{id}/daily-realized-pnl（UTC 自然日；平仓按 OKX uTime 归入日 + 日绩效合并）。
+/// GET /api/tradingbots/{id}/daily-realized-pnl（北京时间自然日；平仓 uTime 归入日 + 日绩效合并，`day_basis`=asia_shanghai）。
 class DailyRealizedPnlDayRow {
   DailyRealizedPnlDayRow({
     required this.day,

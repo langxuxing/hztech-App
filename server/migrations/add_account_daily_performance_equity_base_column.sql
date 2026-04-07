@@ -1,6 +1,2 @@
--- 若历史库曾执行「移除 equity_base」的旧版迁移，可手工补回列（与 init_db / _ensure_account_daily_performance_v3 一致）。
--- SQLite 示例：
---   sqlite3 server/sqlite/tradingbots.db ".read server/migrations/add_account_daily_performance_equity_base_column.sql"
--- PostgreSQL：列已存在时忽略报错或先检查 information_schema。
-
-ALTER TABLE account_daily_performance ADD COLUMN equity_base REAL;
+-- 已废弃：equity_base 列已从 account_daily_performance 移除。
+-- 若仍持有此列的旧库，请执行 drop_account_daily_performance_equity_base.sql（或启动服务时由 db._drop_account_daily_performance_equity_base 自动 DROP）。

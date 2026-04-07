@@ -112,6 +112,8 @@ def _debug_log(location: str, message: str, data: dict, hypothesis_id: str) -> N
 
 # #endregion
 
+# 日志行首标签，便于与 FlutterApp 静态进程区分；可用 HZTECH_SERVICE_LOG_TAG 覆盖
+HZTECH_SERVICE_LOG_TAG = os.environ.get("HZTECH_SERVICE_LOG_TAG", "BaasAPI").strip() or "BaasAPI"
 app = Flask(__name__)
 
 # 本进程仅承担 API（及 /kline、/download 等）；后台定时任务（账户同步、月初、K 线夜间）由本进程在 leader 锁下启动
@@ -145,9 +147,8 @@ def _try_acquire_background_scheduler_leader_lock() -> bool:
     无 fcntl 的平台（Windows）视为单进程开发环境，始终返回 True。
     锁目录默认 ``<repo>/.temp-cursor``，可用环境变量 ``HZTECH_BACKGROUND_SCHEDULER_LOCK_DIR`` 覆盖。
 
-    日志里常见 ``INFO:main:``：本文件内 ``app = Flask(__name__)``，模块名为 ``main`` 时
-    Flask 的 app.logger 名即为 ``main``；
-    多段定时任务日志请用 ``pid``/``ppid``（启动与 ``GET /api/status``）或 ``pgrep -af server/main.py`` 区分进程。
+    日志行首含 ``[BaasAPI]``（或环境变量 ``HZTECH_SERVICE_LOG_TAG``），与 FlutterApp 静态服务日志区分；
+    多 worker 时请用 ``pid``/``ppid`` 或 ``GET /api/status`` 区分。
     """
     global _BACKGROUND_SCHEDULER_LEADER_LOCK_FP
     if fcntl is None:
@@ -214,12 +215,43 @@ def _sync_state_snapshot() -> dict:
 _LOG_LEVEL = os.environ.get("LOG_LEVEL", "").strip().upper()
 # 持仓分段调试：DEBUG_POSITIONS=1 时输出 [持仓-API] / [持仓-OKX] 等日志，便于排查界面→API→OKX 调用链
 _DEBUG_POSITIONS = os.environ.get("DEBUG_POSITIONS", "0") == "1"
+
+
+def _hztech_log_formatter(service_tag: str) -> logging.Formatter:
+    return logging.Formatter(
+        f"[{service_tag}] %(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+
+def apply_hztech_process_logging(service_tag: str | None = None) -> None:
+    """统一控制台日志格式（行首 [BaasAPI] 等）。在 app.run 前调用，避免与 FlutterApp 日志混淆。"""
+    tag = (service_tag or HZTECH_SERVICE_LOG_TAG).strip() or "BaasAPI"
+    fmt = _hztech_log_formatter(tag)
+    level = logging.DEBUG if _LOG_LEVEL == "DEBUG" else logging.INFO
+    root = logging.getLogger()
+    root.setLevel(level)
+    if not root.handlers:
+        h = logging.StreamHandler()
+        h.setFormatter(fmt)
+        root.addHandler(h)
+    else:
+        for h in root.handlers:
+            h.setFormatter(fmt)
+    app.logger.setLevel(level)
+    wz = logging.getLogger("werkzeug")
+    wz.setLevel(level)
+    for h in wz.handlers:
+        h.setFormatter(fmt)
+
+
 if _LOG_LEVEL == "DEBUG":
     logging.basicConfig(
-        level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+        level=logging.DEBUG,
+        format=f"[{HZTECH_SERVICE_LOG_TAG}] %(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
     app.logger.setLevel(logging.DEBUG)
-    # Werkzeug 请求日志也开到 DEBUG，方便看每条请求
     logging.getLogger("werkzeug").setLevel(logging.DEBUG)
 
 
@@ -1493,7 +1525,7 @@ def api_strategy_daily_efficiency(bot_id):
         month_equity_base_by_month=month_equity_bases or None,
         atr14_by_day=atr14_by_day,
     )
-    # merge 会覆盖 span=days+12 的 K 线，行数可能多于请求天数；仅返回最近 days 个 UTC 自然日（merge 已按日倒序）
+    # merge 会覆盖 span=days+12 的 K 线，行数可能多于请求天数；仅返回最近 days 个 UTC 自然日（merge 已按日倒序；K 线与日内差分仍为 UTC 口径）
     if len(rows) > days:
         rows = rows[:days]
     return jsonify(
@@ -1512,7 +1544,7 @@ def api_strategy_daily_efficiency(bot_id):
 @require_auth
 def api_bot_daily_realized_pnl(bot_id):
     """
-    历史平仓按 UTC 自然日汇总（account_positions_history 的 u_time_ms=OKX uTime 平仓时刻），并与 account_daily_performance 合并。
+    历史平仓按北京时间自然日汇总（u_time_ms=OKX uTime 平仓时刻 → Asia/Shanghai 日历日），并与 account_daily_performance 合并。
     额外含 equity_change、cash_change、pnl_pct（相对当月 account_month_open.initial_balance%）、
     equity_base_realized_chain、pnl_pct_realized_chain、benchmark_inst_id、market_tr、efficiency_ratio。
     Query: year=2026&month=4
@@ -1559,7 +1591,7 @@ def api_bot_daily_realized_pnl(bot_id):
             "bot_id": bid,
             "year": y,
             "month": m,
-            "day_basis": "utc",
+            "day_basis": "asia_shanghai",
             "month_total_pnl": total,
             "days": rows,
         }
@@ -2471,6 +2503,7 @@ def serve_kline_json(kline_rel: str):
 
 
 if __name__ == "__main__":
+    apply_hztech_process_logging()
     try:
         _db.strategy_event_insert(_APP_EVENT_BOT_ID, "start", "auto", None)
     except Exception:
@@ -2480,4 +2513,10 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, _app_on_stop_signal)
     # 端口由环境变量 PORT 指定（默认 9001，与 Flutter API 预设一致）
     port = int(os.environ.get("PORT", 9001))
+    app.logger.info(
+        "%s 启动 listen=0.0.0.0:%s FLASK_DEBUG=%s",
+        HZTECH_SERVICE_LOG_TAG,
+        port,
+        os.environ.get("FLASK_DEBUG", "0"),
+    )
     app.run(host="0.0.0.0", port=port, debug=os.environ.get("FLASK_DEBUG", "0") == "1")

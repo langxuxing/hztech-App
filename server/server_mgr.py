@@ -1,4 +1,4 @@
-"""AWS 部署配置与 SSH 管理。从 server/deploy-aws.json 读取，供 Cursor/脚本部署到 AWS。"""
+"""AWS 部署配置与 SSH 管理。从 server/deploy-aws.json 读取：FlutterApp（flutter_app）、BaasAPI（baas_api）可分服务器部署。兼容旧键 web / api。"""
 from pathlib import Path
 import json
 import os
@@ -27,41 +27,76 @@ def load_config():
         return json.load(f)
 
 
-def target_config(role: str) -> dict:
-    """合并顶层字段与 web / api 段。role 为 'web' 或 'api'。"""
-    c = load_config()
-    keys = ("name", "scheme", "web_port", "app_port", "user", "key", "ssh_opts")
+def _top_level_base(c: dict) -> dict:
+    """合并 deploy-aws.json 顶层字段，并统一端口名（flutter_app_port / web_port → web_port）。"""
+    keys = (
+        "name",
+        "scheme",
+        "web_port",
+        "app_port",
+        "flutter_app_port",
+        "baas_api_port",
+        "user",
+        "key",
+        "ssh_opts",
+    )
     base = {k: c[k] for k in keys if k in c}
-    nested = c.get(role)
+    wport = c.get("flutter_app_port", c.get("web_port", 9000))
+    aport = c.get("baas_api_port", c.get("app_port", 9001))
+    base["web_port"] = int(wport)
+    base["app_port"] = int(aport)
+    return base
+
+
+def target_config(role: str) -> dict:
+    """合并顶层字段与分应用段。role 为 ``flutter_app``（Flutter 静态等）或 ``baas_api``（后端 API）。
+
+    兼容旧键：``web`` / ``api`` 在未提供新键时仍可读。
+    """
+    c = load_config()
+    base = _top_level_base(c)
+    nested = None
+    if role == "flutter_app":
+        nested = c.get("flutter_app")
+        if not isinstance(nested, dict):
+            nested = c.get("web")
+    elif role == "baas_api":
+        nested = c.get("baas_api")
+        if not isinstance(nested, dict):
+            nested = c.get("api")
+    else:
+        raise KeyError("target_config role 须为 'flutter_app' 或 'baas_api'，实为 %r" % (role,))
     if isinstance(nested, dict):
-        merged = {**base, **nested}
-        return merged
-    # 兼容旧版单主机：顶层 host + remote_path
+        return {**base, **nested}
     if "host" in c and "remote_path" in c:
         return {**base, **{k: c[k] for k in ("host", "port", "remote_path") if k in c}}
-    raise KeyError("deploy-aws.json 缺少 web/api 段或旧版 host/remote_path")
+    raise KeyError(
+        "deploy-aws.json 缺少 flutter_app/baas_api（或旧版 web/api）段，或旧版 host/remote_path"
+    )
 
 
 def has_dual_deploy() -> bool:
     c = load_config()
-    return isinstance(c.get("api"), dict) and isinstance(c.get("web"), dict)
+    has_fa = isinstance(c.get("flutter_app"), dict) or isinstance(c.get("web"), dict)
+    has_ba = isinstance(c.get("baas_api"), dict) or isinstance(c.get("api"), dict)
+    return has_fa and has_ba
 
 
 def get_ssh_target():
-    """返回 (user@host, key_path) 用于 SSH/rsync（默认 Web 主机）。"""
-    c = target_config("web")
+    """返回 (user@host, key_path) 用于 SSH/rsync（默认 FlutterApp 主机）。"""
+    c = target_config("flutter_app")
     key = PROJECT_ROOT / c["key"]
     return f"{c['user']}@{c['host']}", str(key)
 
 
 def get_remote_path():
-    """远程 Web 部署目录。"""
-    return target_config("web")["remote_path"]
+    """远程 FlutterApp 部署目录。"""
+    return target_config("flutter_app")["remote_path"]
 
 
 def ssh_cmd(remote_cmd=None, cfg=None):
-    """构建 ssh 命令。remote_cmd 为 None 时打开交互 shell。cfg 默认 Web 主机。"""
-    c = cfg if cfg is not None else target_config("web")
+    """构建 ssh 命令。remote_cmd 为 None 时打开交互 shell。cfg 默认 FlutterApp 主机。"""
+    c = cfg if cfg is not None else target_config("flutter_app")
     key = PROJECT_ROOT / c["key"]
     port = c.get("port", 22)
     opts = c.get("ssh_opts", [])
@@ -152,13 +187,13 @@ def _rsync_one(cfg: dict, extra_excludes: list | None, sync_flutter_web: bool):
 
 
 def rsync_sync(exclude=None):
-    """同步到 Web 主机（精简目录 + Flutter Web）；双机时 API 主机再同步一份（不含 flutter_app、apk）。
+    """同步到 FlutterApp 主机（精简目录 + Flutter Web）；双机时 BaasAPI 主机再同步一份（不含 flutter_app、apk）。
     排除项见 _rsync_deploy_exclude_patterns（测试/IDE/Gradle/Dart 源码/本地部署脚本等）。"""
     ex = list(exclude) if exclude else []
-    c_web = target_config("web")
+    c_web = target_config("flutter_app")
     _rsync_one(c_web, ex, sync_flutter_web=True)
     if has_dual_deploy():
-        c_api = target_config("api")
+        c_api = target_config("baas_api")
         api_ex = ex + ["flutter_app", "apk"]
         _rsync_one(c_api, api_ex, sync_flutter_web=False)
 
@@ -431,17 +466,17 @@ def _remote_install_requirements_sh(remote_path: str) -> str:
 
 
 def _api_listen_port(cfg: dict) -> int:
-    """API 进程监听端口：优先 app_port，与 deploy-aws.json 顶层一致。"""
-    return int(cfg.get("app_port", cfg.get("web_port", 9001)))
+    """BaasAPI 进程监听端口：baas_api_port / app_port。"""
+    return int(cfg.get("baas_api_port", cfg.get("app_port", cfg.get("web_port", 9001))))
 
 
 def remote_restart_api():
-    """在 API 主机上启动完整后端（/api/*、/kline、/download 等 + DB + 定时任务）。"""
-    c = target_config("api")
+    """在 BaasAPI 主机上启动完整后端（/api/*、/kline、/download 等 + DB + 定时任务）。"""
+    c = target_config("baas_api")
     remote_path = c["remote_path"]
     api_port = _api_listen_port(c)
     host = c["host"]
-    print("Restarting API server on %s (port=%s) ..." % (host, api_port))
+    print("Restarting BaasAPI on %s (port=%s) ..." % (host, api_port))
     run_ssh(
         f"cd {remote_path} && pkill -f server/main.py 2>/dev/null || true", check=False, cfg=c
     )
@@ -452,18 +487,18 @@ def remote_restart_api():
         f"nohup python3 server/main.py >> server.log 2>&1 & sleep 1",
         cfg=c,
     )
-    print("API server restarted. Log: %s/server.log" % remote_path)
+    print("BaasAPI restarted. Log: %s/server.log" % remote_path)
 
 
 def remote_restart_web():
-    """在 Web 主机上启动 Flutter Web 静态站（server/serve_web_static.py）；API 在另一台机器。"""
-    c = target_config("web")
+    """在 FlutterApp 主机上启动 Flutter Web 静态站（serve_web_static.py）；BaasAPI 在另一台机器时。"""
+    c = target_config("flutter_app")
     remote_path = c["remote_path"]
     web_port = int(c.get("web_port", 9000))
     host = c["host"]
     web_root = f"{remote_path}/flutter_app/build/web"
     print(
-        "Restarting Web (Flutter static) on %s (port=%s, root=%s) ..."
+        "Restarting FlutterApp static on %s (port=%s, root=%s) ..."
         % (host, web_port, web_root)
     )
     run_ssh(
@@ -478,12 +513,12 @@ def remote_restart_web():
         f"nohup python3 server/serve_web_static.py >> web_static.log 2>&1 & sleep 1",
         cfg=c,
     )
-    print("Web static server restarted. Log: %s/web_static.log" % remote_path)
+    print("FlutterApp static restarted. Log: %s/web_static.log" % remote_path)
 
 
 def remote_restart_single():
-    """单主机部署：API（main.py）+ Flutter Web 静态（serve_web_static.py）双进程。"""
-    c = target_config("web")
+    """单主机部署：BaasAPI（main.py）+ FlutterApp 静态（serve_web_static.py）双进程。"""
+    c = target_config("flutter_app")
     remote_path = c["remote_path"]
     web_port = int(c.get("web_port", 9000))
     api_port = _api_listen_port(c)
@@ -525,13 +560,13 @@ def remote_restart():
 def deploy_and_start(port=None, start_server=True):
     """同步到 AWS；可选在远程安装依赖并启动服务。"""
     c = load_config()
-    cweb = target_config("web")
+    cweb = target_config("flutter_app")
     if port is None:
-        port = int(c.get("web_port", 9000))
+        port = int(c.get("flutter_app_port", c.get("web_port", 9000)))
     if has_dual_deploy():
-        capi = target_config("api")
+        capi = target_config("baas_api")
         print(
-            "Syncing to API %s:%s and Web %s:%s ..."
+            "Syncing to BaasAPI %s:%s and FlutterApp %s:%s ..."
             % (capi["host"], capi["remote_path"], cweb["host"], cweb["remote_path"])
         )
     else:
@@ -541,15 +576,15 @@ def deploy_and_start(port=None, start_server=True):
         print("Sync done. Skip start. Run: python server/server_mgr.py deploy --no-start")
         return
     remote_restart()
-    web_port = int(c.get("web_port", 9000))
+    web_port = int(c.get("flutter_app_port", c.get("web_port", 9000)))
     api_port = _api_listen_port(c)
     rp = get_remote_path()
     scheme = c.get("scheme", "http")
     if has_dual_deploy():
-        capi = target_config("api")
+        capi = target_config("baas_api")
         print(
-            "Deploy done. API: %s://%s:%s/api/  Web: %s://%s:%s/  "
-            "(logs: API %s/server.log, Web %s/web_static.log)"
+            "Deploy done. BaasAPI: %s://%s:%s/api/  FlutterApp: %s://%s:%s/  "
+            "(logs: BaasAPI %s/server.log, FlutterApp %s/web_static.log)"
             % (
                 scheme,
                 capi["host"],
@@ -563,7 +598,7 @@ def deploy_and_start(port=None, start_server=True):
         )
     else:
         print(
-            "Deploy done. API: %s://%s:%s/api/  Web: %s://%s:%s/  "
+            "Deploy done. BaasAPI: %s://%s:%s/api/  FlutterApp: %s://%s:%s/  "
             "(logs: %s/server.log, %s/web_static.log)"
             % (
                 scheme,
@@ -597,14 +632,17 @@ if __name__ == "__main__":
                 sys.exit(rc)
         if "--build-web" in sys.argv:
             build_web_flutter()
-        deploy_and_start(port=int(cfg.get("web_port", cfg.get("port", 9000))), start_server=start)
+        deploy_and_start(
+            port=int(cfg.get("flutter_app_port", cfg.get("web_port", cfg.get("port", 9000)))),
+            start_server=start,
+        )
         sys.exit(0)
     if len(sys.argv) > 1 and sys.argv[1] == "restart":
         remote_restart()
         sys.exit(0)
     if len(sys.argv) > 1 and sys.argv[1] == "db-sync":
         if has_dual_deploy():
-            c_api = target_config("api")
+            c_api = target_config("baas_api")
             remote_path = c_api["remote_path"]
             run_ssh(
                 f"cd {remote_path} && python3 -c 'from server.db import init_db; init_db()'",

@@ -33,13 +33,15 @@ def load_base_url() -> str:
         with open(cfg_path, encoding="utf-8") as f:
             c = json.load(f)
         scheme = c.get("scheme", "http")
-        api = c.get("api")
-        if isinstance(api, dict) and api.get("host"):
-            host = api["host"]
+        ba = c.get("baas_api")
+        if not isinstance(ba, dict):
+            ba = c.get("api") if isinstance(c.get("api"), dict) else {}
+        if isinstance(ba, dict) and ba.get("host"):
+            host = ba["host"]
         else:
             host = c.get("host", "127.0.0.1")
-        # API 服务端口 9001；web_port(9000) 仅用于浏览器访问 Web
-        port = int(c.get("app_port", c.get("web_port", 9001)))
+        # BaasAPI 端口；flutter_app_port(9000) 为 FlutterApp 静态站
+        port = int(c.get("baas_api_port", c.get("app_port", c.get("web_port", 9001))))
         return f"{scheme}://{host}:{port}"
     return "http://127.0.0.1:9001"
 
@@ -158,7 +160,7 @@ def main() -> int:
         print("\n  未获取到 token，跳过需登录接口。")
         if failed > 0:
             print(
-                "  提示: 502/连接失败通常表示 API 未启动或端口不对（本机 ./server/run_local.sh 默认 9001；浏览器 Web 多为 9000）。"
+                "  提示: 502/连接失败通常表示 BaasAPI 未启动或端口不对（本机 ./server/run_local.sh 默认 9001；FlutterApp 多为 9000）。"
                 "到 EC2 执行: cd /home/ec2-user/hztechapp && bash server/install_on_aws.sh"
             )
         print(f"=== 完成：{failed} 项失败 ===")

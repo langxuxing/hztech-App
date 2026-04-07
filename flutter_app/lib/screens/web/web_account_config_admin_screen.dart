@@ -335,7 +335,7 @@ class _WebAccountConfigAdminScreenState
       color = AppFinanceStyle.profitGreenEnd;
     } else if (ok == false) {
       icon = Icons.cancel_outlined;
-      color = Colors.orange.shade200;
+      color = AppFinanceStyle.textDefault;
     } else {
       icon = Icons.help_outline;
       color = AppFinanceStyle.labelColor;
@@ -425,7 +425,7 @@ class _WebAccountConfigAdminScreenState
         m['message']?.toString() ?? '连接失败',
         style: AppFinanceStyle.labelTextStyle(
           context,
-        ).copyWith(fontSize: 12, color: Colors.red.shade200),
+        ).copyWith(fontSize: 12, color: AppFinanceStyle.textLoss),
       );
     }
     final checks = _asStringKeyMap(m['checks']) ?? {};
@@ -529,7 +529,7 @@ class _WebAccountConfigAdminScreenState
               padding: const EdgeInsets.only(bottom: 4),
               child: SelectableText(
                 e.toString(),
-                style: base.copyWith(color: Colors.orange.shade200),
+                style: base.copyWith(color: AppFinanceStyle.textDefault),
               ),
             ),
           ),
@@ -548,7 +548,7 @@ class _WebAccountConfigAdminScreenState
         padding: const EdgeInsets.only(top: 12),
         child: SelectableText(
           '自动配置：已跳过 — $skipped',
-          style: base.copyWith(color: Colors.orange.shade200),
+          style: base.copyWith(color: AppFinanceStyle.textDefault),
         ),
       );
     }
@@ -572,7 +572,7 @@ class _WebAccountConfigAdminScreenState
             style: TextStyle(
               color: ok
                   ? AppFinanceStyle.profitGreenEnd
-                  : Colors.orange.shade200,
+                  : AppFinanceStyle.textDefault,
               fontSize: 12,
             ),
           ),
@@ -591,7 +591,7 @@ class _WebAccountConfigAdminScreenState
                   style: base.copyWith(
                     color: stepOk
                         ? AppFinanceStyle.labelColor
-                        : Colors.orange.shade200,
+                        : AppFinanceStyle.textDefault,
                   ),
                 ),
               );
@@ -603,7 +603,7 @@ class _WebAccountConfigAdminScreenState
             ...errs.map(
               (e) => SelectableText(
                 e.toString(),
-                style: base.copyWith(color: Colors.red.shade200),
+                style: base.copyWith(color: AppFinanceStyle.textLoss),
               ),
             ),
           ],
@@ -655,7 +655,7 @@ class _WebAccountConfigAdminScreenState
                                 style: TextStyle(
                                   color: m['configuration_ok'] == true
                                       ? AppFinanceStyle.profitGreenEnd
-                                      : Colors.orange.shade200,
+                                      : AppFinanceStyle.textDefault,
                                   fontSize: 14,
                                 ),
                               ),
@@ -723,7 +723,7 @@ class _WebAccountConfigAdminScreenState
                     SelectableText(
                       m['message']?.toString() ?? '失败',
                       style: TextStyle(
-                        color: Colors.red.shade200,
+                        color: AppFinanceStyle.textLoss,
                         fontSize: 13,
                       ),
                     ),
@@ -842,7 +842,7 @@ class _WebAccountConfigAdminScreenState
                     padding: const EdgeInsets.all(12),
                     child: Text(
                       _error!,
-                      style: TextStyle(color: Colors.red.shade300),
+                      style: TextStyle(color: AppFinanceStyle.textLoss),
                     ),
                   ),
                 Expanded(
@@ -1104,7 +1104,7 @@ class _WebAccountConfigAdminScreenState
                                     child: Text(
                                       '删除',
                                       style: TextStyle(
-                                        color: Colors.red.shade300,
+                                        color: AppFinanceStyle.textLoss,
                                       ),
                                     ),
                                   ),

@@ -110,7 +110,9 @@ class _TradingBotControlState extends State<TradingBotControl> {
             child: const Text('取消'),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppFinanceStyle.textLoss,
+            ),
             onPressed: () {
               Navigator.pop(ctx);
               _doStop(bot);
@@ -311,7 +313,7 @@ class _TradingBotControlState extends State<TradingBotControl> {
                                                             .textTheme
                                                             .labelSmall
                                                             ?.copyWith(
-                                                              color: Colors.orange,
+                                                              color: AppFinanceStyle.textDefault,
                                                               fontWeight: FontWeight.w600,
                                                             ),
                                                       ),
@@ -326,7 +328,7 @@ class _TradingBotControlState extends State<TradingBotControl> {
                                                   context,
                                                 ).copyWith(
                                                   color: running
-                                                      ? Colors.greenAccent
+                                                      ? AppFinanceStyle.textProfit
                                                       : AppFinanceStyle.labelColor,
                                                 ),
                                               ),
@@ -496,7 +498,7 @@ class _TradingBotControlState extends State<TradingBotControl> {
         _strategyCircleAction(
           size: size,
           iconSize: iconSize,
-          accent: Colors.green,
+          accent: AppFinanceStyle.textProfit,
           icon: Icons.play_circle_outline,
           busy: busy,
           enabled: !busy && !running,
@@ -506,7 +508,7 @@ class _TradingBotControlState extends State<TradingBotControl> {
         _strategyCircleAction(
           size: size,
           iconSize: iconSize,
-          accent: Colors.red,
+          accent: AppFinanceStyle.textLoss,
           icon: Icons.stop_circle_outlined,
           busy: busy,
           enabled: !busy && running,
@@ -585,7 +587,8 @@ class _ProfitLineChart extends StatelessWidget {
     }
     final isPositive =
         snapshots.isNotEmpty && (snapshots.last.profitPercent >= 0);
-    final lineColor = isPositive ? AppFinanceStyle.profitGreenEnd : Colors.red;
+    final lineColor =
+        isPositive ? AppFinanceStyle.textProfit : AppFinanceStyle.textLoss;
     return LineChart(
       LineChartData(
         minX: 0,
@@ -605,7 +608,9 @@ class _ProfitLineChart extends StatelessWidget {
             dotData: FlDotData(show: false),
             belowBarData: BarAreaData(
               show: true,
-              color: (isPositive ? AppFinanceStyle.profitGreenEnd : Colors.red)
+              color: (isPositive
+                      ? AppFinanceStyle.textProfit
+                      : AppFinanceStyle.textLoss)
                   .withValues(alpha: 0.25),
             ),
           ),

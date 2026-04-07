@@ -5,6 +5,7 @@ import 'secure/prefs.dart';
 import 'screens/login_screen.dart';
 import 'screens/main_screen.dart';
 import 'screens/web/web_main_shell.dart';
+import 'theme/finance_style.dart';
 import 'widgets/water_background.dart';
 
 void main() {
@@ -20,10 +21,35 @@ class HzQuantApp extends StatelessWidget {
     return MaterialApp(
       title: 'Web3+AI量化平台',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
-        useMaterial3: true,
-      ),
+      theme: () {
+        final base = ThemeData(
+          brightness: Brightness.dark,
+          useMaterial3: true,
+        );
+        return base.copyWith(
+          colorScheme: base.colorScheme.copyWith(
+            primary: AppFinanceStyle.textProfit,
+            onPrimary: AppFinanceStyle.textDefault,
+            secondary: AppFinanceStyle.textProfit,
+            onSecondary: AppFinanceStyle.textDefault,
+            error: AppFinanceStyle.textLoss,
+            onError: AppFinanceStyle.textDefault,
+            onSurface: AppFinanceStyle.textDefault,
+            onSurfaceVariant: AppFinanceStyle.textDefault,
+          ),
+          scaffoldBackgroundColor: AppFinanceStyle.backgroundDark,
+          textTheme: base.textTheme.apply(
+            bodyColor: AppFinanceStyle.textDefault,
+            displayColor: AppFinanceStyle.textDefault,
+          ),
+          primaryTextTheme: base.primaryTextTheme.apply(
+            bodyColor: AppFinanceStyle.textDefault,
+            displayColor: AppFinanceStyle.textDefault,
+          ),
+          iconTheme:
+              base.iconTheme.copyWith(color: AppFinanceStyle.textDefault),
+        );
+      }(),
       home: const _AuthGate(),
     );
   }

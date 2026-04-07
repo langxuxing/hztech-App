@@ -7,7 +7,7 @@ import '../utils/number_display_format.dart';
 import 'month_end_profit_panel.dart' show dailyPerfChangeMapForMonth;
 
 /// 深色背景上 X 轴日期刻度（与日历无数据格同档可读性）。
-const _kChartAxisDateLabel = Color(0xFFC8C8C8);
+const _kChartAxisDateLabel = AppFinanceStyle.textDefault;
 
 /// 与日绩效折线一致：区间内末点相对首点涨跌着色。
 Color _snapshotTrendLineColor(List<FlSpot> spots) {

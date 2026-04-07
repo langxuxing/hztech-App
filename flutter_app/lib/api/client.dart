@@ -314,7 +314,7 @@ class ApiClient {
     return BotProfitHistoryResponse.fromJson(map);
   }
 
-  /// 历史平仓按 UTC 自然日汇总（净盈亏、平仓笔数），归属时刻为 OKX uTime（平仓时间），供月度日历展示。
+  /// 历史平仓按北京时间自然日汇总（净盈亏、平仓笔数），归属为 OKX uTime 对应的上海日历日，供月度日历展示。
   Future<DailyRealizedPnlResponse> getDailyRealizedPnl(
     String botId,
     int year,

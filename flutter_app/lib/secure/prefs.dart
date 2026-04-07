@@ -26,7 +26,7 @@ const String _kCompileTimeApiBase = String.fromEnvironment(
   defaultValue: '',
 );
 
-/// 未使用 [API_BASE_URL] 时的线上默认（与 deploy-aws.json `app_port` 一致）
+/// 未使用 [API_BASE_URL] 时的线上默认（与 deploy-aws.json `baas_api` 主机及 `baas_api_port` 一致）
 const String _kDefaultProductionApiBase = 'http://54.66.108.150:9001/';
 
 /// 未使用 [API_BASE_URL] 时的本地调试默认（API 服务端口；Flutter Web 页面由 serve_web_static 等单独端口提供）

@@ -815,7 +815,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
             child: Center(
               child: Text(
                 '暂无账户数据，请确认后端 accounts 已配置交易账户',
-                style: TextStyle(color: Colors.white70),
+                style: TextStyle(color: AppFinanceStyle.textDefault),
               ),
             ),
           ),
@@ -880,7 +880,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                       Text(
                         _error!,
                         textAlign: TextAlign.center,
-                        style: const TextStyle(color: Colors.white70),
+                        style: TextStyle(color: AppFinanceStyle.textDefault),
                       ),
                       const SizedBox(height: 16),
                       FilledButton(onPressed: _load, child: const Text('重试')),
@@ -1188,7 +1188,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
               snapshots: snap,
               title: '权益日历',
               description:
-                  '优先 equity_change；无则快照。右下为 UTC 自然日平仓笔数（按 OKX uTime 归入日）。',
+                  '优先 equity_change；无则快照。右下为北京时间自然日平仓笔数（OKX uTime → 上海日）。',
               valueAt: (s) => s.equityUsdt,
               emptyMessage: '暂无日绩效或历史快照',
               showMonthNavigator: false,
@@ -1394,7 +1394,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
               snapshots: snap,
               title: '现金日历',
               description:
-                  '优先 cash_change；无则快照。右下为 UTC 自然日平仓笔数（按 OKX uTime 归入日）。',
+                  '优先 cash_change；无则快照。右下为北京时间自然日平仓笔数（OKX uTime → 上海日）。',
               valueAt: (s) => s.currentBalance,
               emptyMessage: '暂无日绩效或历史快照',
               showMonthNavigator: false,

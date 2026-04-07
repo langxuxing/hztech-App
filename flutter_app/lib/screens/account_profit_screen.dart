@@ -654,7 +654,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
             child: Center(
               child: Text(
                 '暂无账户数据，请确认后端 accounts 已配置交易账户',
-                style: TextStyle(color: Colors.white70),
+                style: TextStyle(color: AppFinanceStyle.textDefault),
               ),
             ),
           ),
@@ -709,7 +709,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
                           Text(
                             _error!,
                             textAlign: TextAlign.center,
-                            style: const TextStyle(color: Colors.white70),
+                            style: TextStyle(color: AppFinanceStyle.textDefault),
                           ),
                           const SizedBox(height: 16),
                           FilledButton(
@@ -768,7 +768,8 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
         ? _totalDynUpl(_positions, curPx)
         : a.floatingProfit;
     final rate = a.profitPercent;
-    final rateColor = rate >= 0 ? AppFinanceStyle.profitGreenEnd : Colors.red;
+    final rateColor =
+        rate >= 0 ? AppFinanceStyle.textProfit : AppFinanceStyle.textLoss;
     final titleSize =
         (Theme.of(context).textTheme.titleLarge?.fontSize ?? 22) + 2;
 
@@ -812,7 +813,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
                 titleSize: titleSize,
                 valueColor: floating >= 0
                     ? AppFinanceStyle.profitGreenEnd
-                    : Colors.red,
+                    : AppFinanceStyle.textLoss,
               );
               final chipIni = _overviewChip(
                 context,
@@ -929,8 +930,8 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
               style: AppFinanceStyle.valueTextStyle(context, fontSize: 18)
                   .copyWith(
                 color: totalFloating >= 0
-                    ? AppFinanceStyle.profitGreenEnd
-                    : Colors.redAccent,
+                    ? AppFinanceStyle.textProfit
+                    : AppFinanceStyle.textLoss,
               ),
             ),
             const SizedBox(height: 12),
@@ -955,7 +956,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
                           .copyWith(
                         color: lineUpl >= 0
                             ? AppFinanceStyle.profitGreenEnd
-                            : Colors.redAccent,
+                            : AppFinanceStyle.textLoss,
                       ),
                     ),
                   ],
@@ -997,7 +998,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
             snapshots: snap,
             title: '',
             description:
-                '按日展示：当日最后一条快照现金余额相对前一有效时点的变化。右下角平仓笔数为 UTC 自然日汇总，按 OKX uTime（平仓时刻）归入日（与盈亏数值口径不同）。',
+                '按日展示：当日最后一条快照现金余额相对前一有效时点的变化。右下角平仓笔数为北京时间自然日汇总，按 OKX uTime（平仓时刻）归入上海日（与盈亏数值口径不同）。',
             valueAt: (s) => s.currentBalance,
             emptyMessage: '暂无历史快照，无法统计月度现金余额',
             showMonthNavigator: false,
@@ -1082,7 +1083,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
             snapshots: snap,
             title: '',
             description:
-                '按日展示：当日最后一条快照权益相对前一有效时点的变化。右下角平仓笔数为 UTC 自然日汇总，按 OKX uTime（平仓时刻）归入日（与盈亏数值口径不同）。',
+                '按日展示：当日最后一条快照权益相对前一有效时点的变化。右下角平仓笔数为北京时间自然日汇总，按 OKX uTime（平仓时刻）归入上海日（与盈亏数值口径不同）。',
             valueAt: (s) => s.equityUsdt,
             emptyMessage: '暂无历史快照，无法统计月度权益',
             showMonthNavigator: false,
