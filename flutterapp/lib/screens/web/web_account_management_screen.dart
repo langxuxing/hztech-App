@@ -18,18 +18,18 @@ class _AccountTestRecord {
 }
 
 /// 管理员维护 Account_List.json（侧栏「账户管理」）。
-class WebAccountConfigAdminScreen extends StatefulWidget {
-  const WebAccountConfigAdminScreen({super.key, this.embedInShell = false});
+class WebAccountManagementScreen extends StatefulWidget {
+  const WebAccountManagementScreen({super.key, this.embedInShell = false});
 
   final bool embedInShell;
 
   @override
-  State<WebAccountConfigAdminScreen> createState() =>
-      _WebAccountConfigAdminScreenState();
+  State<WebAccountManagementScreen> createState() =>
+      _WebAccountManagementScreenState();
 }
 
-class _WebAccountConfigAdminScreenState
-    extends State<WebAccountConfigAdminScreen> {
+class _WebAccountManagementScreenState
+    extends State<WebAccountManagementScreen> {
   final _prefs = SecurePrefs();
   List<AccountConfigRow> _accounts = [];
   bool _loading = true;

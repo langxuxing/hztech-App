@@ -64,8 +64,10 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   List<OkxPosition> _positions = [];
   List<BotSeason> _seasons = [];
   bool _loading = true;
+
   /// 阶段二：收益/历史/持仓/赛季等与账户列表并行请求期间为 true。
   bool _detailLoading = false;
+
   /// 用户切换账户时为 true，用于遮罩主副标题区分「切换」与「首屏加载」。
   bool _switchingAccount = false;
   String? _error;
@@ -968,12 +970,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         ),
         AccountDetailLoadingOverlay(
           visible: _detailLoading,
-          message: _switchingAccount
-              ? '正在切换账户…'
-              : '正在加载账户画像…',
-          subtitle: _switchingAccount
-              ? '正在拉取该账户的收益、持仓、赛季与曲线'
-              : null,
+          message: _switchingAccount ? '正在切换账户…' : '正在加载账户画像…',
+          subtitle: _switchingAccount ? '正在拉取该账户的收益、持仓、赛季与曲线' : null,
         ),
       ],
     );

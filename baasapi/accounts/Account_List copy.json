@@ -7,7 +7,7 @@
     "Initial_capital": 5000,  
     "trading_strategy": "Moneyflow-V2.1",
     "account_key_file": "OKX_Alang_Sandbox.json",
-    "script_file": "moneyflow_test_mainrepo.sh",
+    "script_file": "moneyflow_alangsandbox.sh",
     "enbaled": true
   },
   {
@@ -18,7 +18,7 @@
     "Initial_capital": 7153,
     "trading_strategy": "Moneyflow-V2.1",
     "account_key_file": "OKX_Dong_Readonly.json",
-    "script_file": "moneyflow_test_004.sh",
+    "script_file": "moneyflow_alangsandbox.sh",
     "enbaled": true
   },  
   {
@@ -29,7 +29,7 @@
     "Initial_capital": 500,
     "trading_strategy": "Moneyflow-V2.1",
     "account_key_file": "OKX_Defi_Readonly.json",
-    "script_file": "moneyflow_test_002.sh",
+    "script_file": "moneyflow_alangsandbox.sh",
     "enbaled": true
   },
   {
@@ -40,7 +40,7 @@
     "Initial_capital": 5000,
     "trading_strategy": "Moneyflow-V2.1",
     "account_key_file": "OKX_Hztech_Devops.json",
-    "script_file": "moneyflow_test_mainrepo.sh",
+    "script_file": "moneyflow_alangsandbox.sh",
     "enbaled": true
   },
   {
@@ -51,7 +51,7 @@
     "Initial_capital": 5000,
     "trading_strategy": "Moneyflow-V2.1",
     "account_key_file": "OKX_Forest_Sandbox.json",
-    "script_file": "moneyflow_test_mainrepo.sh",
+    "script_file": "moneyflow_alangsandbox.sh",
     "enbaled": false
   },
   {
@@ -62,7 +62,7 @@
     "Initial_capital": 5000,
     "trading_strategy": "Moneyflow-V2.1",
     "account_key_file": "OKX_Forest_Live.json",
-    "script_file": "moneyflow_test_live.sh",
+    "script_file": "forest_live.sh",
     "enbaled": false
   },
   {
@@ -73,7 +73,7 @@
     "Initial_capital": 5000,
     "trading_strategy": "Moneyflow-V2.1",
     "account_key_file": "OKX_Guoguo_Live.json",
-    "script_file": "moneyflow_test_live.sh",
+    "script_file": "guoguo_live.sh",
     "enbaled": false
   },
   {
@@ -84,7 +84,7 @@
     "Initial_capital": 5000,
     "trading_strategy": "Moneyflow-V2.1",
     "account_key_file": "OKX_HzTech_MainRepo.json",
-    "script_file": "moneyflow_test_mainrepo.sh",
+    "script_file": "hztech_mainrepo.sh",
     "enbaled": true
   },
   {
@@ -95,7 +95,7 @@
     "Initial_capital": 5000,
     "trading_strategy": "Moneyflow-V2.1",
     "account_key_file": "OKX_HzTech_Moneyflow001.json",
-    "script_file": "moneyflow_test_001.sh",
+    "script_file": "moneyflow_001.sh",
     "enbaled": true
   },
   {
@@ -105,7 +105,7 @@
     "symbol": "PEPE-USDT-SWAP",
     "Initial_capital": 500,
     "trading_strategy": "Moneyflow-V2.1",
-    "script_file": "moneyflow_test_002.sh",
+    "script_file": "moneyflow_002.sh",
     "account_key_file": "OKX_HzTech_Moneyflow002.json",
     "enbaled":true
   },
@@ -116,7 +116,7 @@
     "symbol": "PEPE-USDT-SWAP",
     "Initial_capital": 5000,
     "trading_strategy": "Moneyflow-V2.1",
-    "script_file": "moneyflow_test_003.sh",
+    "script_file": "moneyflow_003.sh",
     "account_key_file": "OKX_HzTech_Moneyflow003.json",
     "enbaled": true
   },
@@ -127,7 +127,7 @@
     "symbol": "PEPE-USDT-SWAP",
     "Initial_capital": 7153,
     "trading_strategy": "Moneyflow-V2.1",
-    "script_file": "moneyflow_test_004.sh",
+    "script_file": "moneyflow_004.sh",
     "account_key_file": "OKX_HzTech_Moneyflow004.json",
     "enbaled": true
   },
@@ -139,7 +139,7 @@
     "trading_strategy": "Moneyflow-V2.1",
     "Initial_capital": 0,
     "account_key_file": "OKX_HzTech_Moneyflow005.json",
-    "script_file": "moneyflow_test_005.sh",
+    "script_file": "moneyflow_005.sh",
     "enbaled": true
   }
 ]

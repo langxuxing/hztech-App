@@ -13,9 +13,11 @@ import '../../widgets/water_background.dart';
 /// Web：Account_List 全账户对比；持仓/成本/强平价来自 [account_open_positions_snapshots]。
 /// 成本与强平价列 ×1e9 取整；预估强平价为快照中交易所字段（全仓同价，不二次计算）；距强平价 = 预估强平价 − 当期加权价。
 /// 多/空分项浮亏来自 long_upl/short_upl；总体浮亏为 total_upl，放在「资产」。
+/// 预警（×1e9 取整口径）：多空价差 >400；距强平价 |值|<2000；多/空浮亏损失超过基数 3%；总体浮亏损失超过基数 5%。
+/// 任一预警时该列账户名（「指标」行）亮红脉冲。各对应数值格红框脉冲。
 /// 指标按「多仓 / 空仓 / 多空 / 强平价 / 资产 / 月度」分块着色，且各块可折叠。
-class WebAccountPerformanceScreen extends StatefulWidget {
-  const WebAccountPerformanceScreen({
+class WebAccountHorseracingScreen extends StatefulWidget {
+  const WebAccountHorseracingScreen({
     super.key,
     this.embedInShell = true,
     this.sharedBots = const [],
@@ -25,12 +27,12 @@ class WebAccountPerformanceScreen extends StatefulWidget {
   final List<UnifiedTradingBot> sharedBots;
 
   @override
-  State<WebAccountPerformanceScreen> createState() =>
-      _WebAccountPerformanceScreenState();
+  State<WebAccountHorseracingScreen> createState() =>
+      _WebAccountHorseracingScreenState();
 }
 
-class _WebAccountPerformanceScreenState
-    extends State<WebAccountPerformanceScreen> {
+class _WebAccountHorseracingScreenState
+    extends State<WebAccountHorseracingScreen> {
   final _prefs = SecurePrefs();
   List<UnifiedTradingBot> _bots = [];
   int _year = DateTime.now().toUtc().year;
@@ -49,7 +51,7 @@ class _WebAccountPerformanceScreenState
   }
 
   @override
-  void didUpdateWidget(covariant WebAccountPerformanceScreen oldWidget) {
+  void didUpdateWidget(covariant WebAccountHorseracingScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.sharedBots != widget.sharedBots &&
         widget.sharedBots.isNotEmpty) {
@@ -159,7 +161,7 @@ class _WebAccountPerformanceScreenState
         _loading = false;
       });
     } catch (e, st) {
-      debugPrint('WebAccountPerformanceScreen load $e\n$st');
+      debugPrint('WebAccountHorseracingScreen load $e\n$st');
       if (!mounted) return;
       setState(() {
         _loading = false;
@@ -579,10 +581,13 @@ class _PosAgg {
   final double shortAvgPx;
   final double longUpl;
   final double shortUpl;
+
   /// 交易所返回的预估强平价（快照列 long_liq_px / short_liq_px，全仓一致）
   final double unifiedLiqPx;
+
   /// 各合约 (多+空) 张数加权的现价
   final double unifiedRefPx;
+
   /// 预估强平价 − 当期价格
   final double unifiedLiqDist;
   final double totalUpl;
@@ -654,6 +659,57 @@ class _ColumnData {
       agg == null ? '—' : formatUiSignedUsdt2(agg!.totalUpl);
 }
 
+double _initialBalanceBase(_ColumnData c) => c.profit?.initialBalance ?? 0;
+
+/// 与展示一致：多空价差 ×1e9 取整后绝对值 **大于** 此值则预警（「超过 400 点」）
+const int _kPerfAlertCostGapScaledMin = 400;
+
+/// 距强平价 ×1e9 取整后绝对值 **小于** 此值则预警
+const int _kPerfAlertLiqDistScaledMax = 2000;
+
+bool _perfAlertCostGapOver400(_ColumnData c) {
+  final g = c.agg?.costGap ?? double.nan;
+  if (!g.isFinite) return false;
+  return (g * 1e9).round().abs() > _kPerfAlertCostGapScaledMin;
+}
+
+bool _perfAlertLiqDistNarrow(_ColumnData c) {
+  final d = c.agg?.unifiedLiqDist ?? double.nan;
+  if (!d.isFinite) return false;
+  return (d * 1e9).round().abs() < _kPerfAlertLiqDistScaledMax;
+}
+
+bool _perfAlertLongLossOver3pct(_ColumnData c) {
+  final base = _initialBalanceBase(c);
+  if (base <= 0) return false;
+  final u = c.agg?.longUpl ?? double.nan;
+  if (!u.isFinite || u >= 0) return false;
+  return u.abs() > base * 0.03;
+}
+
+bool _perfAlertShortLossOver3pct(_ColumnData c) {
+  final base = _initialBalanceBase(c);
+  if (base <= 0) return false;
+  final u = c.agg?.shortUpl ?? double.nan;
+  if (!u.isFinite || u >= 0) return false;
+  return u.abs() > base * 0.03;
+}
+
+bool _perfAlertTotalLossOver5pct(_ColumnData c) {
+  final base = _initialBalanceBase(c);
+  if (base <= 0) return false;
+  final u = c.agg?.totalUpl ?? double.nan;
+  if (!u.isFinite || u >= 0) return false;
+  return u.abs() > base * 0.05;
+}
+
+bool _perfColumnAnyAlert(_ColumnData c) =>
+    _perfAlertCostGapOver400(c) ||
+    _perfAlertLiqDistNarrow(c) ||
+    _perfAlertLongLossOver3pct(c) ||
+    _perfAlertShortLossOver3pct(c) ||
+    _perfAlertTotalLossOver5pct(c);
+
 enum _PerfSection { longSide, shortSide, net, liq, account, month }
 
 /// 表格内一行指标：文案、取值、是否加粗、左右列分组底色
@@ -666,6 +722,9 @@ typedef _MetricRowSpec = ({
 
   /// 非空时用该样式替代数值默认 baseStyle（如强平距离红/绿）
   TextStyle? Function(_ColumnData c)? valueStyle,
+
+  /// 为 true 时数值格红框脉冲（见文件头预警规则）
+  bool Function(_ColumnData c)? narrowPulseAlert,
 });
 
 class _ComparisonGrid extends StatefulWidget {
@@ -685,7 +744,8 @@ class _ComparisonGrid extends StatefulWidget {
   State<_ComparisonGrid> createState() => _ComparisonGridState();
 }
 
-class _ComparisonGridState extends State<_ComparisonGrid> {
+class _ComparisonGridState extends State<_ComparisonGrid>
+    with SingleTickerProviderStateMixin {
   static const Color _gridColor = AppFinanceStyle.webDataGridLine;
   static const Color _labelColumnBg = AppFinanceStyle.webDataTableLabelBg;
   static const Color _accountColumnBg = AppFinanceStyle.webDataTableCellBg;
@@ -708,6 +768,23 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
   final Map<_PerfSection, bool> _open = {
     for (final k in _PerfSection.values) k: true,
   };
+
+  late final AnimationController _narrowPulse;
+
+  @override
+  void initState() {
+    super.initState();
+    _narrowPulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _narrowPulse.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -742,6 +819,7 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
         labelFill: _longTintL,
         dataFill: _longTintD,
         valueStyle: null,
+        narrowPulseAlert: null,
       ),
       (
         label: '多仓-成本',
@@ -750,15 +828,16 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
         labelFill: _longTintL,
         dataFill: _longTintD,
         valueStyle: null,
+        narrowPulseAlert: null,
       ),
       (
         label: '多仓-浮亏',
-        value: (c) =>
-            c.agg == null ? '—' : formatUiSignedUsdt2(c.agg!.longUpl),
+        value: (c) => c.agg == null ? '—' : formatUiSignedUsdt2(c.agg!.longUpl),
         bold: false,
         labelFill: _longTintL,
         dataFill: _longTintD,
         valueStyle: null,
+        narrowPulseAlert: _perfAlertLongLossOver3pct,
       ),
     ];
 
@@ -770,6 +849,7 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
         labelFill: _shortTintL,
         dataFill: _shortTintD,
         valueStyle: null,
+        narrowPulseAlert: null,
       ),
       (
         label: '空仓-成本',
@@ -779,6 +859,7 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
         labelFill: _shortTintL,
         dataFill: _shortTintD,
         valueStyle: null,
+        narrowPulseAlert: null,
       ),
       (
         label: '空仓-浮亏',
@@ -788,6 +869,7 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
         labelFill: _shortTintL,
         dataFill: _shortTintD,
         valueStyle: null,
+        narrowPulseAlert: _perfAlertShortLossOver3pct,
       ),
     ];
 
@@ -799,6 +881,7 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
         labelFill: _netTintL,
         dataFill: _netTintD,
         valueStyle: null,
+        narrowPulseAlert: null,
       ),
       (
         label: '多空价差',
@@ -807,6 +890,7 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
         labelFill: _netTintL,
         dataFill: _netTintD,
         valueStyle: null,
+        narrowPulseAlert: _perfAlertCostGapOver400,
       ),
     ];
 
@@ -819,6 +903,7 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
         labelFill: _liqTintL,
         dataFill: _liqTintD,
         valueStyle: null,
+        narrowPulseAlert: null,
       ),
       (
         label: '距强平价',
@@ -831,6 +916,7 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
           final v = c.agg?.unifiedLiqDist ?? double.nan;
           return c._valueStyleForDist(baseStyle, v);
         },
+        narrowPulseAlert: _perfAlertLiqDistNarrow,
       ),
     ];
 
@@ -843,6 +929,7 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
         labelFill: _accTintL,
         dataFill: _accTintD,
         valueStyle: null,
+        narrowPulseAlert: null,
       ),
       (
         label: '权益金额',
@@ -851,6 +938,7 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
         labelFill: _accTintL,
         dataFill: _accTintD,
         valueStyle: null,
+        narrowPulseAlert: null,
       ),
       (
         label: '总体浮亏',
@@ -859,6 +947,7 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
         labelFill: _accTintL,
         dataFill: _accTintD,
         valueStyle: null,
+        narrowPulseAlert: _perfAlertTotalLossOver5pct,
       ),
     ];
 
@@ -870,6 +959,7 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
         labelFill: _monthTintL,
         dataFill: _monthTintD,
         valueStyle: null,
+        narrowPulseAlert: null,
       ),
       (
         label: '成交金额($month月)',
@@ -878,6 +968,7 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
         labelFill: _monthTintL,
         dataFill: _monthTintD,
         valueStyle: null,
+        narrowPulseAlert: null,
       ),
       (
         label: '收益率($month月)',
@@ -886,6 +977,7 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
         labelFill: _monthTintL,
         dataFill: _monthTintD,
         valueStyle: null,
+        narrowPulseAlert: null,
       ),
     ];
 
@@ -938,14 +1030,51 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
                   final c = columns[i];
                   final t = spec.value(c);
                   final vs = spec.valueStyle?.call(c);
-                  return Text(
-                    t,
-                    textAlign: TextAlign.center,
-                    style: spec.bold
-                        ? (vs ?? baseStyle)?.copyWith(
-                            fontWeight: FontWeight.w800,
-                          )
-                        : (vs ?? baseStyle),
+                  final baseCell = spec.bold
+                      ? (vs ?? baseStyle)?.copyWith(fontWeight: FontWeight.w800)
+                      : (vs ?? baseStyle);
+                  final pulse = spec.narrowPulseAlert?.call(c) ?? false;
+                  if (!pulse) {
+                    return Text(
+                      t,
+                      textAlign: TextAlign.center,
+                      style: baseCell,
+                    );
+                  }
+                  return AnimatedBuilder(
+                    animation: _narrowPulse,
+                    builder: (context, child) {
+                      final v = _narrowPulse.value;
+                      final pulseT = 0.45 + 0.55 * v;
+                      return DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: Color.fromRGBO(188, 74, 101, 0.08 + 0.2 * v),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: Color.fromRGBO(188, 74, 101, 0.45 * pulseT),
+                            width: 1.2,
+                          ),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 3,
+                          ),
+                          child: Text(
+                            t,
+                            textAlign: TextAlign.center,
+                            style: baseCell?.copyWith(
+                              color: Color.lerp(
+                                baseCell.color ?? AppFinanceStyle.valueColor,
+                                AppFinanceStyle.textLoss,
+                                pulseT,
+                              ),
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      );
+                    },
                   );
                 },
               ),
@@ -1025,19 +1154,64 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
                   ),
                 ),
               ),
-              dataChildren: (i) => Padding(
-                padding: const EdgeInsets.symmetric(
-                  vertical: 10,
-                  horizontal: 4,
-                ),
-                child: Text(
-                  columns[i].spec.columnTitle,
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: baseStyle?.copyWith(fontWeight: FontWeight.w700),
-                ),
-              ),
+              dataChildren: (i) {
+                final c = columns[i];
+                final title = c.spec.columnTitle;
+                final nameAlert = _perfColumnAnyAlert(c);
+                final nameStyle = baseStyle?.copyWith(
+                  fontWeight: FontWeight.w800,
+                );
+                if (!nameAlert) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 10,
+                      horizontal: 4,
+                    ),
+                    child: Text(
+                      title,
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: nameStyle,
+                    ),
+                  );
+                }
+                return AnimatedBuilder(
+                  animation: _narrowPulse,
+                  builder: (context, _) {
+                    final v = _narrowPulse.value;
+                    final pulseT = 0.45 + 0.55 * v;
+                    final bright = Color.lerp(
+                      const Color(0xFFFF1744),
+                      const Color(0xFFFF5252),
+                      v,
+                    );
+                    return DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Color.fromRGBO(255, 40, 40, 0.1 + 0.18 * v),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color: Color.fromRGBO(255, 60, 60, 0.55 * pulseT),
+                          width: 1.35,
+                        ),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          vertical: 10,
+                          horizontal: 4,
+                        ),
+                        child: Text(
+                          title,
+                          textAlign: TextAlign.center,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: nameStyle?.copyWith(color: bright),
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
             ),
             _tableRow(
               dataBlockWidth: dataBlockWidth,

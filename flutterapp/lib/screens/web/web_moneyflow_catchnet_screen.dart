@@ -6,9 +6,9 @@ import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
 import '../../widgets/water_background.dart';
 
-/// Web：自动收网测试（仅策略分析师；后端目前为记录桩，可后续对接实盘）。
-class WebAutoNettingTestScreen extends StatefulWidget {
-  const WebAutoNettingTestScreen({
+/// Web：资金流收网（仅策略分析师；后端目前为记录桩，可后续对接实盘）。
+class WebMoneyflowCatchnetScreen extends StatefulWidget {
+  const WebMoneyflowCatchnetScreen({
     super.key,
     this.sharedBots = const [],
     this.embedInShell = false,
@@ -18,10 +18,10 @@ class WebAutoNettingTestScreen extends StatefulWidget {
   final bool embedInShell;
 
   @override
-  State<WebAutoNettingTestScreen> createState() => _WebAutoNettingTestScreenState();
+  State<WebMoneyflowCatchnetScreen> createState() => _WebMoneyflowCatchnetScreenState();
 }
 
-class _WebAutoNettingTestScreenState extends State<WebAutoNettingTestScreen> {
+class _WebMoneyflowCatchnetScreenState extends State<WebMoneyflowCatchnetScreen> {
   final _prefs = SecurePrefs();
   List<UnifiedTradingBot> _bots = [];
   String? _selectedBotId;
@@ -41,7 +41,7 @@ class _WebAutoNettingTestScreenState extends State<WebAutoNettingTestScreen> {
   }
 
   @override
-  void didUpdateWidget(WebAutoNettingTestScreen oldWidget) {
+  void didUpdateWidget(WebMoneyflowCatchnetScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.sharedBots != oldWidget.sharedBots &&
         widget.sharedBots.isNotEmpty) {

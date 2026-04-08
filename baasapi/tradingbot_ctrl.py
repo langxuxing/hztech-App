@@ -1,8 +1,16 @@
 # -*- coding: utf-8 -*-
 """交易机器人进程管控：
 - 旧版：baasapi/simpleserver-lhg.py、simpleserver-hztech.py（nohup python3）
-- Account_List：script_file 指向 accounts 目录下 .sh，通过 `bash script start|stop` 启停，
+- Account_List：script_file 指向 accounts 下可解析的 .sh，通过 `bash script start|stop` 启停，
   并写入 accounts/.bot_run/<account_id>.pid 跟踪 PID。
+
+环境变量：
+- MOBILEAPP_ROOT：部署根目录（与 _project_root 一致）。
+- HZTECH_TRADINGBOT_CTRL_DIR：策略 shell 所在目录。未设置时默认为
+  `<accounts>/tradingbot_ctrl`（即 baasapi/accounts/tradingbot_ctrl）。
+  可为相对路径（相对 accounts 目录）或绝对路径。
+  script_file 可为 `tradingbot_ctrl/xxx.sh`、`xxx.sh` 或任意相对 accounts 的子路径；
+  解析时会尝试 accounts 根路径与上述目录的组合，取首个存在的文件。
 """
 from __future__ import annotations
 
@@ -33,8 +41,66 @@ def _safe_pid_tag(account_id: str) -> str:
     return "".join(c if c.isalnum() or c in "._-" else "_" for c in account_id)
 
 
+def tradingbot_ctrl_dir() -> Path:
+    """策略脚本目录：HZTECH_TRADINGBOT_CTRL_DIR，未设置则 accounts/tradingbot_ctrl。"""
+    from accounts import AccountMgr as _am
+
+    raw = (os.environ.get("HZTECH_TRADINGBOT_CTRL_DIR") or "").strip()
+    if raw:
+        p = Path(raw).expanduser()
+        if not p.is_absolute():
+            p = (_am.ACCOUNTS_DIR / p).resolve()
+        else:
+            p = p.resolve()
+        return p
+    return (_am.ACCOUNTS_DIR / "tradingbot_ctrl").resolve()
+
+
+def resolve_account_script_file(script_file: str) -> Path | None:
+    """将 Account_List 的 script_file 解析为实际 .sh 路径；找不到则 None。"""
+    from accounts import AccountMgr as _am
+
+    sf = (script_file or "").strip()
+    if not sf:
+        return None
+    if ".." in Path(sf).parts:
+        return None
+
+    accounts_root = _am.ACCOUNTS_DIR.resolve()
+    ctrl = tradingbot_ctrl_dir()
+
+    candidates: list[Path] = []
+    candidates.append((accounts_root / sf).resolve())
+
+    rel = sf[len("tradingbot_ctrl/") :] if sf.startswith("tradingbot_ctrl/") else sf
+    candidates.append((ctrl / rel).resolve())
+
+    if "/" not in sf.replace("\\", "/"):
+        only = Path(sf).name
+        only_path = (ctrl / only).resolve()
+        if only_path not in candidates:
+            candidates.append(only_path)
+
+    seen: set[Path] = set()
+    for i, p in enumerate(candidates):
+        if p in seen:
+            continue
+        seen.add(p)
+        if not p.is_file():
+            continue
+        try:
+            if i == 0:
+                p.relative_to(accounts_root)
+            else:
+                p.relative_to(ctrl)
+        except ValueError:
+            continue
+        return p
+    return None
+
+
 def load_account_shell_map() -> dict[str, Path]:
-    """Account_List 中已启用且 script_file 在 accounts 目录存在的账户 -> 脚本绝对路径。"""
+    """Account_List 中已启用且 script_file 可解析的账户 -> 脚本绝对路径。"""
     from accounts import AccountMgr as _am
 
     out: dict[str, Path] = {}
@@ -43,12 +109,8 @@ def load_account_shell_map() -> dict[str, Path]:
         sf = (basic.get("script_file") or "").strip()
         if not aid or not sf:
             continue
-        p = (_am.ACCOUNTS_DIR / sf).resolve()
-        try:
-            p.relative_to(_am.ACCOUNTS_DIR.resolve())
-        except ValueError:
-            continue
-        if p.is_file():
+        p = resolve_account_script_file(sf)
+        if p is not None:
             out[aid] = p
     return out
 

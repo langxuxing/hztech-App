@@ -87,16 +87,18 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo "错误: 需要 python3" >&2
   exit 1
 fi
-# 勿用 PY3：避免与环境中误设的 PY3 冲突；须为可执行绝对/相对路径
-_HZTECH_PYTHON3="$(command -v python3)"
-[[ -n "$_HZTECH_PYTHON3" ]] || {
-  echo "错误: 无法解析 python3 路径" >&2
-  exit 1
+# 统一用 command python3：跳过 shell 函数/别名，且避免误写 ${VAR}ython3 在 VAR 为空时变成「ython3」
+hztech_py() {
+  command python3 "$@"
 }
+if ! hztech_py -c "import sys" 2>/dev/null; then
+  echo "错误: 无法执行 Python（请检查 PATH 与 python3 安装）" >&2
+  exit 1
+fi
 
 # 一次读取 deploy JSON，供结尾展示 URL / 日志路径（避免硬编码 remote_path）
 # 须用 python3 -：若写成 python3 <<PY "$CFG"，bash 会把 CFG 当脚本文件执行，heredoc 不会生效。
-eval "$("$_HZTECH_PYTHON3" - "$DEPLOY_CONFIG" <<'PY'
+eval "$(hztech_py - "$DEPLOY_CONFIG" <<'PY'
 import json, shlex, sys
 
 path = sys.argv[1]
@@ -180,13 +182,13 @@ if [[ "${HZTECH_SKIP_BUILD:-0}" == "1" ]]; then
 else
   printf '\n'
   echo "=== 1/5 构建 Flutter 移动端 (release APK → apk/hztech-app-release.apk；iOS IPA 默认跳过) ==="
-  "$_HZTECH_PYTHON3" "$PROJECT_ROOT/baasapi/server_mgr.py" build
+  hztech_py "$PROJECT_ROOT/baasapi/server_mgr.py" build
   echo "  APK: $PROJECT_ROOT/apk/hztech-app-release.apk"
   echo "  IPA: 默认不构建；需要时 export HZTECH_SKIP_IOS_BUILD=0 后再运行（产物 ipa/）"
 
   printf '\n'
   echo "=== 2/5 构建 Flutter Web (release) ==="
-  if "$_HZTECH_PYTHON3" "$PROJECT_ROOT/baasapi/server_mgr.py" build-web; then
+  if hztech_py "$PROJECT_ROOT/baasapi/server_mgr.py" build-web; then
     echo "  Web: $PROJECT_ROOT/flutterapp/build/web/"
   else
     echo "  （Web 构建失败或跳过；远端 Web 静态可能 503，API 仍可用）" >&2
@@ -195,12 +197,12 @@ fi
 
 printf '\n'
 echo "=== 3/5 上传到 AWS（rsync，--no-start）==="
-"$_HZTECH_PYTHON3" "$PROJECT_ROOT/baasapi/server_mgr.py" deploy --no-start
+hztech_py "$PROJECT_ROOT/baasapi/server_mgr.py" deploy --no-start
 
 if [[ "$_run_db_sync" -eq 1 ]]; then
   printf '\n'
   echo "=== 4/5 同步远程数据库（用户迁移）==="
-  "$_HZTECH_PYTHON3" "$PROJECT_ROOT/baasapi/server_mgr.py" db-sync
+  hztech_py "$PROJECT_ROOT/baasapi/server_mgr.py" db-sync
 else
   printf '\n'
   echo "=== 4/5 跳过远程 DB（默认不迁移；需要时请传 --db 或 HZTECH_DB_SYNC=1）==="
@@ -209,7 +211,7 @@ unset _run_db_sync
 
 printf '\n'
 echo "=== 5/5 重启 AWS 后台服务 ==="
-"$_HZTECH_PYTHON3" "$PROJECT_ROOT/baasapi/server_mgr.py" restart
+hztech_py "$PROJECT_ROOT/baasapi/server_mgr.py" restart
 
 printf '\n'
 echo "=============================================="

@@ -7,16 +7,16 @@ import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
 import '../settings_screen.dart';
 import '../user_management_screen.dart';
-import 'web_auto_netting_test_screen.dart';
+import 'web_moneyflow_catchnet_screen.dart';
 import 'web_download_app_page.dart';
 import 'web_tradingbot_control_screen.dart';
 import 'web_dashboard_screen.dart';
 import 'web_home_screen.dart';
 import 'web_account_profit_screen.dart';
 import 'web_strategy_performance_screen.dart';
-import 'web_account_performance_screen.dart';
+import 'web_account_horseracing_screen.dart';
 import 'web_seasons_position_hub_screen.dart';
-import 'web_account_config_admin_screen.dart';
+import 'web_account_management_screen.dart';
 import 'web_service_status_screen.dart';
 import '../customer_account_setup_screen.dart';
 
@@ -107,7 +107,7 @@ class _WebMainShellState extends State<WebMainShell> {
           title: '绩效赛马',
           icon: Icons.table_chart_outlined,
           selectedIcon: Icons.table_chart,
-          page: WebAccountPerformanceScreen(
+          page: WebAccountHorseracingScreen(
             sharedBots: bots,
             embedInShell: true,
           ),
@@ -134,14 +134,14 @@ class _WebMainShellState extends State<WebMainShell> {
           title: '收网测试',
           icon: Icons.science_outlined,
           selectedIcon: Icons.science,
-          page: WebAutoNettingTestScreen(sharedBots: bots, embedInShell: true),
+          page: WebMoneyflowCatchnetScreen(sharedBots: bots, embedInShell: true),
         ),
       if (_role.canManageUsers)
         _NavItem(
           title: '账户管理',
           icon: Icons.account_balance_wallet_outlined,
           selectedIcon: Icons.account_balance_wallet,
-          page: const WebAccountConfigAdminScreen(embedInShell: true),
+          page: const WebAccountManagementScreen(embedInShell: true),
         ),
       if (_role.canManageUsers)
         _NavItem(
