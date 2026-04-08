@@ -10,7 +10,7 @@
 # 环境变量：
 #   HZTECH_SKIP_PIP_INSTALL=1   跳过本地 pip install -r baasapi/requirements.txt
 #   HZTECH_SKIP_MOBILE_BUILD=1  跳过 APK/IPA 构建
-#   HZTECH_SKIP_IOS_BUILD=1     保留兼容；本地移动端仅 build-debug（无 IPA）
+#   HZTECH_SKIP_IOS_BUILD       server_mgr 默认不编 iOS；本地仅 build-debug（无 IPA）
 #   HZTECH_SKIP_WEB_BUILD=1      跳过 flutter build web
 #   数据库迁移（init_db）：默认不执行；仅当以下任一成立时执行：
 #     · 命令行: --db / --db-sync / --init-db / -db
@@ -47,13 +47,15 @@ for _a in "$@"; do
     ;;
   esac
 done
-# set -u：空数组时 "${_argv[@]}" 在部分 bash（如 macOS 3.2）会报 unbound variable
+# set -u：空数组时 "${_argv[@]}" 在 bash 3.2（macOS 默认）会报 unbound variable
+set +u
 if [[ ${#_argv[@]} -gt 0 ]]; then
   set -- "${_argv[@]}"
 else
   set --
 fi
 unset _a _argv
+set -u
 
 _run_db_sync=0
 if [[ "$_DB_SYNC_FLAG" -eq 1 ]]; then
@@ -75,7 +77,7 @@ unset _DB_SYNC_FLAG _sk _ds
 
 _ssh_pg=$(printf '%s' "${HZTECH_SSH_INSTALL_PG_AWS_ALPHA:-}" | tr '[:upper:]' '[:lower:]')
 if [[ "$_ssh_pg" == "1" || "$_ssh_pg" == "true" || "$_ssh_pg" == "yes" ]]; then
-  echo ""
+  printf '\n'
   echo "=== （可选）远端 PostgreSQL（HZTECH_SSH_INSTALL_PG_AWS_ALPHA，SSH: ${HZTECH_SSH_PG_TARGET:-aws-alpha}）==="
   bash "$PROJECT_ROOT/baasapi/install_postgresql_remote.sh" "${HZTECH_SSH_PG_TARGET:-aws-alpha}"
 fi
@@ -85,6 +87,11 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo "错误: 需要 python3" >&2
   exit 1
 fi
+_HZTECH_PYTHON3="$(command -v python3)"
+[[ -n "$_HZTECH_PYTHON3" ]] || {
+  echo "错误: 无法解析 python3 路径" >&2
+  exit 1
+}
 
 # 默认开启 Web 静态进程，与「已构建 Web」流程一致；仅 API 时显式设为 0
 export HZTECH_LOCAL_API_PORT="${HZTECH_LOCAL_API_PORT:-${PORT:-9001}}"
@@ -123,11 +130,11 @@ echo "=============================================="
 
 case "${HZTECH_SKIP_PIP_INSTALL:-}" in
 1 | true | yes)
-  echo ""
+  printf '\n'
   echo "=== 1/5 跳过 Python 依赖（HZTECH_SKIP_PIP_INSTALL）==="
   ;;
 *)
-  echo ""
+  printf '\n'
   echo "=== 1/5 安装 Python 依赖（baasapi/requirements.txt）==="
   "$PROJECT_ROOT/baasapi/install_python_deps.sh"
   ;;
@@ -135,25 +142,25 @@ esac
 
 _skmb=$(printf '%s' "${HZTECH_SKIP_MOBILE_BUILD:-}" | tr '[:upper:]' '[:lower:]')
 if [[ "$_skmb" == "1" || "$_skmb" == "true" || "$_skmb" == "yes" ]]; then
-  echo ""
+  printf '\n'
   echo "=== 2/5 跳过 Flutter 移动端（HZTECH_SKIP_MOBILE_BUILD）==="
 else
-  echo ""
+  printf '\n'
   echo "=== 2/5 构建 Flutter 移动端（debug APK → apk/hztech-app-debug.apk）==="
-  python3 "$PROJECT_ROOT/baasapi/server_mgr.py" build-debug
+  "$_HZTECH_PYTHON3" "$PROJECT_ROOT/baasapi/server_mgr.py" build-debug
   echo "  APK: $PROJECT_ROOT/apk/hztech-app-debug.apk"
 fi
 
 if [[ "${HZTECH_SKIP_WEB_BUILD:-0}" == "1" ]]; then
-  echo ""
+  printf '\n'
   echo "=== 3/5 跳过 Flutter Web（HZTECH_SKIP_WEB_BUILD=1）==="
   if [[ "$HZTECH_LOCAL_WEB_STATIC" == "1" ]] && [[ ! -f "$PROJECT_ROOT/flutterapp/build/web/index.html" ]]; then
     echo "  警告: 未找到 flutterapp/build/web/index.html，Web 静态可能 503。请构建 Web 或关闭 HZTECH_LOCAL_WEB_STATIC。" >&2
   fi
 else
-  echo ""
+  printf '\n'
   echo "=== 3/5 构建 Flutter Web (release) ==="
-  if python3 "$PROJECT_ROOT/baasapi/server_mgr.py" build-web; then
+  if "$_HZTECH_PYTHON3" "$PROJECT_ROOT/baasapi/server_mgr.py" build-web; then
     echo "  Web: $PROJECT_ROOT/flutterapp/build/web/"
   else
     echo "  （Web 构建失败；若 HZTECH_LOCAL_WEB_STATIC=1 则静态站可能不可用）" >&2
@@ -161,17 +168,17 @@ else
 fi
 
 if [[ "$_run_db_sync" -eq 1 ]]; then
-  echo ""
+  printf '\n'
   echo "=== 4/5 同步本地数据库（用户迁移）==="
-  python3 -c "from baasapi.db import init_db; init_db()"
+  "$_HZTECH_PYTHON3" -c "from baasapi.db import init_db; init_db()"
   echo "  数据库已就绪"
 else
-  echo ""
+  printf '\n'
   echo "=== 4/5 跳过本地 DB（默认不迁移；需要时请传 --db 或 HZTECH_DB_SYNC=1）==="
 fi
 unset _run_db_sync
 
-echo ""
+printf '\n'
 echo "=== 5/5 启动服务 (端口与访问方式见 baasapi/run_local.sh 输出) ==="
 export FLASK_DEBUG=1
 export LOG_LEVEL=DEBUG

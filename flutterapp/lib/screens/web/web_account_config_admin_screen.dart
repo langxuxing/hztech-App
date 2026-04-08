@@ -755,10 +755,7 @@ class _WebAccountConfigAdminScreenState
     );
   }
 
-  Future<void> _test(
-    AccountConfigRow row, {
-    bool autoConfigure = false,
-  }) async {
+  Future<void> _test(AccountConfigRow row, {bool autoConfigure = false}) async {
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
@@ -910,7 +907,7 @@ class _WebAccountConfigAdminScreenState
                                           ),
                                           const SizedBox(height: 10),
                                           Text(
-                                            '账户',
+                                            '账户信息',
                                             style:
                                                 AppFinanceStyle.labelTextStyle(
                                                   context,
@@ -920,12 +917,7 @@ class _WebAccountConfigAdminScreenState
                                                   letterSpacing: 0.3,
                                                 ),
                                           ),
-                                          const SizedBox(height: 4),
-                                          _infoLine(
-                                            context,
-                                            'account_id',
-                                            a.accountId,
-                                          ),
+
                                           _infoLine(context, '标的', a.symbol),
                                           _infoLine(
                                             context,
@@ -949,11 +941,7 @@ class _WebAccountConfigAdminScreenState
                                                 ? '${a.initialCapital}'
                                                 : null,
                                           ),
-                                          _infoLine(
-                                            context,
-                                            '交易所',
-                                            a.exchangeAccount,
-                                          ),
+
                                           if (testRec != null &&
                                               testRec.response['success'] ==
                                                   true) ...[
@@ -971,29 +959,37 @@ class _WebAccountConfigAdminScreenState
                                             ),
                                             const SizedBox(height: 4),
                                             Row(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment
+                                                      .spaceBetween,
                                               children: () {
                                                 final bal = _asStringKeyMap(
-                                                  testRec.response['balance_summary'],
+                                                  testRec
+                                                      .response['balance_summary'],
                                                 );
                                                 final d = _balanceDisplay(bal);
                                                 final valStyle = TextStyle(
-                                                  color: AppFinanceStyle.valueColor,
+                                                  color: AppFinanceStyle
+                                                      .valueColor,
                                                   fontSize: 12,
                                                 );
                                                 return [
                                                   Text.rich(
                                                     TextSpan(
-                                                      style: AppFinanceStyle.labelTextStyle(context).copyWith(
-                                                        fontSize: 12,
-                                                      ),
+                                                      style:
+                                                          AppFinanceStyle.labelTextStyle(
+                                                            context,
+                                                          ).copyWith(
+                                                            fontSize: 12,
+                                                          ),
                                                       children: [
                                                         const TextSpan(
                                                           text: '可用：',
                                                         ),
                                                         TextSpan(
-                                                          text: '${d.avail} USDT',
+                                                          text: '${d.avail}',
                                                           style: valStyle,
                                                         ),
                                                       ],
@@ -1001,15 +997,18 @@ class _WebAccountConfigAdminScreenState
                                                   ),
                                                   Text.rich(
                                                     TextSpan(
-                                                      style: AppFinanceStyle.labelTextStyle(context).copyWith(
-                                                        fontSize: 12,
-                                                      ),
+                                                      style:
+                                                          AppFinanceStyle.labelTextStyle(
+                                                            context,
+                                                          ).copyWith(
+                                                            fontSize: 12,
+                                                          ),
                                                       children: [
                                                         const TextSpan(
                                                           text: '总计：',
                                                         ),
                                                         TextSpan(
-                                                          text: '${d.total} USDT',
+                                                          text: '${d.total}',
                                                           style: valStyle,
                                                         ),
                                                       ],
@@ -1017,15 +1016,18 @@ class _WebAccountConfigAdminScreenState
                                                   ),
                                                   Text.rich(
                                                     TextSpan(
-                                                      style: AppFinanceStyle.labelTextStyle(context).copyWith(
-                                                        fontSize: 12,
-                                                      ),
+                                                      style:
+                                                          AppFinanceStyle.labelTextStyle(
+                                                            context,
+                                                          ).copyWith(
+                                                            fontSize: 12,
+                                                          ),
                                                       children: [
                                                         const TextSpan(
                                                           text: '锁定：',
                                                         ),
                                                         TextSpan(
-                                                          text: '${d.locked} USDT',
+                                                          text: '${d.locked}',
                                                           style: valStyle,
                                                         ),
                                                       ],
@@ -1038,7 +1040,7 @@ class _WebAccountConfigAdminScreenState
                                         ],
                                       ),
                                     ),
-                                    const SizedBox(width: 12),
+                                    const SizedBox(width: 18),
                                     Expanded(
                                       flex: 3,
                                       child: Column(
@@ -1056,7 +1058,7 @@ class _WebAccountConfigAdminScreenState
                                                     fontWeight: FontWeight.w600,
                                                   ),
                                             ),
-                                            const SizedBox(height: 8),
+                                            const SizedBox(height: 18),
                                             _verificationChecklist(
                                               context,
                                               testRec.response,
@@ -1092,12 +1094,12 @@ class _WebAccountConfigAdminScreenState
                                   ),
                                   TextButton(
                                     onPressed: () => _test(a),
-                                    child: const Text('测试账户'),
+                                    child: const Text('账户测试'),
                                   ),
                                   TextButton(
                                     onPressed: () =>
                                         _test(a, autoConfigure: true),
-                                    child: const Text('测试并自动配置'),
+                                    child: const Text('自动配置'),
                                   ),
                                   TextButton(
                                     onPressed: () => _delete(a),

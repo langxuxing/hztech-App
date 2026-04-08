@@ -30,6 +30,12 @@ IPA_DIR = PROJECT_ROOT / "ipa"
 DEFAULT_IPA_NAME = "禾正量化-release.ipa"
 
 
+def _ios_build_requested() -> bool:
+    """是否执行 iOS IPA 构建。默认不编译；仅当 HZTECH_SKIP_IOS_BUILD 为 0/false/no 时编译。"""
+    v = os.environ.get("HZTECH_SKIP_IOS_BUILD", "1").strip().lower()
+    return v in ("0", "false", "no")
+
+
 def load_config():
     with open(CONFIG_PATH, encoding="utf-8") as f:
         return json.load(f)
@@ -117,6 +123,12 @@ def ssh_cmd(remote_cmd=None, cfg=None):
 def run_ssh(remote_cmd, check=True, cfg=None):
     """在 AWS 上执行单条命令。check=False 时忽略非零退出码（如 pkill 无匹配）。"""
     subprocess.run(ssh_cmd(remote_cmd, cfg=cfg), check=check, cwd=PROJECT_ROOT)
+
+
+def _flutter_host_remove_sqlite(cfg: dict) -> None:
+    """双机部署时 Flutter 静态机不应存在 baasapi/sqlite；同步或 pip 后若存在则删除（check=False）。"""
+    rp = cfg["remote_path"]
+    run_ssh("rm -rf %s" % shlex.quote(rp + "/baasapi/sqlite"), cfg=cfg, check=False)
 
 
 def _rsync_deploy_exclude_patterns() -> list[str]:
@@ -285,8 +297,7 @@ def _rsync_flutter_host_web_apk_only(cfg: dict) -> None:
         if not src.is_file():
             raise FileNotFoundError("缺少部署文件: %s" % src)
         _run_rsync(["rsync", "-avz", "-e", ssh_e, str(src), remote_base + "/baasapi/"])
-    # Flutter 主机不承载数据库；清除历史上整包同步留下的 baasapi/sqlite/
-    run_ssh("rm -rf %s" % shlex.quote(rp + "/baasapi/sqlite"), cfg=cfg)
+    _flutter_host_remove_sqlite(cfg)
 
 
 def rsync_sync(exclude=None):
@@ -492,15 +503,13 @@ def build_ios_flutter() -> bool:
     """macOS + Xcode：flutter build ipa --release，并复制到项目根 ipa/。
 
     - 非 macOS：跳过（打印说明），返回 False。
-    - 设置 HZTECH_SKIP_IOS_BUILD=1 时跳过。
-    - 构建失败（签名等）时返回 False。build 入口在 macOS 且未设 HZTECH_SKIP_IOS_BUILD 时与 APK 一并要求成功。
+    - 默认不编译 iOS；需编译请设置 HZTECH_SKIP_IOS_BUILD=0（或 false/no）。
+    - 构建失败（签名等）时返回 False。在请求编译 iOS 时失败会使 run_build_mobile 返回 1。
     """
-    if os.environ.get("HZTECH_SKIP_IOS_BUILD", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    ):
-        print("已跳过 iOS 构建（HZTECH_SKIP_IOS_BUILD）。")
+    if not _ios_build_requested():
+        print(
+            "已跳过 iOS 构建（默认；需要 IPA 请设置 HZTECH_SKIP_IOS_BUILD=0）。"
+        )
         return False
     if sys.platform != "darwin":
         print("跳过 iOS 构建（非 macOS 无法执行 flutter build ipa；Android APK 仍正常构建）。")
@@ -524,7 +533,7 @@ def build_ios_flutter() -> bool:
     ):
         print(
             "iOS IPA 构建失败（Xcode 签名、证书或 Pods 等）。"
-            "可 export HZTECH_SKIP_IOS_BUILD=1 仅打 Android；或在本机修复签名后重试。"
+            "若不需要 IPA，请 unset HZTECH_SKIP_IOS_BUILD 或设为 1；或在本机修复签名后重试。"
         )
         return False
     if not FLUTTER_IPA_DIR.is_dir():
@@ -571,9 +580,8 @@ def build_web_flutter():
 
 
 def run_build_mobile() -> int:
-    """构建 Android release APK +（macOS 默认）iOS release IPA。成功返回 0，失败返回 1。
+    """构建 Android release APK；iOS IPA 默认不构建（需 HZTECH_SKIP_IOS_BUILD=0 才打）。成功返回 0，失败返回 1。
 
-    仅打 Android：export HZTECH_SKIP_IOS_BUILD=1
     仅 Web（跳过 APK/iOS）：export HZTECH_SKIP_MOBILE_BUILD=1
     非 macOS：只校验 APK。
     """
@@ -588,11 +596,7 @@ def run_build_mobile() -> int:
         )
         return 0
     apk_ok = build_apk()
-    ios_skipped = os.environ.get("HZTECH_SKIP_IOS_BUILD", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    )
+    ios_skipped = not _ios_build_requested()
     ios_ok = build_ios_flutter()
     if not apk_ok:
         return 1
@@ -735,6 +739,8 @@ def remote_restart_web():
         cfg=c,
     )
     run_ssh(_remote_install_requirements_sh(remote_path), cfg=c)
+    # pip 不应创建 DB 目录；与「仅 Web 机无库」一致，再清一次以防历史/误操作
+    _flutter_host_remove_sqlite(c)
     run_ssh(
         f"cd {remote_path} && HZTECH_WEB_ROOT={web_root} PORT={web_port} "
         f"nohup python3 baasapi/serve_web_static.py >> web_static.log 2>&1 & sleep 1",
@@ -793,6 +799,7 @@ def remote_pip_install_only():
         run_ssh(_remote_install_requirements_sh(c_api["remote_path"]), cfg=c_api)
         print("pip install on FlutterApp host %s ..." % c_web["host"])
         run_ssh(_remote_install_requirements_sh(c_web["remote_path"]), cfg=c_web)
+        _flutter_host_remove_sqlite(c_web)
     else:
         rp = get_remote_path()
         print("pip install on %s ..." % target_config("flutterapp")["host"])

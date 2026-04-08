@@ -11,7 +11,8 @@ import '../../widgets/account_detail_loading_overlay.dart';
 import '../../widgets/water_background.dart';
 
 /// Web：Account_List 全账户对比；持仓/成本/强平价来自 [account_open_positions_snapshots]。
-/// 现价类、成本与强平价列数值 ×1e9 取整；强平距离 = 多侧(加权现价−强平价)、空侧(强平价−加权现价)。
+/// 成本与强平价列 ×1e9 取整；预估强平价为快照中交易所字段（全仓同价，不二次计算）；距强平价 = 预估强平价 − 当期加权价。
+/// 多/空分项浮亏来自 long_upl/short_upl；总体浮亏为 total_upl，放在「资产」。
 /// 指标按「多仓 / 空仓 / 多空 / 强平价 / 资产 / 月度」分块着色，且各块可折叠。
 class WebAccountPerformanceScreen extends StatefulWidget {
   const WebAccountPerformanceScreen({
@@ -476,7 +477,8 @@ class _MonthToolbar extends StatelessWidget {
 }
 
 /// 账户级汇总：取 [rows] 中最新一批 snapshot_at 的各行（按合约），
-/// 成本与强平价为张数加权平均；距强平价为逐合约 (现价−强平价)/(强平价−现价) 再按张数加权，避免「均价相减」与缺 liq 合约混算不一致。
+/// 预估强平价：取快照中交易所返回的 `long_liq_px` / `short_liq_px`（全仓同一价位，任取首个非零即可，不做加权）。
+/// 当期价格：各合约 (多+空) 张数加权 last/mark。距强平价 = 预估强平价 − 当期价格。
 _PosAgg _aggregateOpenPosSnapshots(List<OpenPositionsSnapshotRow> rows) {
   if (rows.isEmpty) {
     return _PosAgg(
@@ -484,10 +486,11 @@ _PosAgg _aggregateOpenPosSnapshots(List<OpenPositionsSnapshotRow> rows) {
       shortQty: 0,
       longAvgPx: 0,
       shortAvgPx: 0,
-      longLiqPx: 0,
-      shortLiqPx: 0,
-      longDistToLiqPx: double.nan,
-      shortDistToLiqPx: double.nan,
+      longUpl: 0,
+      shortUpl: 0,
+      unifiedLiqPx: 0,
+      unifiedRefPx: double.nan,
+      unifiedLiqDist: double.nan,
       totalUpl: 0,
       refMarkPx: null,
     );
@@ -498,16 +501,10 @@ _PosAgg _aggregateOpenPosSnapshots(List<OpenPositionsSnapshotRow> rows) {
   var sq = 0.0;
   var lNotional = 0.0;
   var sNotional = 0.0;
-  var lLiqN = 0.0;
-  var lLiqW = 0.0;
-  var sLiqN = 0.0;
-  var sLiqW = 0.0;
-  /// 多：逐合约 Σ(张×(现价−强平价)) / Σ张（仅含该合约多头且 liq>0 的腿）
-  var lDistN = 0.0;
-  var lDistW = 0.0;
-  /// 空：逐合约 Σ(张×(强平价−现价)) / Σ张（仅含空头且 liq>0）
-  var sDistN = 0.0;
-  var sDistW = 0.0;
+  var longUplSum = 0.0;
+  var shortUplSum = 0.0;
+  var refN = 0.0;
+  var refW = 0.0;
   var uplSum = 0.0;
   double? refPx;
   for (final r in batch) {
@@ -515,22 +512,13 @@ _PosAgg _aggregateOpenPosSnapshots(List<OpenPositionsSnapshotRow> rows) {
     sq += r.shortPosSize;
     lNotional += r.longPosSize * r.longAvgPx;
     sNotional += r.shortPosSize * r.shortAvgPx;
+    longUplSum += r.longUpl;
+    shortUplSum += r.shortUpl;
     final px = r.lastPx > 0 ? r.lastPx : r.markPx;
-    if (r.longPosSize > 1e-12 && r.longLiqPx > 0) {
-      lLiqN += r.longPosSize * r.longLiqPx;
-      lLiqW += r.longPosSize;
-    }
-    if (r.shortPosSize > 1e-12 && r.shortLiqPx > 0) {
-      sLiqN += r.shortPosSize * r.shortLiqPx;
-      sLiqW += r.shortPosSize;
-    }
-    if (r.longPosSize > 1e-12 && px > 0 && r.longLiqPx > 0) {
-      lDistN += r.longPosSize * (px - r.longLiqPx);
-      lDistW += r.longPosSize;
-    }
-    if (r.shortPosSize > 1e-12 && px > 0 && r.shortLiqPx > 0) {
-      sDistN += r.shortPosSize * (r.shortLiqPx - px);
-      sDistW += r.shortPosSize;
+    final szRow = r.longPosSize + r.shortPosSize;
+    if (szRow > 1e-12 && px > 0) {
+      refN += szRow * px;
+      refW += szRow;
     }
     uplSum += r.totalUpl;
     if (px > 0) {
@@ -538,15 +526,33 @@ _PosAgg _aggregateOpenPosSnapshots(List<OpenPositionsSnapshotRow> rows) {
       refPx = prev == null ? px : math.max(prev, px);
     }
   }
+  var exchangeLiqPx = 0.0;
+  for (final r in batch) {
+    if (r.longLiqPx > 0) {
+      exchangeLiqPx = r.longLiqPx;
+      break;
+    }
+    if (r.shortLiqPx > 0) {
+      exchangeLiqPx = r.shortLiqPx;
+      break;
+    }
+  }
+  final unifiedLiq = exchangeLiqPx;
+  final unifiedRef = refW > 1e-12 ? refN / refW : double.nan;
+  double unifiedDist = double.nan;
+  if (unifiedLiq > 0 && unifiedRef.isFinite) {
+    unifiedDist = unifiedLiq - unifiedRef;
+  }
   return _PosAgg(
     longQty: lq,
     shortQty: sq,
     longAvgPx: lq > 1e-12 ? lNotional / lq : 0,
     shortAvgPx: sq > 1e-12 ? sNotional / sq : 0,
-    longLiqPx: lLiqW > 1e-12 ? lLiqN / lLiqW : 0,
-    shortLiqPx: sLiqW > 1e-12 ? sLiqN / sLiqW : 0,
-    longDistToLiqPx: lDistW > 1e-12 ? lDistN / lDistW : double.nan,
-    shortDistToLiqPx: sDistW > 1e-12 ? sDistN / sDistW : double.nan,
+    longUpl: longUplSum,
+    shortUpl: shortUplSum,
+    unifiedLiqPx: unifiedLiq,
+    unifiedRefPx: unifiedRef,
+    unifiedLiqDist: unifiedDist,
     totalUpl: uplSum,
     refMarkPx: refPx,
   );
@@ -558,10 +564,11 @@ class _PosAgg {
     required this.shortQty,
     required this.longAvgPx,
     required this.shortAvgPx,
-    required this.longLiqPx,
-    required this.shortLiqPx,
-    required this.longDistToLiqPx,
-    required this.shortDistToLiqPx,
+    required this.longUpl,
+    required this.shortUpl,
+    required this.unifiedLiqPx,
+    required this.unifiedRefPx,
+    required this.unifiedLiqDist,
     required this.totalUpl,
     this.refMarkPx,
   });
@@ -570,12 +577,14 @@ class _PosAgg {
   final double shortQty;
   final double longAvgPx;
   final double shortAvgPx;
-  final double longLiqPx;
-  final double shortLiqPx;
-  /// 逐合约加权：多头侧 (现价−强平价) 的张数加权平均（仅含返回了 liq 的合约）
-  final double longDistToLiqPx;
-  /// 逐合约加权：空头侧 (强平价−现价) 的张数加权平均
-  final double shortDistToLiqPx;
+  final double longUpl;
+  final double shortUpl;
+  /// 交易所返回的预估强平价（快照列 long_liq_px / short_liq_px，全仓一致）
+  final double unifiedLiqPx;
+  /// 各合约 (多+空) 张数加权的现价
+  final double unifiedRefPx;
+  /// 预估强平价 − 当期价格
+  final double unifiedLiqDist;
   final double totalUpl;
   final double? refMarkPx;
 
@@ -654,6 +663,7 @@ typedef _MetricRowSpec = ({
   bool bold,
   Color labelFill,
   Color dataFill,
+
   /// 非空时用该样式替代数值默认 baseStyle（如强平距离红/绿）
   TextStyle? Function(_ColumnData c)? valueStyle,
 });
@@ -735,8 +745,16 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
       ),
       (
         label: '多仓-成本',
+        value: (c) => c.agg == null ? '—' : c._fmtCostLine1e9(c.agg!.longAvgPx),
+        bold: false,
+        labelFill: _longTintL,
+        dataFill: _longTintD,
+        valueStyle: null,
+      ),
+      (
+        label: '多仓-浮亏',
         value: (c) =>
-            c.agg == null ? '—' : c._fmtCostLine1e9(c.agg!.longAvgPx),
+            c.agg == null ? '—' : formatUiSignedUsdt2(c.agg!.longUpl),
         bold: false,
         labelFill: _longTintL,
         dataFill: _longTintD,
@@ -762,6 +780,15 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
         dataFill: _shortTintD,
         valueStyle: null,
       ),
+      (
+        label: '空仓-浮亏',
+        value: (c) =>
+            c.agg == null ? '—' : formatUiSignedUsdt2(c.agg!.shortUpl),
+        bold: false,
+        labelFill: _shortTintL,
+        dataFill: _shortTintD,
+        valueStyle: null,
+      ),
     ];
 
     List<_MetricRowSpec> rowsNet() => [
@@ -781,58 +808,27 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
         dataFill: _netTintD,
         valueStyle: null,
       ),
-      (
-        label: '浮动盈亏',
-        value: (c) => c._floatRow,
-        bold: false,
-        labelFill: _netTintL,
-        dataFill: _netTintD,
-        valueStyle: null,
-      ),
     ];
 
     List<_MetricRowSpec> rowsLiq() => [
       (
-        label: '多-预估强平价',
+        label: '预估强平价',
         value: (c) =>
-            c.agg == null ? '—' : c._fmtCostLine1e9(c.agg!.longLiqPx),
+            c.agg == null ? '—' : c._fmtCostLine1e9(c.agg!.unifiedLiqPx),
         bold: false,
         labelFill: _liqTintL,
         dataFill: _liqTintD,
         valueStyle: null,
       ),
       (
-        label: '空-预估强平价',
+        label: '距强平价',
         value: (c) =>
-            c.agg == null ? '—' : c._fmtCostLine1e9(c.agg!.shortLiqPx),
-        bold: false,
-        labelFill: _liqTintL,
-        dataFill: _liqTintD,
-        valueStyle: null,
-      ),
-      (
-        label: '多-距强平价',
-        value: (c) => c.agg == null
-            ? '—'
-            : c._fmtSignedDist1e9(c.agg!.longDistToLiqPx),
+            c.agg == null ? '—' : c._fmtSignedDist1e9(c.agg!.unifiedLiqDist),
         bold: false,
         labelFill: _liqTintL,
         dataFill: _liqTintD,
         valueStyle: (c) {
-          final v = c.agg?.longDistToLiqPx ?? double.nan;
-          return c._valueStyleForDist(baseStyle, v);
-        },
-      ),
-      (
-        label: '空-距强平价',
-        value: (c) => c.agg == null
-            ? '—'
-            : c._fmtSignedDist1e9(c.agg!.shortDistToLiqPx),
-        bold: false,
-        labelFill: _liqTintL,
-        dataFill: _liqTintD,
-        valueStyle: (c) {
-          final v = c.agg?.shortDistToLiqPx ?? double.nan;
+          final v = c.agg?.unifiedLiqDist ?? double.nan;
           return c._valueStyleForDist(baseStyle, v);
         },
       ),
@@ -841,9 +837,8 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
     List<_MetricRowSpec> rowsAccount() => [
       (
         label: '资产余额',
-        value: (c) => formatUiIntegerOpt(
-          c.profit?.cashBalance ?? c.profit?.balanceUsdt,
-        ),
+        value: (c) =>
+            formatUiIntegerOpt(c.profit?.cashBalance ?? c.profit?.balanceUsdt),
         bold: false,
         labelFill: _accTintL,
         dataFill: _accTintD,
@@ -852,6 +847,14 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
       (
         label: '权益金额',
         value: (c) => formatUiIntegerOpt(c.profit?.equityUsdt),
+        bold: false,
+        labelFill: _accTintL,
+        dataFill: _accTintD,
+        valueStyle: null,
+      ),
+      (
+        label: '总体浮亏',
+        value: (c) => c._floatRow,
         bold: false,
         labelFill: _accTintL,
         dataFill: _accTintD,
@@ -889,16 +892,20 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
     final sections = <(_PerfSection, String, List<_MetricRowSpec>)>[
       (_PerfSection.longSide, '多仓', rowsLong()),
       (_PerfSection.shortSide, '空仓', rowsShort()),
-      (_PerfSection.net, '多空 / 盈亏', rowsNet()),
-      (_PerfSection.liq, '强平价与距离', rowsLiq()),
+      (_PerfSection.net, '多+空', rowsNet()),
+      (_PerfSection.liq, '强平价', rowsLiq()),
       (_PerfSection.account, '资产', rowsAccount()),
-      (_PerfSection.month, '$month月 成交与收益', rowsMonth()),
+      (_PerfSection.month, '策略效能', rowsMonth()),
     ];
 
     Widget gridAtWidth(double tableWidth) {
       final dataBlockWidth = math.max(tableWidth - _labelW, n * _minDataColW);
 
-      List<Widget> sectionBlock(_PerfSection key, String title, List<_MetricRowSpec> metrics) {
+      List<Widget> sectionBlock(
+        _PerfSection key,
+        String title,
+        List<_MetricRowSpec> metrics,
+      ) {
         final expanded = _open[key] ?? true;
         return [
           _sectionHeaderRow(
@@ -935,8 +942,9 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
                     t,
                     textAlign: TextAlign.center,
                     style: spec.bold
-                        ? (vs ?? baseStyle)
-                              ?.copyWith(fontWeight: FontWeight.w800)
+                        ? (vs ?? baseStyle)?.copyWith(
+                            fontWeight: FontWeight.w800,
+                          )
                         : (vs ?? baseStyle),
                   );
                 },
@@ -1106,9 +1114,7 @@ class _ComparisonGridState extends State<_ComparisonGrid> {
                     child: Row(
                       children: [
                         Icon(
-                          expanded
-                              ? Icons.expand_more
-                              : Icons.chevron_right,
+                          expanded ? Icons.expand_more : Icons.chevron_right,
                           size: 22,
                           color: AppFinanceStyle.valueColor,
                         ),

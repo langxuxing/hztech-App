@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../api/client.dart';
 import '../../constants/app_download.dart';
 import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
@@ -16,12 +17,34 @@ class WebDownloadAppPage extends StatefulWidget {
 class _WebDownloadAppPageState extends State<WebDownloadAppPage> {
   final _prefs = SecurePrefs();
   String? _baseUrl;
+  /// 与 GET /api/app-version 的 android.apk_filename 一致（本地 debug / 线上 release 由后端决定）
+  String _apkFileName = kDefaultApkFileName;
+
+  static String _normalizeBackendBase(String raw) {
+    final t = raw.trim();
+    if (t.isEmpty) return '';
+    return t.startsWith('http') ? t : 'http://$t';
+  }
 
   @override
   void initState() {
     super.initState();
-    _prefs.backendBaseUrl.then((u) {
-      if (mounted) setState(() => _baseUrl = u.trim().isEmpty ? null : u.trim());
+    _prefs.backendBaseUrl.then((u) async {
+      final trimmed = u.trim();
+      if (!mounted) return;
+      setState(() => _baseUrl = trimmed.isEmpty ? null : trimmed);
+      if (trimmed.isEmpty) return;
+      final base = _normalizeBackendBase(trimmed);
+      try {
+        final cfg = await ApiClient(base).getAppVersionConfig();
+        if (!mounted || cfg == null || !cfg.success) return;
+        final name = cfg.android.apkFilename?.trim();
+        if (name != null && name.isNotEmpty) {
+          setState(() => _apkFileName = name);
+        }
+      } catch (_) {
+        // 网络或旧后端：沿用 kDefaultApkFileName
+      }
     });
   }
 
@@ -30,7 +53,7 @@ class _WebDownloadAppPageState extends State<WebDownloadAppPage> {
     if (raw == null || raw.isEmpty) return null;
     final u = raw.startsWith('http') ? raw : 'http://$raw';
     final base = u.endsWith('/') ? u : '$u/';
-    final path = 'download/apk/${Uri.encodeComponent(kDefaultApkFileName)}';
+    final path = 'download/apk/${Uri.encodeComponent(_apkFileName)}';
     return Uri.parse('$base$path');
   }
 

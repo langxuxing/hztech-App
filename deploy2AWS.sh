@@ -9,7 +9,8 @@
 # 单机：deploy-aws.json 仅顶层 host + remote_path、无 flutterapp/baasapi 分段子段时，server_mgr 单主机双进程。
 #
 # Python 依赖（与 baasapi/requirements.txt）：
-#   · rsync 会同步 baasapi/（含 requirements.txt）；不含 pytest（见该文件注释）。
+#   · 双机：BaasAPI 机整包 rsync；Flutter/Web 机仅 apk + flutterapp/build/web + serve_web_static/requirements（见 server_mgr）。
+#   · 单机：整包 rsync（含 baasapi/）。
 #   · 远端安装：`server_mgr.py restart`（本脚本第 5 步）在每台目标机上执行
 #     cd remote_path && pip/pip3 install -r baasapi/requirements.txt --user（逻辑同 baasapi/install_on_aws.sh）。
 #   · 仅更新依赖不重拉起进程：python3 baasapi/server_mgr.py pip-remote
@@ -26,9 +27,9 @@
 #     · HZTECH_SKIP_DB_SYNC=0（显式要求同步，兼容旧脚本）
 #   HZTECH_SKIP_DB_SYNC=1  强制跳过（若同时传 --db，则以 --db 为准）
 #   HZTECH_POST_DEPLOY_VERIFY=1  部署结束后 curl 探测 BaasAPI /api/health 与 FlutterApp /
-#   HZTECH_SKIP_IOS_BUILD  仅移动端构建时传给 server_mgr（默认 1，跳过 iOS 构建）
+#   HZTECH_SKIP_IOS_BUILD  server_mgr 默认不编 iOS；需 IPA 时设为 0（或 false/no）
 #
-# 依赖：SSH 密钥、Flutter/Android；IPA 需 macOS + Xcode
+# 依赖：SSH 密钥、Flutter/Android；IPA 需 macOS + Xcode，且显式 HZTECH_SKIP_IOS_BUILD=0
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -48,13 +49,15 @@ for _a in "$@"; do
     ;;
   esac
 done
-# set -u：空数组时 "${_argv[@]}" 在部分 bash（如 macOS 3.2）会报 unbound variable
+# set -u：空数组时 "${_argv[@]}" 在 bash 3.2（macOS 默认）会报 unbound variable
+set +u
 if [[ ${#_argv[@]} -gt 0 ]]; then
   set -- "${_argv[@]}"
 else
   set --
 fi
 unset _a _argv
+set -u
 
 _run_db_sync=0
 if [[ "$_DB_SYNC_FLAG" -eq 1 ]]; then
@@ -84,10 +87,16 @@ if ! command -v python3 >/dev/null 2>&1; then
   echo "错误: 需要 python3" >&2
   exit 1
 fi
+# 勿用 PY3：避免与环境中误设的 PY3 冲突；须为可执行绝对/相对路径
+_HZTECH_PYTHON3="$(command -v python3)"
+[[ -n "$_HZTECH_PYTHON3" ]] || {
+  echo "错误: 无法解析 python3 路径" >&2
+  exit 1
+}
 
 # 一次读取 deploy JSON，供结尾展示 URL / 日志路径（避免硬编码 remote_path）
 # 须用 python3 -：若写成 python3 <<PY "$CFG"，bash 会把 CFG 当脚本文件执行，heredoc 不会生效。
-eval "$(python3 - "$DEPLOY_CONFIG" <<'PY'
+eval "$("$_HZTECH_PYTHON3" - "$DEPLOY_CONFIG" <<'PY'
 import json, shlex, sys
 
 path = sys.argv[1]
@@ -166,43 +175,43 @@ echo "    Release 构建默认: ${HZTECH_API_BASE_URL}"
 echo "=============================================="
 
 if [[ "${HZTECH_SKIP_BUILD:-0}" == "1" ]]; then
-  echo ""
+  printf '\n'
   echo "=== （已跳过构建 HZTECH_SKIP_BUILD=1）==="
 else
-  echo ""
-  echo "=== 1/5 构建 Flutter 移动端 (release APK → apk/hztech-app-release.apk；macOS 上 IPA) ==="
-  python3 "$PROJECT_ROOT/baasapi/server_mgr.py" build
+  printf '\n'
+  echo "=== 1/5 构建 Flutter 移动端 (release APK → apk/hztech-app-release.apk；iOS IPA 默认跳过) ==="
+  "$_HZTECH_PYTHON3" "$PROJECT_ROOT/baasapi/server_mgr.py" build
   echo "  APK: $PROJECT_ROOT/apk/hztech-app-release.apk"
-  echo "  IPA: $PROJECT_ROOT/ipa/"
+  echo "  IPA: 默认不构建；需要时 export HZTECH_SKIP_IOS_BUILD=0 后再运行（产物 ipa/）"
 
-  echo ""
+  printf '\n'
   echo "=== 2/5 构建 Flutter Web (release) ==="
-  if python3 "$PROJECT_ROOT/baasapi/server_mgr.py" build-web; then
+  if "$_HZTECH_PYTHON3" "$PROJECT_ROOT/baasapi/server_mgr.py" build-web; then
     echo "  Web: $PROJECT_ROOT/flutterapp/build/web/"
   else
     echo "  （Web 构建失败或跳过；远端 Web 静态可能 503，API 仍可用）" >&2
   fi
 fi
 
-echo ""
+printf '\n'
 echo "=== 3/5 上传到 AWS（rsync，--no-start）==="
-python3 "$PROJECT_ROOT/baasapi/server_mgr.py" deploy --no-start
+"$_HZTECH_PYTHON3" "$PROJECT_ROOT/baasapi/server_mgr.py" deploy --no-start
 
 if [[ "$_run_db_sync" -eq 1 ]]; then
-  echo ""
+  printf '\n'
   echo "=== 4/5 同步远程数据库（用户迁移）==="
-  python3 "$PROJECT_ROOT/baasapi/server_mgr.py" db-sync
+  "$_HZTECH_PYTHON3" "$PROJECT_ROOT/baasapi/server_mgr.py" db-sync
 else
-  echo ""
+  printf '\n'
   echo "=== 4/5 跳过远程 DB（默认不迁移；需要时请传 --db 或 HZTECH_DB_SYNC=1）==="
 fi
 unset _run_db_sync
 
-echo ""
+printf '\n'
 echo "=== 5/5 重启 AWS 后台服务 ==="
-python3 "$PROJECT_ROOT/baasapi/server_mgr.py" restart
+"$_HZTECH_PYTHON3" "$PROJECT_ROOT/baasapi/server_mgr.py" restart
 
-echo ""
+printf '\n'
 echo "=============================================="
 echo "  部署完成（FlutterApp + BaasAPI）"
 echo "  缺省 BaasAPI（App/Web → 后端）: ${HZTECH_API_BASE_URL}"
@@ -232,7 +241,7 @@ fi
 echo "=============================================="
 
 if [[ "${HZTECH_POST_DEPLOY_VERIFY:-0}" == "1" ]]; then
-  echo ""
+  printf '\n'
   echo "=== 部署后探测（HZTECH_POST_DEPLOY_VERIFY=1）==="
   _curl_ok() {
     local url="$1"
