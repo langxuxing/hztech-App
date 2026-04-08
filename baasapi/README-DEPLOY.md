@@ -96,6 +96,6 @@ cd /home/ec2-user/hztechapp && bash baasapi/install_on_aws.sh
 
 - **FlutterApp**（浏览器静态页）：`flutterapp.host` + `flutterapp_port` 示例 `http://54.252.181.151:9000`
 - **BaasAPI**（App / 前端调用的后端）：`baasapi.host` + `baasapi_port` 示例 `http://54.66.108.150:9001`
-- APK 下载（当前由 BaasAPI 提供）：`http://<baasapi.host>:<baasapi_port>/download/apk/禾正量化-release.apk`
+- APK 下载（当前由 BaasAPI 提供）：`http://<baasapi.host>:<baasapi_port>/download/apk/hztech-app-release.apk`
 - HTTPS：在实例前加 Nginx/Caddy，并把 `scheme` 改为 `https`。
 - 日志：BaasAPI `server.log`；FlutterApp `web_static.log`（路径为各段 `remote_path` 下）。控制台每行带 **`[BaasAPI]`** / **`[FlutterApp]`** 前缀；可用环境变量 **`HZTECH_SERVICE_LOG_TAG`** 覆盖默认标签（两进程分别设置）。

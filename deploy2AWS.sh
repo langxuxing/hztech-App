@@ -20,7 +20,11 @@
 #                          {scheme}://{baasapi.host}:{baasapi_port}/（双机时即后端公网地址）
 #   FLUTTER_DART_DEFINE_FILE  若已设置且 HZTECH_API_BASE_URL 未设置，则仍走 dart-define-from-file
 #   HZTECH_SKIP_BUILD=1    跳过步骤 1–2（移动端 + Web 构建），直接同步与重启
-#   HZTECH_SKIP_DB_SYNC=1  跳过步骤 4（远程 init_db）
+#   数据库迁移（远程 db-sync）：默认不执行；仅当以下任一成立时执行步骤 4：
+#     · 命令行: --db / --db-sync / --init-db / -db
+#     · HZTECH_DB_SYNC=1（或 true/yes）
+#     · HZTECH_SKIP_DB_SYNC=0（显式要求同步，兼容旧脚本）
+#   HZTECH_SKIP_DB_SYNC=1  强制跳过（若同时传 --db，则以 --db 为准）
 #   HZTECH_POST_DEPLOY_VERIFY=1  部署结束后 curl 探测 BaasAPI /api/health 与 FlutterApp /
 #   HZTECH_SKIP_IOS_BUILD  仅移动端构建时传给 server_mgr（默认 1，跳过 iOS 构建）
 #
@@ -30,6 +34,45 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR"
 cd "$PROJECT_ROOT"
+
+# 默认不执行远程 db-sync；见文件头「数据库迁移」说明
+_DB_SYNC_FLAG=0
+_argv=()
+for _a in "$@"; do
+  case "$_a" in
+  --db | --db-sync | --init-db | -db)
+    _DB_SYNC_FLAG=1
+    ;;
+  *)
+    _argv+=("$_a")
+    ;;
+  esac
+done
+# set -u：空数组时 "${_argv[@]}" 在部分 bash（如 macOS 3.2）会报 unbound variable
+if [[ ${#_argv[@]} -gt 0 ]]; then
+  set -- "${_argv[@]}"
+else
+  set --
+fi
+unset _a _argv
+
+_run_db_sync=0
+if [[ "$_DB_SYNC_FLAG" -eq 1 ]]; then
+  _run_db_sync=1
+elif [[ "${HZTECH_SKIP_DB_SYNC:-}" == "0" ]]; then
+  _run_db_sync=1
+else
+  _sk=$(printf '%s' "${HZTECH_SKIP_DB_SYNC:-}" | tr '[:upper:]' '[:lower:]')
+  if [[ "$_sk" == "1" || "$_sk" == "true" || "$_sk" == "yes" ]]; then
+    _run_db_sync=0
+  else
+    _ds=$(printf '%s' "${HZTECH_DB_SYNC:-}" | tr '[:upper:]' '[:lower:]')
+    if [[ "$_ds" == "1" || "$_ds" == "true" || "$_ds" == "yes" ]]; then
+      _run_db_sync=1
+    fi
+  fi
+fi
+unset _DB_SYNC_FLAG _sk _ds
 
 DEPLOY_CONFIG="${DEPLOY_CONFIG:-baasapi/deploy-aws.json}"
 if [[ ! -f "$DEPLOY_CONFIG" ]]; then
@@ -127,9 +170,9 @@ if [[ "${HZTECH_SKIP_BUILD:-0}" == "1" ]]; then
   echo "=== （已跳过构建 HZTECH_SKIP_BUILD=1）==="
 else
   echo ""
-  echo "=== 1/5 构建 Flutter 移动端 (release APK + macOS 上 IPA) ==="
+  echo "=== 1/5 构建 Flutter 移动端 (release APK → apk/hztech-app-release.apk；macOS 上 IPA) ==="
   python3 "$PROJECT_ROOT/baasapi/server_mgr.py" build
-  echo "  APK: $PROJECT_ROOT/apk/"
+  echo "  APK: $PROJECT_ROOT/apk/hztech-app-release.apk"
   echo "  IPA: $PROJECT_ROOT/ipa/"
 
   echo ""
@@ -145,14 +188,15 @@ echo ""
 echo "=== 3/5 上传到 AWS（rsync，--no-start）==="
 python3 "$PROJECT_ROOT/baasapi/server_mgr.py" deploy --no-start
 
-if [[ "${HZTECH_SKIP_DB_SYNC:-0}" != "1" ]]; then
+if [[ "$_run_db_sync" -eq 1 ]]; then
   echo ""
   echo "=== 4/5 同步远程数据库（用户迁移）==="
   python3 "$PROJECT_ROOT/baasapi/server_mgr.py" db-sync
 else
   echo ""
-  echo "=== 4/5 跳过远程 DB（HZTECH_SKIP_DB_SYNC=1）==="
+  echo "=== 4/5 跳过远程 DB（默认不迁移；需要时请传 --db 或 HZTECH_DB_SYNC=1）==="
 fi
+unset _run_db_sync
 
 echo ""
 echo "=== 5/5 重启 AWS 后台服务 ==="

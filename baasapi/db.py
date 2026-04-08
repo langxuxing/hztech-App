@@ -388,6 +388,57 @@ def _ensure_account_open_positions_avg_columns(
         )
 
 
+def _ensure_account_open_positions_liq_columns(
+    conn: sqlite3.Connection | PgConnectionWrapper,
+) -> None:
+    """account_open_positions_snapshots 补列：OKX liqPx 聚合后的多/空预估强平价。"""
+    if IS_POSTGRES:
+        try:
+            cur = conn.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = %s
+                  AND table_name = 'account_open_positions_snapshots'
+                """,
+                (PG_SCHEMA,),
+            )
+            cols = {str(r[0]) for r in cur.fetchall()}
+            if "long_liq_px" not in cols:
+                conn.execute(
+                    "ALTER TABLE account_open_positions_snapshots "
+                    "ADD COLUMN long_liq_px DOUBLE PRECISION NOT NULL DEFAULT 0"
+                )
+            if "short_liq_px" not in cols:
+                conn.execute(
+                    "ALTER TABLE account_open_positions_snapshots "
+                    "ADD COLUMN short_liq_px DOUBLE PRECISION NOT NULL DEFAULT 0"
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        return
+    if not isinstance(conn, sqlite3.Connection):
+        return
+    cur = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name='account_open_positions_snapshots'"
+    )
+    if not cur.fetchone():
+        return
+    cur = conn.execute("PRAGMA table_info(account_open_positions_snapshots)")
+    cols = {str(r[1]) for r in cur.fetchall()}
+    if "long_liq_px" not in cols:
+        conn.execute(
+            "ALTER TABLE account_open_positions_snapshots "
+            "ADD COLUMN long_liq_px REAL NOT NULL DEFAULT 0"
+        )
+    if "short_liq_px" not in cols:
+        conn.execute(
+            "ALTER TABLE account_open_positions_snapshots "
+            "ADD COLUMN short_liq_px REAL NOT NULL DEFAULT 0"
+        )
+
+
 def _ensure_account_balance_snapshots_margin_columns(
     conn: sqlite3.Connection | PgConnectionWrapper,
 ) -> None:
@@ -733,6 +784,7 @@ def init_db() -> None:
         if IS_POSTGRES:
             pg_run_init(conn)
             _ensure_account_open_positions_avg_columns(conn)
+            _ensure_account_open_positions_liq_columns(conn)
             _ensure_account_balance_snapshots_margin_columns(conn)
             _ensure_account_balance_snapshots_cash_profit_columns(conn)
             _ensure_account_daily_performance_chain_columns(conn)
@@ -896,6 +948,8 @@ def init_db() -> None:
                 open_leg_count INTEGER NOT NULL DEFAULT 0,
                 long_avg_px REAL NOT NULL DEFAULT 0,
                 short_avg_px REAL NOT NULL DEFAULT 0,
+                long_liq_px REAL NOT NULL DEFAULT 0,
+                short_liq_px REAL NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
             CREATE INDEX IF NOT EXISTS idx_aops_account_at ON account_open_positions_snapshots(account_id, snapshot_at);
@@ -936,6 +990,7 @@ def init_db() -> None:
         _ensure_users_profile_columns(conn)
         _ensure_account_list_columns(conn)
         _ensure_account_open_positions_avg_columns(conn)
+        _ensure_account_open_positions_liq_columns(conn)
         _ensure_account_balance_snapshots_margin_columns(conn)
         _ensure_account_balance_snapshots_cash_profit_columns(conn)
         _ensure_account_daily_performance_chain_columns(conn)
@@ -2217,7 +2272,7 @@ def account_open_positions_snapshots_insert_batch(
     snapshot_at: str,
     rows: list[dict],
 ) -> int:
-    """写入当前持仓快照：每合约一行（多/空张数、腿数 open_leg_count、最新价、标记价、多/空未实现盈亏与合计）。"""
+    """写入当前持仓快照：每合约一行（多/空张数、腿数、最新价、标记价、多/空 UPL、多/空加权预估强平价）。"""
     aid = (account_id or "").strip()
     ts = (snapshot_at or "").strip()
     if not aid or not ts or not rows:
@@ -2240,8 +2295,8 @@ def account_open_positions_snapshots_insert_batch(
                 """INSERT INTO account_open_positions_snapshots
                    (account_id, inst_id, snapshot_at, last_px, long_pos_size, short_pos_size,
                     mark_px, long_upl, short_upl, total_upl, open_leg_count,
-                    long_avg_px, short_avg_px)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    long_avg_px, short_avg_px, long_liq_px, short_liq_px)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     aid,
                     inst,
@@ -2256,6 +2311,8 @@ def account_open_positions_snapshots_insert_batch(
                     leg_i,
                     float(r.get("long_avg_px") or 0),
                     float(r.get("short_avg_px") or 0),
+                    float(r.get("long_liq_px") or 0),
+                    float(r.get("short_liq_px") or 0),
                 ),
             )
             n += 1
@@ -2283,7 +2340,7 @@ def account_open_positions_snapshots_query_by_account(
             cur = conn.execute(
                 """SELECT id, account_id, inst_id, snapshot_at, last_px, long_pos_size,
                           short_pos_size, mark_px, long_upl, short_upl, total_upl,
-                          open_leg_count, long_avg_px, short_avg_px, created_at
+                          open_leg_count, long_avg_px, short_avg_px, long_liq_px, short_liq_px, created_at
                    FROM account_open_positions_snapshots
                    WHERE account_id = ? AND inst_id = ?
                    ORDER BY snapshot_at DESC, id DESC
@@ -2294,7 +2351,7 @@ def account_open_positions_snapshots_query_by_account(
             cur = conn.execute(
                 """SELECT id, account_id, inst_id, snapshot_at, last_px, long_pos_size,
                           short_pos_size, mark_px, long_upl, short_upl, total_upl,
-                          open_leg_count, long_avg_px, short_avg_px, created_at
+                          open_leg_count, long_avg_px, short_avg_px, long_liq_px, short_liq_px, created_at
                    FROM account_open_positions_snapshots
                    WHERE account_id = ?
                    ORDER BY snapshot_at DESC, id DESC
@@ -2317,7 +2374,9 @@ def account_open_positions_snapshots_query_by_account(
                 "open_leg_count": r[11],
                 "long_avg_px": r[12],
                 "short_avg_px": r[13],
-                "created_at": r[14],
+                "long_liq_px": r[14],
+                "short_liq_px": r[15],
+                "created_at": r[16],
             }
             for r in cur.fetchall()
         ]

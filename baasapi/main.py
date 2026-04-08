@@ -29,7 +29,7 @@ App 所需 API（与 QtraderApi.kt 一致）：
   GET  /api/tradingbots/{id}/position-history  历史仓位分页（入库数据，需登录）
   POST /api/tradingbots/{id}/position-history/sync  手动拉取该账户 OKX 历史仓位（仅管理员）
   POST /api/tradingbots/{id}/balance-snapshot/sync  立即拉取 OKX 余额写入库（account_balance_snapshots / tradingbot_profit_snapshots；仅管理员）
-  GET  /api/tradingbots/{id}/open-positions-snapshots  已入库的当前持仓聚合快照（按时间倒序；需登录）
+  GET  /api/tradingbots/{id}/open-positions-snapshots  已入库的当前持仓聚合快照（含多/空预估强平价；按时间倒序；需登录）
   POST /api/tradingbots/{id}/open-positions-snapshot/sync  立即拉取 OKX 当前持仓写入 account_open_positions_snapshots（仅管理员）
   POST /api/admin/balance-snapshots/sync  全量余额快照同步（与定时任务相同；仅管理员）
   POST /api/admin/balance-snapshots/recompute-profit  按 initial_capital 重算全表 profit_*（权益）与 cash_profit_*（资产余额）（仅管理员）
@@ -838,13 +838,13 @@ def api_app_version():
 
     环境变量（均为可选；未设置 latest 时客户端不提示「可升级」）：
     - HZTECH_APP_ANDROID_MIN / HZTECH_APP_ANDROID_LATEST
-    - HZTECH_APP_ANDROID_APK：APK 文件名，默认 禾正量化-release.apk
+    - HZTECH_APP_ANDROID_APK：APK 文件名，默认 hztech-app-release.apk
     - HZTECH_APP_IOS_MIN / HZTECH_APP_IOS_LATEST
     - HZTECH_APP_IOS_STORE_URL：App Store / TestFlight 公开链接
     """
     apk_name = os.environ.get("HZTECH_APP_ANDROID_APK", "").strip()
     if not apk_name:
-        apk_name = "禾正量化-release.apk"
+        apk_name = "hztech-app-release.apk"
     return jsonify(
         {
             "success": True,

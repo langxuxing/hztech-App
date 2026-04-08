@@ -475,23 +475,39 @@ class _LoginScreenState extends State<LoginScreen> {
                   height: halfH,
                   child: IgnorePointer(
                     child: Center(
+                      // 双层柔化：横向淡化左右「硬边」，纵向保留与下半屏衔接并略淡化顶边
                       child: ShaderMask(
                         blendMode: BlendMode.dstIn,
                         shaderCallback: (Rect bounds) => const LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
+                          begin: Alignment.centerLeft,
+                          end: Alignment.centerRight,
                           colors: [
+                            Colors.transparent,
                             Colors.white,
                             Colors.white,
                             Colors.transparent,
                           ],
-                          stops: [0.0, 0.68, 1.0],
+                          stops: [0.0, 0.07, 0.93, 1.0],
                         ).createShader(bounds),
-                        child: Image.asset(
-                          'images/kong-zhuo.png',
-                          width: kongW,
-                          fit: BoxFit.fitWidth,
-                          alignment: Alignment.topCenter,
+                        child: ShaderMask(
+                          blendMode: BlendMode.dstIn,
+                          shaderCallback: (Rect bounds) => const LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [
+                              Colors.transparent,
+                              Colors.white,
+                              Colors.white,
+                              Colors.transparent,
+                            ],
+                            stops: [0.0, 0.06, 0.66, 1.0],
+                          ).createShader(bounds),
+                          child: Image.asset(
+                            'images/kong-zhuo.png',
+                            width: kongW,
+                            fit: BoxFit.fitWidth,
+                            alignment: Alignment.topCenter,
+                          ),
                         ),
                       ),
                     ),

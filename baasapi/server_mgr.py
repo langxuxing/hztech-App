@@ -1,5 +1,8 @@
 """AWS 部署配置与 SSH 管理。从 baasapi/deploy-aws.json 读取配置；盘符目录为 baasapi/、flutterapp/，
-配置段键名仍为 flutterapp / baasapi（ports：flutterapp_port、baasapi_port）。兼容旧键 web / api。"""
+配置段键名仍为 flutterapp / baasapi（ports：flutterapp_port、baasapi_port）。兼容旧键 web / api。
+
+双机部署（同时配置 flutterapp 与 baasapi 段）：BaasAPI 主机同步完整后端（含数据库目录）；Flutter 主机
+仅同步 APK、Flutter Web 产物与静态站所需的最小 baasapi 文件，不部署、不创建、并清理遗留的 sqlite/。"""
 from pathlib import Path
 import json
 import os
@@ -7,6 +10,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 
 # 项目根目录（baasapi 的上一级）
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -18,7 +22,9 @@ FLUTTER_APK_DIR = flutterapp / "build" / "app" / "outputs" / "flutter-apk"
 FLUTTER_IPA_DIR = flutterapp / "build" / "ios" / "ipa"
 # 生成 APK 放入项目根下 apk/，部署后对应 AWS 上 hztechapp/apk/（见 deploy-aws.json remote_path）
 APK_DIR = PROJECT_ROOT / "apk"
-DEFAULT_APK_NAME = "禾正量化-release.apk"
+# 与 deploy2AWS.sh（release）、deploy2Local.sh（debug）产物名一致
+DEFAULT_APK_NAME_RELEASE = "hztech-app-release.apk"
+DEFAULT_APK_NAME_DEBUG = "hztech-app-debug.apk"
 # iOS：flutter build ipa 产物复制到 ipa/，随 rsync 一并上传（与 apk/ 并列）
 IPA_DIR = PROJECT_ROOT / "ipa"
 DEFAULT_IPA_NAME = "禾正量化-release.ipa"
@@ -155,27 +161,69 @@ def _rsync_deploy_exclude_patterns() -> list[str]:
         "baasapi/seed_test_seasons.py",
         "baasapi/seed_test_profit_data.py",
         "baasapi/accounts/test_account_key.py",
+        # 本地 SQLite 库体积大且不应覆盖远端生产库；远端由 init_db / 迁移维护
+        "baasapi/sqlite/*.db",
     ]
+
+
+def _rsync_ssh_e(cfg: dict) -> str:
+    """rsync -e 使用的 ssh 命令：keepalive 防 NAT/防火墙 idle 断连，合并 deploy-aws.json 的 ssh_opts。"""
+    key = PROJECT_ROOT / cfg["key"]
+    port = cfg.get("port", 22)
+    parts: list[str] = [
+        "ssh",
+        "-i",
+        str(key),
+        "-p",
+        str(port),
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        "ServerAliveInterval=30",
+        "-o",
+        "ServerAliveCountMax=6",
+        "-o",
+        "TCPKeepAlive=yes",
+        "-o",
+        "ConnectTimeout=30",
+    ]
+    parts.extend(cfg.get("ssh_opts", []))
+    return " ".join(shlex.quote(p) for p in parts)
+
+
+def _run_rsync(cmd: list, retries: int = 3) -> None:
+    """rsync 偶发 'Connection closed' / exit 255 时自动重试。"""
+    for attempt in range(1, retries + 1):
+        try:
+            subprocess.run(cmd, check=True, cwd=PROJECT_ROOT)
+            return
+        except subprocess.CalledProcessError:
+            if attempt < retries:
+                print(
+                    "rsync failed (attempt %s/%s), retrying in 5s..."
+                    % (attempt, retries),
+                    file=sys.stderr,
+                )
+                time.sleep(5)
+            else:
+                raise
 
 
 def _rsync_one(cfg: dict, extra_excludes: list | None, sync_flutter_web: bool):
     """同步项目根到指定主机。extra_excludes 追加排除项；sync_flutter_web 为 True 时再同步 flutter build/web。"""
-    key = PROJECT_ROOT / cfg["key"]
     remote_base = f"{cfg['user']}@{cfg['host']}:{cfg['remote_path']}"
-    key_str = str(key)
+    ssh_e = _rsync_ssh_e(cfg)
     excludes: list[str] = []
     for pat in _rsync_deploy_exclude_patterns():
         excludes.extend(["--exclude", pat])
     if extra_excludes:
         for x in extra_excludes:
             excludes.extend(["--exclude", x])
-    port = cfg.get("port", 22)
-    ssh_e = f"ssh -i {key_str} -p {port} -o StrictHostKeyChecking=accept-new"
     cmd = ["rsync", "-avz", "--delete"]
     cmd.extend(excludes)
     cmd.extend(["-e", ssh_e])
     cmd.extend([str(PROJECT_ROOT) + "/", remote_base + "/"])
-    subprocess.run(cmd, check=True, cwd=PROJECT_ROOT)
+    _run_rsync(cmd)
     if not sync_flutter_web:
         return
     web_src = flutterapp / "build" / "web"
@@ -184,23 +232,77 @@ def _rsync_one(cfg: dict, extra_excludes: list | None, sync_flutter_web: bool):
         remote_web_dir = f"{cfg['remote_path']}/flutterapp/build/web"
         run_ssh(f"mkdir -p {shlex.quote(remote_web_dir)}", cfg=cfg)
         remote_web = remote_base + "/flutterapp/build/web/"
-        subprocess.run(
+        _run_rsync(
             ["rsync", "-avz", "--delete", "-e", ssh_e, str(web_src) + "/", remote_web],
-            check=True,
-            cwd=PROJECT_ROOT,
         )
 
 
+def _rsync_flutter_host_web_apk_only(cfg: dict) -> None:
+    """双机部署时 Flutter 主机：仅同步 apk/、flutterapp/build/web/、baasapi/serve_web_static.py 与 requirements.txt。
+
+    不推送完整 baasapi 源码；不部署数据库目录，并在同步末尾删除远端 baasapi/sqlite/（若有遗留）。
+    """
+    ssh_e = _rsync_ssh_e(cfg)
+    remote_base = f"{cfg['user']}@{cfg['host']}:{cfg['remote_path']}"
+    rp = cfg["remote_path"]
+    # 清空远端 baasapi/，避免历史上整包同步留下的 main.py、sqlite 等与 API 主机混淆
+    run_ssh(
+        "mkdir -p %s %s && rm -rf %s && mkdir -p %s"
+        % (
+            shlex.quote(rp + "/apk"),
+            shlex.quote(rp + "/flutterapp/build/web"),
+            shlex.quote(rp + "/baasapi"),
+            shlex.quote(rp + "/baasapi"),
+        ),
+        cfg=cfg,
+    )
+    apk_src = PROJECT_ROOT / "apk"
+    if apk_src.is_dir():
+        _run_rsync(
+            ["rsync", "-avz", "--delete", "-e", ssh_e, str(apk_src) + "/", remote_base + "/apk/"]
+        )
+    web_src = flutterapp / "build" / "web"
+    if web_src.is_dir() and (web_src / "index.html").is_file():
+        _run_rsync(
+            [
+                "rsync",
+                "-avz",
+                "--delete",
+                "-e",
+                ssh_e,
+                str(web_src) + "/",
+                remote_base + "/flutterapp/build/web/",
+            ]
+        )
+    else:
+        print(
+            "提示: 未找到 flutterapp/build/web/index.html，跳过 Web 同步；"
+            "可先执行: python baasapi/server_mgr.py build-web",
+            file=sys.stderr,
+        )
+    for name in ("serve_web_static.py", "requirements.txt"):
+        src = PROJECT_ROOT / "baasapi" / name
+        if not src.is_file():
+            raise FileNotFoundError("缺少部署文件: %s" % src)
+        _run_rsync(["rsync", "-avz", "-e", ssh_e, str(src), remote_base + "/baasapi/"])
+    # Flutter 主机不承载数据库；清除历史上整包同步留下的 baasapi/sqlite/
+    run_ssh("rm -rf %s" % shlex.quote(rp + "/baasapi/sqlite"), cfg=cfg)
+
+
 def rsync_sync(exclude=None):
-    """同步到 FlutterApp 主机（精简目录 + Flutter Web）；双机时 BaasAPI 主机再同步一份（不含 flutterapp、apk）。
+    """同步到 AWS：单机为整包 + Flutter Web；双机时先 BaasAPI 主机（完整后端），再 Flutter 主机（仅 Web+APK+最小静态脚本）。
+
     排除项见 _rsync_deploy_exclude_patterns（测试/IDE/Gradle/Dart 源码/本地部署脚本等）。"""
     ex = list(exclude) if exclude else []
-    c_web = target_config("flutterapp")
-    _rsync_one(c_web, ex, sync_flutter_web=True)
     if has_dual_deploy():
         c_api = target_config("baasapi")
         api_ex = ex + ["flutterapp", "apk"]
         _rsync_one(c_api, api_ex, sync_flutter_web=False)
+        c_web = target_config("flutterapp")
+        _rsync_flutter_host_web_apk_only(c_web)
+    else:
+        c_web = target_config("flutterapp")
+        _rsync_one(c_web, ex, sync_flutter_web=True)
 
 
 def _flutter_build_env():
@@ -282,6 +384,28 @@ def _find_flutter(env):
     return None
 
 
+def _run_build_cmd(cmd: list[str], cwd: str, env: dict) -> bool:
+    """执行 flutter / gradle 子进程：继承终端输出、不设超时（release 首次构建常需数分钟）。"""
+    try:
+        subprocess.run(
+            cmd,
+            check=True,
+            cwd=cwd,
+            env=env,
+            stdin=subprocess.DEVNULL,
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        print("命令失败（退出码 %s）: %s" % (e.returncode, " ".join(shlex.quote(x) for x in cmd)))
+        return False
+    except KeyboardInterrupt:
+        print(
+            "\n构建被中断（Ctrl+C）。release 首次构建通常需 5–15 分钟（Gradle 下载依赖），"
+            "请保持等待；完成后重试: python server_mgr.py build"
+        )
+        raise
+
+
 def build_apk_flutter():
     """使用 Flutter 编译 release APK，并复制到 apk/。"""
     if not flutterapp.is_dir():
@@ -298,18 +422,67 @@ def build_apk_flutter():
     extra = _flutter_dart_define_args()
     if extra:
         print("  dart-define: %s" % " ".join(extra))
-    subprocess.run(
-        [flutter_cmd, "build", "apk", "--release", *extra],
-        check=True,
-        cwd=str(flutterapp),
-        env=env,
+    print(
+        "（提示：首次 release 构建可能较慢，Gradle 会解析依赖；请勿按 Ctrl+C 中断。）"
     )
-    apk = FLUTTER_APK_DIR / "app-release.apk"
-    if not apk.is_file():
+    if not _run_build_cmd(
+        [flutter_cmd, "build", "apk", "--release", *extra],
+        str(flutterapp),
+        env,
+    ):
+        return False
+    apk = _flutter_built_apk_path(debug=False)
+    if not apk:
         print("未找到 Flutter 生成的 app-release.apk。")
         return False
     APK_DIR.mkdir(parents=True, exist_ok=True)
-    dest = APK_DIR / DEFAULT_APK_NAME
+    dest = APK_DIR / DEFAULT_APK_NAME_RELEASE
+    shutil.copy2(apk, dest)
+    print("APK 已复制到: %s" % dest)
+    return True
+
+
+def _flutter_built_apk_path(debug: bool) -> Path | None:
+    """Flutter 构建后 APK 路径（flutter-apk/ 或 apk/debug|release/，随 SDK 版本可能不同）。"""
+    name = "app-debug.apk" if debug else "app-release.apk"
+    p = FLUTTER_APK_DIR / name
+    if p.is_file():
+        return p
+    sub = "debug" if debug else "release"
+    alt = flutterapp / "build" / "app" / "outputs" / "apk" / sub / name
+    if alt.is_file():
+        return alt
+    return None
+
+
+def build_apk_flutter_debug():
+    """使用 Flutter 编译 debug APK，并复制到 apk/hztech-app-debug.apk。"""
+    if not flutterapp.is_dir():
+        return False
+    env = _flutter_build_env()
+    if not env.get("ANDROID_HOME"):
+        print("未找到 Android SDK。请设置 ANDROID_HOME 或安装 Android Studio（默认: ~/Library/Android/sdk）。")
+        return False
+    flutter_cmd = _find_flutter(env)
+    if not flutter_cmd:
+        print("未找到 Flutter。请将 flutter 加入 PATH，或设置 FLUTTER_ROOT（如 export FLUTTER_ROOT=$HOME/flutter）。")
+        return False
+    print("Building Flutter APK (debug) ... (ANDROID_HOME=%s)" % env["ANDROID_HOME"])
+    extra = _flutter_dart_define_args()
+    if extra:
+        print("  dart-define: %s" % " ".join(extra))
+    if not _run_build_cmd(
+        [flutter_cmd, "build", "apk", "--debug", *extra],
+        str(flutterapp),
+        env,
+    ):
+        return False
+    apk = _flutter_built_apk_path(debug=True)
+    if not apk:
+        print("未找到 Flutter 生成的 app-debug.apk。")
+        return False
+    APK_DIR.mkdir(parents=True, exist_ok=True)
+    dest = APK_DIR / DEFAULT_APK_NAME_DEBUG
     shutil.copy2(apk, dest)
     print("APK 已复制到: %s" % dest)
     return True
@@ -343,14 +516,12 @@ def build_ios_flutter() -> bool:
     extra = _flutter_dart_define_args()
     if extra:
         print("  dart-define: %s" % " ".join(extra))
-    try:
-        subprocess.run(
-            [flutter_cmd, "build", "ipa", "--release", *extra],
-            check=True,
-            cwd=str(flutterapp),
-            env=env,
-        )
-    except subprocess.CalledProcessError:
+    print("（提示：iOS 归档可能较慢，请勿中断。）")
+    if not _run_build_cmd(
+        [flutter_cmd, "build", "ipa", "--release", *extra],
+        str(flutterapp),
+        env,
+    ):
         print(
             "iOS IPA 构建失败（Xcode 签名、证书或 Pods 等）。"
             "可 export HZTECH_SKIP_IOS_BUILD=1 仅打 Android；或在本机修复签名后重试。"
@@ -384,13 +555,13 @@ def build_web_flutter():
     extra = _flutter_dart_define_args()
     if extra:
         print("  dart-define: %s" % " ".join(extra))
-    subprocess.run(
+    if not _run_build_cmd(
         # 关闭 Wasm 预检：flutter_secure_storage_web 等不兼容 Wasm，与当前 JS 产物无关，仅减少构建日志噪声。
         [flutter_cmd, "build", "web", "--release", "--no-wasm-dry-run", *extra],
-        check=True,
-        cwd=str(flutterapp),
-        env=env,
-    )
+        str(flutterapp),
+        env,
+    ):
+        return False
     idx = flutterapp / "build" / "web" / "index.html"
     if not idx.is_file():
         print("未找到 flutterapp/build/web/index.html。")
@@ -441,20 +612,66 @@ def build_apk():
         print("未找到 app/build.gradle.kts，跳过 APK 构建。")
         return False
     print("Building Android APK (assembleDebug) ...")
-    subprocess.run(
+    if not _run_build_cmd(
         [str(GRADLEW), "assembleDebug", "-p", str(PROJECT_ROOT)],
-        check=True,
-        cwd=PROJECT_ROOT,
-    )
+        str(PROJECT_ROOT),
+        dict(os.environ),
+    ):
+        return False
     apk_list = list(APK_DEBUG_DIR.glob("*.apk")) if APK_DEBUG_DIR.exists() else []
     if not apk_list:
         print("未找到生成的 APK 文件。")
         return False
     APK_DIR.mkdir(parents=True, exist_ok=True)
-    dest = APK_DIR / DEFAULT_APK_NAME
+    dest = APK_DIR / DEFAULT_APK_NAME_RELEASE
     shutil.copy2(apk_list[0], dest)
     print("APK 已复制到: %s" % dest)
     return True
+
+
+def build_apk_debug() -> bool:
+    """优先 Flutter debug APK，否则 Gradle assembleDebug；产物 apk/hztech-app-debug.apk。"""
+    if build_apk_flutter_debug():
+        return True
+    if not GRADLEW.is_file():
+        print("未找到 gradlew 或 flutterapp，跳过 APK 构建。")
+        return False
+    if not (PROJECT_ROOT / "app" / "build.gradle.kts").exists():
+        print("未找到 app/build.gradle.kts，跳过 APK 构建。")
+        return False
+    print("Building Android APK (assembleDebug) ...")
+    if not _run_build_cmd(
+        [str(GRADLEW), "assembleDebug", "-p", str(PROJECT_ROOT)],
+        str(PROJECT_ROOT),
+        dict(os.environ),
+    ):
+        return False
+    apk_list = list(APK_DEBUG_DIR.glob("*.apk")) if APK_DEBUG_DIR.exists() else []
+    if not apk_list:
+        print("未找到生成的 APK 文件。")
+        return False
+    APK_DIR.mkdir(parents=True, exist_ok=True)
+    dest = APK_DIR / DEFAULT_APK_NAME_DEBUG
+    shutil.copy2(apk_list[0], dest)
+    print("APK 已复制到: %s" % dest)
+    return True
+
+
+def run_build_mobile_debug() -> int:
+    """仅构建 Android debug APK（不构建 iOS）。成功返回 0。"""
+    if os.environ.get("HZTECH_SKIP_MOBILE_BUILD", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    ):
+        print(
+            "已跳过移动端构建（HZTECH_SKIP_MOBILE_BUILD）；"
+            "仅后续 build-web 等步骤会执行。"
+        )
+        return 0
+    if build_apk_debug():
+        return 0
+    return 1
 
 
 def _remote_install_requirements_sh(remote_path: str) -> str:
@@ -511,7 +728,12 @@ def remote_restart_web():
         check=False,
         cfg=c,
     )
-    run_ssh(f"cd {remote_path} && mkdir -p apk res", check=True, cfg=c)
+    # 双机时本机无 DB；不创建 baasapi/sqlite，并删除遗留目录
+    run_ssh(
+        f"cd {remote_path} && rm -rf baasapi/sqlite && mkdir -p apk res",
+        check=True,
+        cfg=c,
+    )
     run_ssh(_remote_install_requirements_sh(remote_path), cfg=c)
     run_ssh(
         f"cd {remote_path} && HZTECH_WEB_ROOT={web_root} PORT={web_port} "
@@ -587,7 +809,7 @@ def deploy_and_start(port=None, start_server=True):
     if has_dual_deploy():
         capi = target_config("baasapi")
         print(
-            "Syncing to BaasAPI %s:%s and FlutterApp %s:%s ..."
+            "Syncing: BaasAPI (full backend) %s:%s → FlutterApp (web + apk only) %s:%s ..."
             % (capi["host"], capi["remote_path"], cweb["host"], cweb["remote_path"])
         )
     else:
@@ -638,6 +860,8 @@ if __name__ == "__main__":
     cfg = load_config()
     if len(sys.argv) > 1 and sys.argv[1] == "build":
         sys.exit(run_build_mobile())
+    if len(sys.argv) > 1 and sys.argv[1] == "build-debug":
+        sys.exit(run_build_mobile_debug())
     if len(sys.argv) > 1 and sys.argv[1] == "build-ios":
         ok = build_ios_flutter()
         sys.exit(0 if ok else 1)
@@ -685,5 +909,5 @@ if __name__ == "__main__":
     target, key = get_ssh_target()
     print("SSH target:", target, "key:", key)
     print(
-        "Usage: python server_mgr.py [build | build-ios | build-web | deploy [--build] [--build-web] [--no-start] | restart | pip-remote | db-sync | shell]"
+        "Usage: python server_mgr.py [build | build-debug | build-ios | build-web | deploy [--build] [--build-web] [--no-start] | restart | pip-remote | db-sync | shell]"
     )

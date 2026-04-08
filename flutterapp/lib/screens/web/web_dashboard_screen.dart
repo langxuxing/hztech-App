@@ -9,6 +9,9 @@ import '../../widgets/equity_cash_percent_line_chart.dart';
 import '../../widgets/water_background.dart';
 import 'web_account_profit_screen.dart';
 
+/// 总览页金额口径：默认权益；可切换为 USDT 现金余额及相关盈亏。
+enum _DashboardBasis { equity, cash }
+
 /// Web「账户总览」：与侧栏 [WebMainShell] 文案一致，汇总权益与盈亏；点击卡片由 [onOpenAccountProfit]
 /// 切到「账户收益」Tab（与侧栏点入同一布局，含左侧菜单）。无回调时仍走独立 push。
 /// 脚本启停见 [WebTradingBotControlScreen]（侧栏「策略启停」）。
@@ -29,6 +32,9 @@ class WebDashboardScreen extends StatefulWidget {
 
 class _WebDashboardScreenState extends State<WebDashboardScreen> {
   final _prefs = SecurePrefs();
+
+  /// 默认权益口径；可切换现金余额口径。
+  _DashboardBasis _basis = _DashboardBasis.equity;
 
   //账户列表
   List<AccountProfit> _accounts = [];
@@ -154,8 +160,43 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             const SizedBox(height: AppFinanceStyle.webSummaryTitleSpacing),
-                            if (_accounts.isNotEmpty)
-                              _SummaryStrip(accounts: _accounts),
+                            if (_accounts.isNotEmpty) ...[
+                              Row(
+                                children: [
+                                  const Spacer(),
+                                  SegmentedButton<_DashboardBasis>(
+                                    style: ButtonStyle(
+                                      visualDensity: VisualDensity.compact,
+                                      tapTargetSize:
+                                          MaterialTapTargetSize.shrinkWrap,
+                                    ),
+                                    showSelectedIcon: false,
+                                    segments: const [
+                                      ButtonSegment(
+                                        value: _DashboardBasis.equity,
+                                        label: Text('权益'),
+                                        tooltip: '权益金额口径',
+                                      ),
+                                      ButtonSegment(
+                                        value: _DashboardBasis.cash,
+                                        label: Text('现金余额'),
+                                        tooltip: '现金余额口径',
+                                      ),
+                                    ],
+                                    selected: {_basis},
+                                    onSelectionChanged: (s) {
+                                      if (s.isEmpty) return;
+                                      setState(() => _basis = s.first);
+                                    },
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 12),
+                              _SummaryStrip(
+                                accounts: _accounts,
+                                basis: _basis,
+                              ),
+                            ],
                             if (_accounts.isNotEmpty)
                               const SizedBox(height: 12),
                           ],
@@ -205,6 +246,7 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
                                   bot: bot,
                                   snapshots:
                                       _profitHistory[a.botId] ?? const [],
+                                  basis: _basis,
                                   onOpen: () => _openAccount(a),
                                 );
                               }, childCount: _accounts.length),
@@ -222,9 +264,13 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
 }
 
 class _SummaryStrip extends StatelessWidget {
-  const _SummaryStrip({required this.accounts});
+  const _SummaryStrip({
+    required this.accounts,
+    required this.basis,
+  });
 
   final List<AccountProfit> accounts;
+  final _DashboardBasis basis;
 
   @override
   Widget build(BuildContext context) {
@@ -232,9 +278,14 @@ class _SummaryStrip extends StatelessWidget {
     var profit = 0.0;
     var initial = 0.0;
     for (final a in accounts) {
-      eq += a.equityUsdt;
-      profit += a.profitAmount;
       initial += a.initialBalance;
+      if (basis == _DashboardBasis.equity) {
+        eq += a.equityUsdt;
+        profit += a.profitAmount;
+      } else {
+        eq += a.cashBalance ?? a.balanceUsdt;
+        profit += a.cashProfitAmount;
+      }
     }
     final pct = initial > 0 ? (profit / initial) * 100 : 0.0;
     TextStyle v() => AppFinanceStyle.valueTextStyle(
@@ -254,13 +305,13 @@ class _SummaryStrip extends StatelessWidget {
               trailingLabel: !narrow,
             ),
             _SummaryCell(
-              label: '总权益',
+              label: basis == _DashboardBasis.equity ? '总权益' : '总现金',
               value: formatUiInteger(eq),
               valueStyle: v(),
               trailingLabel: !narrow,
             ),
             _SummaryCell(
-              label: '总权益盈亏',
+              label: basis == _DashboardBasis.equity ? '总权益盈亏' : '总现金盈亏',
               value: formatUiInteger(profit),
               valueStyle: v().copyWith(
                 color: profit >= 0
@@ -270,7 +321,7 @@ class _SummaryStrip extends StatelessWidget {
               trailingLabel: !narrow,
             ),
             _SummaryCell(
-              label: '权益收益率',
+              label: basis == _DashboardBasis.equity ? '权益收益率' : '现金收益率',
               value: formatUiPercentLabel(pct),
               valueStyle: v(),
               trailingLabel: !narrow,
@@ -351,12 +402,14 @@ class _OverviewGlassCard extends StatelessWidget {
     required this.account,
     required this.bot,
     required this.snapshots,
+    required this.basis,
     required this.onOpen,
   });
 
   final AccountProfit account;
   final UnifiedTradingBot? bot;
   final List<BotProfitSnapshot> snapshots;
+  final _DashboardBasis basis;
   final VoidCallback onOpen;
 
   static const _labelColor = AppFinanceStyle.labelColor;
@@ -432,12 +485,20 @@ class _OverviewGlassCard extends StatelessWidget {
                 value: formatUiInteger(account.initialBalance),
               ),
               _OverviewStatCol(
-                label: '当前权益',
-                value: formatUiInteger(account.equityUsdt),
+                label: basis == _DashboardBasis.equity ? '当前权益' : '当前现金',
+                value: formatUiInteger(
+                  basis == _DashboardBasis.equity
+                      ? account.equityUsdt
+                      : (account.cashBalance ?? account.balanceUsdt),
+                ),
               ),
               _OverviewStatCol(
-                label: '权益涨跌',
-                value: formatUiPercentLabel(account.profitPercent),
+                label: basis == _DashboardBasis.equity ? '权益涨跌' : '现金涨跌',
+                value: formatUiPercentLabel(
+                  basis == _DashboardBasis.equity
+                      ? account.profitPercent
+                      : account.cashProfitPercent,
+                ),
               ),
             ],
           ),
@@ -447,7 +508,9 @@ class _OverviewGlassCard extends StatelessWidget {
                 ? IgnorePointer(
                     child: SnapshotPercentLineChart(
                       snapshots: snapshots,
-                      series: SnapshotReturnSeries.equity,
+                      series: basis == _DashboardBasis.equity
+                          ? SnapshotReturnSeries.equity
+                          : SnapshotReturnSeries.cash,
                       compact: true,
                     ),
                   )

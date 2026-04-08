@@ -204,6 +204,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   Future<void> _load() async {
     if (!mounted) return;
     final g = ++_loadGeneration;
+    _accountSwitchGeneration++;
     setState(() {
       _loading = true;
       _detailLoading = false;
@@ -362,6 +363,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   }
 
   Future<void> _loadForBot(String botId) async {
+    _loadGeneration++;
     _disconnectOkxPublicTicker();
     final g = ++_accountSwitchGeneration;
     setState(() {

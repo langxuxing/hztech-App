@@ -1085,6 +1085,14 @@ def _okx_fetch_positions_fallback(config_path: Path | None) -> tuple[list[dict],
                 last_px = mark_px
             avg_px = float(d.get("avgPx") or 0)
             upl = float(d.get("upl") or 0)
+            raw_liq = d.get("liqPx")
+            if raw_liq is None or raw_liq == "":
+                liq_px = 0.0
+            else:
+                try:
+                    liq_px = float(raw_liq)
+                except (TypeError, ValueError):
+                    liq_px = 0.0
             out.append({
                 "inst_id": inst_id,
                 "pos": pos_f,
@@ -1093,6 +1101,7 @@ def _okx_fetch_positions_fallback(config_path: Path | None) -> tuple[list[dict],
                 "mark_px": mark_px,
                 "last_px": last_px,
                 "upl": upl,
+                "liq_px": liq_px,
             })
         except (TypeError, ValueError, KeyError):
             continue

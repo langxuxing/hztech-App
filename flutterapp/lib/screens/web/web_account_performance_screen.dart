@@ -10,8 +10,9 @@ import '../../utils/number_display_format.dart';
 import '../../widgets/account_detail_loading_overlay.dart';
 import '../../widgets/water_background.dart';
 
-/// Web：Account_List 全账户对比；持仓/成本线来自 [account_open_positions_snapshots]。
-/// 对比表中「当前价格 / 多-成本 / 空-成本 / 成本差」为数值 ×1e9 后取整显示。
+/// Web：Account_List 全账户对比；持仓/成本/强平价来自 [account_open_positions_snapshots]。
+/// 现价类、成本与强平价列数值 ×1e9 取整；强平距离 = 多侧(加权现价−强平价)、空侧(强平价−加权现价)。
+/// 指标按「多仓 / 空仓 / 多空 / 强平价 / 资产 / 月度」分块着色，且各块可折叠。
 class WebAccountPerformanceScreen extends StatefulWidget {
   const WebAccountPerformanceScreen({
     super.key,
@@ -266,7 +267,6 @@ class _WebAccountPerformanceScreenState
                               dateCompact: _snapshotDateCompact(),
                               refPrice: _refPrice,
                               columns: _columns,
-                              year: _year,
                               month: _month,
                             ),
                           ),
@@ -389,10 +389,10 @@ class _MonthToolbar extends StatelessWidget {
             child: Text(
               title,
               style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    color: AppFinanceStyle.valueColor,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.2,
-                  ),
+                color: AppFinanceStyle.valueColor,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.2,
+              ),
             ),
           ),
           IconButton(
@@ -408,7 +408,10 @@ class _MonthToolbar extends StatelessWidget {
               onPressed: onThisMonth,
               style: TextButton.styleFrom(
                 foregroundColor: AppFinanceStyle.profitGreenEnd,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
               ),
               child: const Text('本月'),
             ),
@@ -454,7 +457,9 @@ class _MonthToolbar extends StatelessWidget {
                       '按月对比各账户持仓、成交与收益率',
                       style: AppFinanceStyle.labelTextStyle(context).copyWith(
                         fontSize: 13,
-                        color: AppFinanceStyle.textDefault.withValues(alpha: 0.55),
+                        color: AppFinanceStyle.textDefault.withValues(
+                          alpha: 0.55,
+                        ),
                         fontWeight: FontWeight.w400,
                       ),
                     ),
@@ -471,7 +476,7 @@ class _MonthToolbar extends StatelessWidget {
 }
 
 /// 账户级汇总：取 [rows] 中最新一批 snapshot_at 的各行（按合约），
-/// 成本线为库中 long_avg_px / short_avg_px 的加权平均。
+/// 成本与强平价为张数加权平均；距强平价为逐合约 (现价−强平价)/(强平价−现价) 再按张数加权，避免「均价相减」与缺 liq 合约混算不一致。
 _PosAgg _aggregateOpenPosSnapshots(List<OpenPositionsSnapshotRow> rows) {
   if (rows.isEmpty) {
     return _PosAgg(
@@ -479,6 +484,10 @@ _PosAgg _aggregateOpenPosSnapshots(List<OpenPositionsSnapshotRow> rows) {
       shortQty: 0,
       longAvgPx: 0,
       shortAvgPx: 0,
+      longLiqPx: 0,
+      shortLiqPx: 0,
+      longDistToLiqPx: double.nan,
+      shortDistToLiqPx: double.nan,
       totalUpl: 0,
       refMarkPx: null,
     );
@@ -489,6 +498,16 @@ _PosAgg _aggregateOpenPosSnapshots(List<OpenPositionsSnapshotRow> rows) {
   var sq = 0.0;
   var lNotional = 0.0;
   var sNotional = 0.0;
+  var lLiqN = 0.0;
+  var lLiqW = 0.0;
+  var sLiqN = 0.0;
+  var sLiqW = 0.0;
+  /// 多：逐合约 Σ(张×(现价−强平价)) / Σ张（仅含该合约多头且 liq>0 的腿）
+  var lDistN = 0.0;
+  var lDistW = 0.0;
+  /// 空：逐合约 Σ(张×(强平价−现价)) / Σ张（仅含空头且 liq>0）
+  var sDistN = 0.0;
+  var sDistW = 0.0;
   var uplSum = 0.0;
   double? refPx;
   for (final r in batch) {
@@ -496,8 +515,24 @@ _PosAgg _aggregateOpenPosSnapshots(List<OpenPositionsSnapshotRow> rows) {
     sq += r.shortPosSize;
     lNotional += r.longPosSize * r.longAvgPx;
     sNotional += r.shortPosSize * r.shortAvgPx;
-    uplSum += r.totalUpl;
     final px = r.lastPx > 0 ? r.lastPx : r.markPx;
+    if (r.longPosSize > 1e-12 && r.longLiqPx > 0) {
+      lLiqN += r.longPosSize * r.longLiqPx;
+      lLiqW += r.longPosSize;
+    }
+    if (r.shortPosSize > 1e-12 && r.shortLiqPx > 0) {
+      sLiqN += r.shortPosSize * r.shortLiqPx;
+      sLiqW += r.shortPosSize;
+    }
+    if (r.longPosSize > 1e-12 && px > 0 && r.longLiqPx > 0) {
+      lDistN += r.longPosSize * (px - r.longLiqPx);
+      lDistW += r.longPosSize;
+    }
+    if (r.shortPosSize > 1e-12 && px > 0 && r.shortLiqPx > 0) {
+      sDistN += r.shortPosSize * (r.shortLiqPx - px);
+      sDistW += r.shortPosSize;
+    }
+    uplSum += r.totalUpl;
     if (px > 0) {
       final prev = refPx;
       refPx = prev == null ? px : math.max(prev, px);
@@ -508,6 +543,10 @@ _PosAgg _aggregateOpenPosSnapshots(List<OpenPositionsSnapshotRow> rows) {
     shortQty: sq,
     longAvgPx: lq > 1e-12 ? lNotional / lq : 0,
     shortAvgPx: sq > 1e-12 ? sNotional / sq : 0,
+    longLiqPx: lLiqW > 1e-12 ? lLiqN / lLiqW : 0,
+    shortLiqPx: sLiqW > 1e-12 ? sLiqN / sLiqW : 0,
+    longDistToLiqPx: lDistW > 1e-12 ? lDistN / lDistW : double.nan,
+    shortDistToLiqPx: sDistW > 1e-12 ? sDistN / sDistW : double.nan,
     totalUpl: uplSum,
     refMarkPx: refPx,
   );
@@ -519,6 +558,10 @@ class _PosAgg {
     required this.shortQty,
     required this.longAvgPx,
     required this.shortAvgPx,
+    required this.longLiqPx,
+    required this.shortLiqPx,
+    required this.longDistToLiqPx,
+    required this.shortDistToLiqPx,
     required this.totalUpl,
     this.refMarkPx,
   });
@@ -527,6 +570,12 @@ class _PosAgg {
   final double shortQty;
   final double longAvgPx;
   final double shortAvgPx;
+  final double longLiqPx;
+  final double shortLiqPx;
+  /// 逐合约加权：多头侧 (现价−强平价) 的张数加权平均（仅含返回了 liq 的合约）
+  final double longDistToLiqPx;
+  /// 逐合约加权：空头侧 (强平价−现价) 的张数加权平均
+  final double shortDistToLiqPx;
   final double totalUpl;
   final double? refMarkPx;
 
@@ -579,49 +628,95 @@ class _ColumnData {
     return (g * 1e9).round().toString();
   }
 
+  /// 相对强平的价差（×1e9 取整），可正可负
+  String _fmtSignedDist1e9(double v) {
+    if (!v.isFinite) return '—';
+    return (v * 1e9).round().toString();
+  }
+
+  TextStyle? _valueStyleForDist(TextStyle? base, double v) {
+    if (!v.isFinite) return base;
+    if (v < 0) return base?.copyWith(color: AppFinanceStyle.textLoss);
+    if (v > 0) return base?.copyWith(color: AppFinanceStyle.textProfit);
+    return base;
+  }
+
   String get _floatRow =>
       agg == null ? '—' : formatUiSignedUsdt2(agg!.totalUpl);
 }
 
-class _ComparisonGrid extends StatelessWidget {
+enum _PerfSection { longSide, shortSide, net, liq, account, month }
+
+/// 表格内一行指标：文案、取值、是否加粗、左右列分组底色
+typedef _MetricRowSpec = ({
+  String label,
+  String Function(_ColumnData c) value,
+  bool bold,
+  Color labelFill,
+  Color dataFill,
+  /// 非空时用该样式替代数值默认 baseStyle（如强平距离红/绿）
+  TextStyle? Function(_ColumnData c)? valueStyle,
+});
+
+class _ComparisonGrid extends StatefulWidget {
   const _ComparisonGrid({
     required this.dateCompact,
     required this.refPrice,
     required this.columns,
-    required this.year,
     required this.month,
   });
 
   final String dateCompact;
   final double? refPrice;
   final List<_ColumnData> columns;
-  final int year;
   final int month;
 
+  @override
+  State<_ComparisonGrid> createState() => _ComparisonGridState();
+}
+
+class _ComparisonGridState extends State<_ComparisonGrid> {
   static const Color _gridColor = AppFinanceStyle.webDataGridLine;
-  /// 左侧指标列底色
   static const Color _labelColumnBg = AppFinanceStyle.webDataTableLabelBg;
-  /// 右侧账号数据区底色
   static const Color _accountColumnBg = AppFinanceStyle.webDataTableCellBg;
   static const double _labelW = 168.0;
   static const double _minDataColW = 72.0;
 
+  static const Color _longTintL = Color.fromRGBO(2, 125, 32, 0.16);
+  static const Color _longTintD = Color.fromRGBO(2, 125, 32, 0.07);
+  static const Color _shortTintL = Color.fromRGBO(188, 74, 101, 0.16);
+  static const Color _shortTintD = Color.fromRGBO(188, 74, 101, 0.07);
+  static const Color _netTintL = Color.fromRGBO(96, 165, 250, 0.12);
+  static const Color _netTintD = Color.fromRGBO(96, 165, 250, 0.06);
+  static const Color _liqTintL = Color.fromRGBO(251, 191, 36, 0.14);
+  static const Color _liqTintD = Color.fromRGBO(251, 191, 36, 0.07);
+  static const Color _accTintL = Color.fromRGBO(148, 163, 184, 0.11);
+  static const Color _accTintD = Color.fromRGBO(148, 163, 184, 0.05);
+  static const Color _monthTintL = Color.fromRGBO(167, 139, 250, 0.12);
+  static const Color _monthTintD = Color.fromRGBO(167, 139, 250, 0.06);
+
+  final Map<_PerfSection, bool> _open = {
+    for (final k in _PerfSection.values) k: true,
+  };
+
   @override
   Widget build(BuildContext context) {
+    final columns = widget.columns;
+    final month = widget.month;
+
     final baseStyle = Theme.of(context).textTheme.bodyMedium?.copyWith(
       fontSize: 14,
       color: AppFinanceStyle.valueColor,
       height: 1.35,
     );
-    // 左侧「指标」列：粗体、右对齐、字号比数据格再大一号
     final metricLabelStyle = baseStyle?.copyWith(
       color: AppFinanceStyle.labelColor,
       fontWeight: FontWeight.w700,
       fontSize: 15,
     );
 
-    final priceText = refPrice != null && refPrice! > 0
-        ? (refPrice! * 1e9).round().toString()
+    final priceText = widget.refPrice != null && widget.refPrice! > 0
+        ? (widget.refPrice! * 1e9).round().toString()
         : '—';
 
     final n = columns.length;
@@ -629,71 +724,227 @@ class _ComparisonGrid extends StatelessWidget {
       return Text('无列', style: AppFinanceStyle.labelTextStyle(context));
     }
 
-    final metricSpecs =
-        <({String label, String Function(_ColumnData c) value, bool bold})>[
-          (
-            label: '多-数量',
-            value: (c) => c.agg == null ? '—' : c._fmtQty(c.agg!.longQty),
-            bold: false,
-          ),
-          (
-            label: '多-成本',
-            value: (c) => c.agg == null ? '—' : c._fmtCostLine1e9(c.agg!.longAvgPx),
-            bold: false,
-          ),
-          (
-            label: '空-数量',
-            value: (c) => c.agg == null ? '—' : c._fmtQty(c.agg!.shortQty),
-            bold: false,
-          ),
-          (
-            label: '空-成本',
-            value: (c) => c.agg == null ? '—' : c._fmtCostLine1e9(c.agg!.shortAvgPx),
-            bold: false,
-          ),
-          (
-            label: '数量差',
-            value: (c) => c.agg == null ? '—' : c._fmtGap(c.agg!.qtyGap),
-            bold: false,
-          ),
-          (
-            label: '成本差',
-            value: (c) =>
-                c._fmtCostGap1e9(c.agg?.costGap ?? double.nan),
-            bold: false,
-          ),
-          (
-            label: '资产余额',
-            value: (c) => formatUiIntegerOpt(
-              c.profit?.cashBalance ?? c.profit?.balanceUsdt,
-            ),
-            bold: false,
-          ),
-          (label: '浮动盈亏', value: (c) => c._floatRow, bold: false),
-          (
-            label: '权益金额',
-            value: (c) => formatUiIntegerOpt(c.profit?.equityUsdt),
-            bold: false,
-          ),
-          (
-            label: '成交次数($month月)',
-            value: (c) => c.monthCloseCount.toString(),
-            bold: false,
-          ),
-          (
-            label: '成交金额-($month月)',
-            value: (c) => formatUiSignedUsdt2(c.monthPnl),
-            bold: false,
-          ),
-          (
-            label: '收益率-($month月)',
-            value: (c) => formatUiPercentLabel(c.monthReturnPct),
-            bold: true,
-          ),
-        ];
+    List<_MetricRowSpec> rowsLong() => [
+      (
+        label: '多仓-数量',
+        value: (c) => c.agg == null ? '—' : c._fmtQty(c.agg!.longQty),
+        bold: false,
+        labelFill: _longTintL,
+        dataFill: _longTintD,
+        valueStyle: null,
+      ),
+      (
+        label: '多仓-成本',
+        value: (c) =>
+            c.agg == null ? '—' : c._fmtCostLine1e9(c.agg!.longAvgPx),
+        bold: false,
+        labelFill: _longTintL,
+        dataFill: _longTintD,
+        valueStyle: null,
+      ),
+    ];
+
+    List<_MetricRowSpec> rowsShort() => [
+      (
+        label: '空仓-数量',
+        value: (c) => c.agg == null ? '—' : c._fmtQty(c.agg!.shortQty),
+        bold: false,
+        labelFill: _shortTintL,
+        dataFill: _shortTintD,
+        valueStyle: null,
+      ),
+      (
+        label: '空仓-成本',
+        value: (c) =>
+            c.agg == null ? '—' : c._fmtCostLine1e9(c.agg!.shortAvgPx),
+        bold: false,
+        labelFill: _shortTintL,
+        dataFill: _shortTintD,
+        valueStyle: null,
+      ),
+    ];
+
+    List<_MetricRowSpec> rowsNet() => [
+      (
+        label: '多空量差',
+        value: (c) => c.agg == null ? '—' : c._fmtGap(c.agg!.qtyGap),
+        bold: false,
+        labelFill: _netTintL,
+        dataFill: _netTintD,
+        valueStyle: null,
+      ),
+      (
+        label: '多空价差',
+        value: (c) => c._fmtCostGap1e9(c.agg?.costGap ?? double.nan),
+        bold: false,
+        labelFill: _netTintL,
+        dataFill: _netTintD,
+        valueStyle: null,
+      ),
+      (
+        label: '浮动盈亏',
+        value: (c) => c._floatRow,
+        bold: false,
+        labelFill: _netTintL,
+        dataFill: _netTintD,
+        valueStyle: null,
+      ),
+    ];
+
+    List<_MetricRowSpec> rowsLiq() => [
+      (
+        label: '多-预估强平价',
+        value: (c) =>
+            c.agg == null ? '—' : c._fmtCostLine1e9(c.agg!.longLiqPx),
+        bold: false,
+        labelFill: _liqTintL,
+        dataFill: _liqTintD,
+        valueStyle: null,
+      ),
+      (
+        label: '空-预估强平价',
+        value: (c) =>
+            c.agg == null ? '—' : c._fmtCostLine1e9(c.agg!.shortLiqPx),
+        bold: false,
+        labelFill: _liqTintL,
+        dataFill: _liqTintD,
+        valueStyle: null,
+      ),
+      (
+        label: '多-距强平价',
+        value: (c) => c.agg == null
+            ? '—'
+            : c._fmtSignedDist1e9(c.agg!.longDistToLiqPx),
+        bold: false,
+        labelFill: _liqTintL,
+        dataFill: _liqTintD,
+        valueStyle: (c) {
+          final v = c.agg?.longDistToLiqPx ?? double.nan;
+          return c._valueStyleForDist(baseStyle, v);
+        },
+      ),
+      (
+        label: '空-距强平价',
+        value: (c) => c.agg == null
+            ? '—'
+            : c._fmtSignedDist1e9(c.agg!.shortDistToLiqPx),
+        bold: false,
+        labelFill: _liqTintL,
+        dataFill: _liqTintD,
+        valueStyle: (c) {
+          final v = c.agg?.shortDistToLiqPx ?? double.nan;
+          return c._valueStyleForDist(baseStyle, v);
+        },
+      ),
+    ];
+
+    List<_MetricRowSpec> rowsAccount() => [
+      (
+        label: '资产余额',
+        value: (c) => formatUiIntegerOpt(
+          c.profit?.cashBalance ?? c.profit?.balanceUsdt,
+        ),
+        bold: false,
+        labelFill: _accTintL,
+        dataFill: _accTintD,
+        valueStyle: null,
+      ),
+      (
+        label: '权益金额',
+        value: (c) => formatUiIntegerOpt(c.profit?.equityUsdt),
+        bold: false,
+        labelFill: _accTintL,
+        dataFill: _accTintD,
+        valueStyle: null,
+      ),
+    ];
+
+    List<_MetricRowSpec> rowsMonth() => [
+      (
+        label: '成交次数($month月)',
+        value: (c) => c.monthCloseCount.toString(),
+        bold: false,
+        labelFill: _monthTintL,
+        dataFill: _monthTintD,
+        valueStyle: null,
+      ),
+      (
+        label: '成交金额($month月)',
+        value: (c) => formatUiSignedUsdt2(c.monthPnl),
+        bold: false,
+        labelFill: _monthTintL,
+        dataFill: _monthTintD,
+        valueStyle: null,
+      ),
+      (
+        label: '收益率($month月)',
+        value: (c) => formatUiPercentLabel(c.monthReturnPct),
+        bold: true,
+        labelFill: _monthTintL,
+        dataFill: _monthTintD,
+        valueStyle: null,
+      ),
+    ];
+
+    final sections = <(_PerfSection, String, List<_MetricRowSpec>)>[
+      (_PerfSection.longSide, '多仓', rowsLong()),
+      (_PerfSection.shortSide, '空仓', rowsShort()),
+      (_PerfSection.net, '多空 / 盈亏', rowsNet()),
+      (_PerfSection.liq, '强平价与距离', rowsLiq()),
+      (_PerfSection.account, '资产', rowsAccount()),
+      (_PerfSection.month, '$month月 成交与收益', rowsMonth()),
+    ];
 
     Widget gridAtWidth(double tableWidth) {
       final dataBlockWidth = math.max(tableWidth - _labelW, n * _minDataColW);
+
+      List<Widget> sectionBlock(_PerfSection key, String title, List<_MetricRowSpec> metrics) {
+        final expanded = _open[key] ?? true;
+        return [
+          _sectionHeaderRow(
+            title: title,
+            expanded: expanded,
+            dataBlockWidth: dataBlockWidth,
+            metricLabelStyle: metricLabelStyle,
+            baseStyle: baseStyle,
+            onTap: () => setState(() => _open[key] = !expanded),
+          ),
+          if (expanded)
+            ...metrics.map(
+              (spec) => _tableRow(
+                dataBlockWidth: dataBlockWidth,
+                n: n,
+                labelFill: spec.labelFill,
+                defaultDataFill: spec.dataFill,
+                labelChild: Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: Text(
+                      spec.label,
+                      textAlign: TextAlign.right,
+                      style: metricLabelStyle,
+                    ),
+                  ),
+                ),
+                dataChildren: (i) {
+                  final c = columns[i];
+                  final t = spec.value(c);
+                  final vs = spec.valueStyle?.call(c);
+                  return Text(
+                    t,
+                    textAlign: TextAlign.center,
+                    style: spec.bold
+                        ? (vs ?? baseStyle)
+                              ?.copyWith(fontWeight: FontWeight.w800)
+                        : (vs ?? baseStyle),
+                  );
+                },
+              ),
+            ),
+        ];
+      }
+
       return Container(
         width: tableWidth,
         decoration: BoxDecoration(
@@ -718,7 +969,7 @@ class _ComparisonGrid extends StatelessWidget {
                         child: SizedBox(
                           width: double.infinity,
                           child: Text(
-                            dateCompact,
+                            widget.dateCompact,
                             textAlign: TextAlign.right,
                             style: metricLabelStyle?.copyWith(
                               color: AppFinanceStyle.valueColor,
@@ -751,14 +1002,18 @@ class _ComparisonGrid extends StatelessWidget {
             _tableRow(
               dataBlockWidth: dataBlockWidth,
               n: n,
+              labelFill: _labelColumnBg,
+              defaultDataFill: _accountColumnBg,
               labelChild: Padding(
                 padding: const EdgeInsets.all(10),
                 child: SizedBox(
                   width: double.infinity,
-                  child: Text(
-                    '指标',
-                    textAlign: TextAlign.right,
-                    style: metricLabelStyle,
+                  child: Center(
+                    child: Text(
+                      '指标',
+                      textAlign: TextAlign.right,
+                      style: metricLabelStyle,
+                    ),
                   ),
                 ),
               ),
@@ -772,15 +1027,15 @@ class _ComparisonGrid extends StatelessWidget {
                   textAlign: TextAlign.center,
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
-                  style: baseStyle?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
+                  style: baseStyle?.copyWith(fontWeight: FontWeight.w700),
                 ),
               ),
             ),
             _tableRow(
               dataBlockWidth: dataBlockWidth,
               n: n,
+              labelFill: _labelColumnBg,
+              defaultDataFill: _accountColumnBg,
               labelChild: Padding(
                 padding: const EdgeInsets.all(8),
                 child: SizedBox(
@@ -798,34 +1053,7 @@ class _ComparisonGrid extends StatelessWidget {
                 style: baseStyle,
               ),
             ),
-            ...metricSpecs.map(
-              (spec) => _tableRow(
-                dataBlockWidth: dataBlockWidth,
-                n: n,
-                labelChild: Padding(
-                  padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: Text(
-                      spec.label,
-                      textAlign: TextAlign.right,
-                      style: metricLabelStyle,
-                    ),
-                  ),
-                ),
-                dataChildren: (i) {
-                  final c = columns[i];
-                  final t = spec.value(c);
-                  return Text(
-                    t,
-                    textAlign: TextAlign.center,
-                    style: spec.bold
-                        ? baseStyle?.copyWith(fontWeight: FontWeight.w800)
-                        : baseStyle,
-                  );
-                },
-              ),
-            ),
+            for (final s in sections) ...sectionBlock(s.$1, s.$2, s.$3),
           ],
         ),
       );
@@ -848,11 +1076,95 @@ class _ComparisonGrid extends StatelessWidget {
     );
   }
 
+  Widget _sectionHeaderRow({
+    required String title,
+    required bool expanded,
+    required double dataBlockWidth,
+    required TextStyle? metricLabelStyle,
+    required TextStyle? baseStyle,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(
+                width: _labelW,
+                child: _cellBorder(
+                  right: true,
+                  bottom: true,
+                  fillColor: _labelColumnBg,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 8,
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          expanded
+                              ? Icons.expand_more
+                              : Icons.chevron_right,
+                          size: 22,
+                          color: AppFinanceStyle.valueColor,
+                        ),
+                        const SizedBox(width: 2),
+                        Expanded(
+                          child: Text(
+                            title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: metricLabelStyle?.copyWith(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              SizedBox(
+                width: dataBlockWidth,
+                child: _cellBorder(
+                  right: false,
+                  bottom: true,
+                  fillColor: _accountColumnBg.withValues(alpha: 0.35),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Center(
+                      child: Text(
+                        expanded ? '点击收起' : '点击展开',
+                        style: baseStyle?.copyWith(
+                          fontSize: 12,
+                          color: AppFinanceStyle.textDefault.withValues(
+                            alpha: 0.45,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _tableRow({
     required double dataBlockWidth,
     required int n,
     required Widget labelChild,
     required Widget Function(int index) dataChildren,
+    Color? labelFill,
+    Color? defaultDataFill,
   }) {
     return IntrinsicHeight(
       child: Row(
@@ -863,7 +1175,7 @@ class _ComparisonGrid extends StatelessWidget {
             child: _cellBorder(
               right: true,
               bottom: true,
-              fillColor: _labelColumnBg,
+              fillColor: labelFill ?? _labelColumnBg,
               child: labelChild,
             ),
           ),
@@ -876,7 +1188,7 @@ class _ComparisonGrid extends StatelessWidget {
                   child: _cellBorder(
                     right: i < n - 1,
                     bottom: true,
-                    fillColor: _accountColumnBg,
+                    fillColor: defaultDataFill ?? _accountColumnBg,
                     child: Padding(
                       padding: const EdgeInsets.symmetric(
                         vertical: 8,

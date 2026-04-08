@@ -474,6 +474,8 @@ PG_INIT_STATEMENTS: list[str] = [
     open_leg_count INTEGER NOT NULL DEFAULT 0,
     long_avg_px DOUBLE PRECISION NOT NULL DEFAULT 0,
     short_avg_px DOUBLE PRECISION NOT NULL DEFAULT 0,
+    long_liq_px DOUBLE PRECISION NOT NULL DEFAULT 0,
+    short_liq_px DOUBLE PRECISION NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
 )""",
     "CREATE INDEX IF NOT EXISTS idx_aops_account_at ON account_open_positions_snapshots(account_id, snapshot_at)",

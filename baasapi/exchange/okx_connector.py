@@ -431,6 +431,7 @@ class ExchangeManager:
                     "mark_price": float(p.get("mark_px", 0)),
                     "unrealized_pnl": float(p.get("upl", 0)),
                     "leverage": 1,
+                    "liq_price": float(p.get("liq_px") or 0),
                 }
                 for p in (positions or [])
             ]

@@ -56,8 +56,8 @@ class TestDownloadApk:
         assert r.status_code == 404
 
     def test_download_apk_exists(self, client):
-        # 若项目中有 apk/禾正量化-release.apk 则 200
-        r = client.get("/download/apk/禾正量化-release.apk")
+        # 若项目中有 apk/hztech-app-release.apk 则 200
+        r = client.get("/download/apk/hztech-app-release.apk")
         if r.status_code == 200:
             # APK 可能是 application/vnd.android.package-archive 或 octet-stream
             assert r.content_type and (

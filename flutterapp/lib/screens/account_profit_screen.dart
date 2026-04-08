@@ -145,6 +145,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
   Future<void> _load() async {
     if (!mounted) return;
     final g = ++_loadGeneration;
+    _accountSwitchGeneration++;
     setState(() {
       _loading = true;
       _detailLoading = false;
@@ -353,6 +354,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
   }
 
   Future<void> _loadForBot(String botId) async {
+    _loadGeneration++;
     _disconnectOkxPublicTicker();
     final g = ++_accountSwitchGeneration;
     setState(() {

@@ -50,6 +50,8 @@ def test_aggregate_open_positions_by_inst_long_short():
                 "upl": 1.0,
                 "mark_px": 100.0,
                 "last_px": 101.0,
+                "avg_px": 99.0,
+                "liq_px": 90.0,
             },
             {
                 "inst_id": "BTC-USDT-SWAP",
@@ -58,6 +60,8 @@ def test_aggregate_open_positions_by_inst_long_short():
                 "upl": -0.5,
                 "mark_px": 100.0,
                 "last_px": 101.0,
+                "avg_px": 102.0,
+                "liq_px": 110.0,
             },
         ]
     )
@@ -69,3 +73,5 @@ def test_aggregate_open_positions_by_inst_long_short():
     assert abs(g["long_upl"] - 1.0) < 1e-9
     assert abs(g["short_upl"] - (-0.5)) < 1e-9
     assert g.get("open_leg_count") == 2
+    assert abs(g.get("long_liq_px", 0) - 90.0) < 1e-9
+    assert abs(g.get("short_liq_px", 0) - 110.0) < 1e-9

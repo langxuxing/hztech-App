@@ -9,7 +9,7 @@ positions / profit-history / ticker / pending-orders 等通过本模块解析密
 定时任务由 main 每 5 分钟调用，写入 SQLite：
 - account_balance_snapshots：cash_balance=USDT 资产余额(cashBal)，available_margin=可用保证金(availEq)，used_margin=占用；equity_usdt=权益
 - （已弃用 tradingbots.json；盈亏快照以 account_balance_snapshots 为准）
-- OKX 当前持仓（每合约一行：多/空各计一条仓位腿 open_leg_count，张数与分项/合计未实现盈亏）→ account_open_positions_snapshots
+- OKX 当前持仓（每合约一行：多/空各计一条仓位腿 open_leg_count，张数与分项/合计未实现盈亏，多/空加权预估强平价 liqPx）→ account_open_positions_snapshots
 - 定时余额写入后：按账户节流（默认至多每小时）检测近 92 日 UTC 是否缺日，若有则调 OKX bills-archive（USDT bal）补全 account_balance_snapshots；权益按最近快照 equity/可用保证金 比例估算；补全插入后重算相关账户的 account_daily_performance
 - 多时点快照经 strategy_efficiency.daily_cash_delta_by_utc_day 汇总为 UTC 自然日现金增量，再算现金收益率%、策略能效
 - OKX 历史仓位 → account_positions_history（SWAP+FUTURES 合并去重，深分页；自库内最大 uTime 起向前重叠 60s 增量拉取；
@@ -931,22 +931,33 @@ def aggregate_open_positions_by_inst(positions: list[dict]) -> list[dict]:
                 "short_upl": 0.0,
                 "long_cost_notional": 0.0,
                 "short_cost_notional": 0.0,
+                "long_liq_notional": 0.0,
+                "short_liq_notional": 0.0,
+                "long_liq_weight": 0.0,
+                "short_liq_weight": 0.0,
                 "mark_px": 0.0,
                 "last_px": 0.0,
             }
         g = by_inst[inst]
         abs_pos = abs(pos)
         avg_px = float(p.get("avg_px") or 0)
+        liq_px = float(p.get("liq_px") or 0)
         if side == "long":
             g["long_pos_size"] += abs_pos
             g["long_upl"] += upl
             if avg_px > 0 and abs_pos > _OPEN_LEG_EPS:
                 g["long_cost_notional"] += abs_pos * avg_px
+            if liq_px > 0 and abs_pos > _OPEN_LEG_EPS:
+                g["long_liq_notional"] += abs_pos * liq_px
+                g["long_liq_weight"] += abs_pos
         else:
             g["short_pos_size"] += abs_pos
             g["short_upl"] += upl
             if avg_px > 0 and abs_pos > _OPEN_LEG_EPS:
                 g["short_cost_notional"] += abs_pos * avg_px
+            if liq_px > 0 and abs_pos > _OPEN_LEG_EPS:
+                g["short_liq_notional"] += abs_pos * liq_px
+                g["short_liq_weight"] += abs_pos
         if mark_px > 0:
             g["mark_px"] = mark_px
         if last_px > 0:
@@ -958,8 +969,14 @@ def aggregate_open_positions_by_inst(positions: list[dict]) -> list[dict]:
         sp = float(g["short_pos_size"])
         lc = float(g.get("long_cost_notional") or 0)
         sc = float(g.get("short_cost_notional") or 0)
+        llw = float(g.get("long_liq_weight") or 0)
+        slw = float(g.get("short_liq_weight") or 0)
+        lln = float(g.get("long_liq_notional") or 0)
+        sln = float(g.get("short_liq_notional") or 0)
         g["long_avg_px"] = lc / lp if lp > _OPEN_LEG_EPS else 0.0
         g["short_avg_px"] = sc / sp if sp > _OPEN_LEG_EPS else 0.0
+        g["long_liq_px"] = lln / llw if llw > _OPEN_LEG_EPS else 0.0
+        g["short_liq_px"] = sln / slw if slw > _OPEN_LEG_EPS else 0.0
         g["open_leg_count"] = (1 if lp > _OPEN_LEG_EPS else 0) + (
             1 if sp > _OPEN_LEG_EPS else 0
         )

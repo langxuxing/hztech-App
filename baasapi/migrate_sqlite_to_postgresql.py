@@ -245,10 +245,17 @@ def main() -> int:
         sq.close()
         return 0
 
+    # 与 db_backend 一致：从 database_config.json 补全 DATABASE_URL / POSTGRES_*（环境变量优先）
+    if str(BAASAPI_DIR) not in sys.path:
+        sys.path.insert(0, str(BAASAPI_DIR))
+    os.chdir(PROJECT_ROOT)
+    import db_backend  # noqa: F401 — 副作用：加载 database_config.json
+
     if not args.database_url and not (os.environ.get("DATABASE_URL") or "").strip():
         if not (os.environ.get("POSTGRES_HOST") or os.environ.get("POSTGRES_USER")):
             print(
-                "错误: 请设置 DATABASE_URL 或 POSTGRES_*（或 --database-url）",
+                "错误: 请设置 DATABASE_URL 或 POSTGRES_*（或 --database-url），"
+                "或在 baasapi/database_config.json 中配置 postgres_* / database_url",
                 file=sys.stderr,
             )
             return 2
@@ -315,6 +322,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.path.insert(0, str(BAASAPI_DIR))
+    if str(BAASAPI_DIR) not in sys.path:
+        sys.path.insert(0, str(BAASAPI_DIR))
     os.chdir(PROJECT_ROOT)
     raise SystemExit(main())

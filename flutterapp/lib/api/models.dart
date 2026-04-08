@@ -591,7 +591,7 @@ class StrategyDailyEfficiencyResponse {
   }
 }
 
-/// OKX 持仓（数量、持仓成本 avgPx、当前价 markPx/lastPx、动态盈亏 upl）
+/// OKX 持仓（数量、持仓成本 avgPx、当前价 markPx/lastPx、动态盈亏 upl、预估强平价 liqPx）
 class OkxPosition {
   final String instId;
   final double pos;
@@ -603,6 +603,9 @@ class OkxPosition {
   final double? lastPx;
   final double upl;
 
+  /// OKX `liqPx`，无则 0
+  final double liqPx;
+
   OkxPosition({
     required this.instId,
     required this.pos,
@@ -611,6 +614,7 @@ class OkxPosition {
     required this.markPx,
     this.lastPx,
     required this.upl,
+    this.liqPx = 0,
   });
 
   double get displayPrice => lastPx ?? markPx;
@@ -626,6 +630,7 @@ class OkxPosition {
       markPx: markPx,
       lastPx: lastPx,
       upl: (json['upl'] as num?)?.toDouble() ?? 0,
+      liqPx: (json['liq_px'] as num?)?.toDouble() ?? 0,
     );
   }
 }
@@ -682,6 +687,8 @@ class OpenPositionsSnapshotRow {
     required this.totalUpl,
     required this.longAvgPx,
     required this.shortAvgPx,
+    this.longLiqPx = 0,
+    this.shortLiqPx = 0,
   });
 
   final String instId;
@@ -697,6 +704,10 @@ class OpenPositionsSnapshotRow {
   final double longAvgPx;
   /// 该合约空头加权成本
   final double shortAvgPx;
+  /// 多头侧 OKX liqPx 按张数加权
+  final double longLiqPx;
+  /// 空头侧 OKX liqPx 按张数加权
+  final double shortLiqPx;
 
   factory OpenPositionsSnapshotRow.fromJson(Map<String, dynamic> json) {
     return OpenPositionsSnapshotRow(
@@ -711,6 +722,8 @@ class OpenPositionsSnapshotRow {
       totalUpl: (json['total_upl'] as num?)?.toDouble() ?? 0,
       longAvgPx: (json['long_avg_px'] as num?)?.toDouble() ?? 0,
       shortAvgPx: (json['short_avg_px'] as num?)?.toDouble() ?? 0,
+      longLiqPx: (json['long_liq_px'] as num?)?.toDouble() ?? 0,
+      shortLiqPx: (json['short_liq_px'] as num?)?.toDouble() ?? 0,
     );
   }
 }

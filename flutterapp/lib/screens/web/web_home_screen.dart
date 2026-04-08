@@ -8,6 +8,10 @@ class WebHomeScreen extends StatelessWidget {
 
   static const String _bgAsset = 'images/lorenz_butterfly.jpg';
 
+  /// 与 [images/lorenz_butterfly.jpg] 像素尺寸一致，用于按比例缩放，避免 cover 裁切。
+  static const double _imageWidthPx = 1000;
+  static const double _imageHeightPx = 800;
+
   @override
   Widget build(BuildContext context) {
     return ColoredBox(
@@ -15,12 +19,20 @@ class WebHomeScreen extends StatelessWidget {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          Positioned.fill(
-            child: Image.asset(
-              _bgAsset,
-              fit: BoxFit.cover,
+          Center(
+            child: FittedBox(
+              fit: BoxFit.contain,
               alignment: Alignment.center,
-              filterQuality: FilterQuality.medium,
+              child: SizedBox(
+                width: _imageWidthPx,
+                height: _imageHeightPx,
+                child: Image.asset(
+                  _bgAsset,
+                  fit: BoxFit.cover,
+                  alignment: Alignment.center,
+                  filterQuality: FilterQuality.medium,
+                ),
+              ),
             ),
           ),
           SafeArea(

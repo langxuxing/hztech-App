@@ -104,7 +104,7 @@ class _WebMainShellState extends State<WebMainShell> {
         ),
       if (_role.canViewAccountPerformanceComparison)
         _NavItem(
-          title: '绩效对比表',
+          title: '绩效赛马',
           icon: Icons.table_chart_outlined,
           selectedIcon: Icons.table_chart,
           page: WebAccountPerformanceScreen(
@@ -164,8 +164,9 @@ class _WebMainShellState extends State<WebMainShell> {
           embedInShell: true,
           onLogout: widget.onLogout,
           appUserRole: _role,
-          onOpenUserManagement:
-              _role.canManageUsers ? _openUserManagementFromSettings : null,
+          onOpenUserManagement: _role.canManageUsers
+              ? _openUserManagementFromSettings
+              : null,
         ),
       ),
     ];
@@ -318,10 +319,9 @@ class _WebMainShellState extends State<WebMainShell> {
           appBar: AppBar(
             title: Text(
               '账户配置',
-              style: AppFinanceStyle.labelTextStyle(ctx).copyWith(
-                color: AppFinanceStyle.valueColor,
-                fontSize: 18,
-              ),
+              style: AppFinanceStyle.labelTextStyle(
+                ctx,
+              ).copyWith(color: AppFinanceStyle.valueColor, fontSize: 18),
             ),
             backgroundColor: AppFinanceStyle.backgroundDark,
             foregroundColor: AppFinanceStyle.valueColor,
@@ -360,14 +360,8 @@ class _WebMainShellState extends State<WebMainShell> {
               }
             },
             itemBuilder: (ctx) => const [
-              PopupMenuItem(
-                value: 'okx',
-                child: Text('账户配置（OKX）'),
-              ),
-              PopupMenuItem(
-                value: 'logout',
-                child: Text('退出登录'),
-              ),
+              PopupMenuItem(value: 'okx', child: Text('账户配置（OKX）')),
+              PopupMenuItem(value: 'logout', child: Text('退出登录')),
             ],
           ),
         ],

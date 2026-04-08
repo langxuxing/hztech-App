@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 本地一站式：pip requirements → 构建 Flutter（移动 + Web）→ 本地 init_db → 启动 run_local.sh
+# 本地一站式：pip requirements → Flutter 仅打 debug APK（apk/hztech-app-debug.apk）+ Web →（可选 init_db）→ 启动 run_local.sh
 #
 # 目录约定：运维脚本在项目根；Python 在 baasapi/（与 deploy2AWS、server_mgr 一致）。
 #
@@ -10,9 +10,13 @@
 # 环境变量：
 #   HZTECH_SKIP_PIP_INSTALL=1   跳过本地 pip install -r baasapi/requirements.txt
 #   HZTECH_SKIP_MOBILE_BUILD=1  跳过 APK/IPA 构建
-#   HZTECH_SKIP_IOS_BUILD=1     移动端构建时默认跳过 iOS 构建（仅构建 APK）
+#   HZTECH_SKIP_IOS_BUILD=1     保留兼容；本地移动端仅 build-debug（无 IPA）
 #   HZTECH_SKIP_WEB_BUILD=1      跳过 flutter build web
-#   HZTECH_SKIP_DB_SYNC=1       跳过本地 init_db
+#   数据库迁移（init_db）：默认不执行；仅当以下任一成立时执行：
+#     · 命令行: --db / --db-sync / --init-db / -db
+#     · HZTECH_DB_SYNC=1（或 true/yes）
+#     · HZTECH_SKIP_DB_SYNC=0（显式要求同步，兼容旧脚本）
+#   HZTECH_SKIP_DB_SYNC=1       强制跳过（若同时传 --db，则以 --db 为准）
 #   HZTECH_SSH_INSTALL_PG_AWS_ALPHA=1  先 SSH 到远端安装 PostgreSQL（默认 Host aws-alpha；对应 BaasAPI 54.66.108.150，见 baasapi/deploy-aws.json）
 #   HZTECH_SSH_PG_TARGET=aws-alpha     上项开启时可覆盖 SSH 目标（主机别名或 user@host，亦可用 ec2-user@54.66.108.150）
 #   HZTECH_PG_USER / HZTECH_PG_PASSWORD / HZTECH_PG_DB / HZTECH_PG_SCHEMA  远端库账号（默认 hztech / Alpha / hztech / flutterapp）
@@ -29,6 +33,45 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR"
 cd "$PROJECT_ROOT"
+
+# 默认不执行 init_db；见文件头「数据库迁移」说明
+_DB_SYNC_FLAG=0
+_argv=()
+for _a in "$@"; do
+  case "$_a" in
+  --db | --db-sync | --init-db | -db)
+    _DB_SYNC_FLAG=1
+    ;;
+  *)
+    _argv+=("$_a")
+    ;;
+  esac
+done
+# set -u：空数组时 "${_argv[@]}" 在部分 bash（如 macOS 3.2）会报 unbound variable
+if [[ ${#_argv[@]} -gt 0 ]]; then
+  set -- "${_argv[@]}"
+else
+  set --
+fi
+unset _a _argv
+
+_run_db_sync=0
+if [[ "$_DB_SYNC_FLAG" -eq 1 ]]; then
+  _run_db_sync=1
+elif [[ "${HZTECH_SKIP_DB_SYNC:-}" == "0" ]]; then
+  _run_db_sync=1
+else
+  _sk=$(printf '%s' "${HZTECH_SKIP_DB_SYNC:-}" | tr '[:upper:]' '[:lower:]')
+  if [[ "$_sk" == "1" || "$_sk" == "true" || "$_sk" == "yes" ]]; then
+    _run_db_sync=0
+  else
+    _ds=$(printf '%s' "${HZTECH_DB_SYNC:-}" | tr '[:upper:]' '[:lower:]')
+    if [[ "$_ds" == "1" || "$_ds" == "true" || "$_ds" == "yes" ]]; then
+      _run_db_sync=1
+    fi
+  fi
+fi
+unset _DB_SYNC_FLAG _sk _ds
 
 _ssh_pg=$(printf '%s' "${HZTECH_SSH_INSTALL_PG_AWS_ALPHA:-}" | tr '[:upper:]' '[:lower:]')
 if [[ "$_ssh_pg" == "1" || "$_ssh_pg" == "true" || "$_ssh_pg" == "yes" ]]; then
@@ -64,6 +107,8 @@ unset _DB_JSON _DB_SQLITE_TMPL
 export HZTECH_API_BASE_URL="${HZTECH_API_BASE_URL:-http://192.168.3.41:9001/}"
 export FLUTTER_DART_DEFINE_FILE="${FLUTTER_DART_DEFINE_FILE:-flutterapp/dart_defines/local.json}"
 export HZTECH_SKIP_IOS_BUILD="${HZTECH_SKIP_IOS_BUILD:-1}"
+# 与 server_mgr build-debug 产物一致；/api/app-version 与下载页默认指向 debug APK
+export HZTECH_APP_ANDROID_APK="${HZTECH_APP_ANDROID_APK:-hztech-app-debug.apk}"
 
 echo "=============================================="
 echo "  本地部署: Flutter 构建 -> 启动本地服务"
@@ -94,10 +139,9 @@ if [[ "$_skmb" == "1" || "$_skmb" == "true" || "$_skmb" == "yes" ]]; then
   echo "=== 2/5 跳过 Flutter 移动端（HZTECH_SKIP_MOBILE_BUILD）==="
 else
   echo ""
-  echo "=== 2/5 构建 Flutter 移动端（release APK + macOS 上 IPA）==="
-  python3 "$PROJECT_ROOT/baasapi/server_mgr.py" build
-  echo "  APK: $PROJECT_ROOT/apk/"
-  echo "  IPA: $PROJECT_ROOT/ipa/"
+  echo "=== 2/5 构建 Flutter 移动端（debug APK → apk/hztech-app-debug.apk）==="
+  python3 "$PROJECT_ROOT/baasapi/server_mgr.py" build-debug
+  echo "  APK: $PROJECT_ROOT/apk/hztech-app-debug.apk"
 fi
 
 if [[ "${HZTECH_SKIP_WEB_BUILD:-0}" == "1" ]]; then
@@ -116,15 +160,16 @@ else
   fi
 fi
 
-if [[ "${HZTECH_SKIP_DB_SYNC:-0}" != "1" ]]; then
+if [[ "$_run_db_sync" -eq 1 ]]; then
   echo ""
   echo "=== 4/5 同步本地数据库（用户迁移）==="
   python3 -c "from baasapi.db import init_db; init_db()"
   echo "  数据库已就绪"
 else
   echo ""
-  echo "=== 4/5 跳过本地 DB（HZTECH_SKIP_DB_SYNC=1）==="
+  echo "=== 4/5 跳过本地 DB（默认不迁移；需要时请传 --db 或 HZTECH_DB_SYNC=1）==="
 fi
+unset _run_db_sync
 
 echo ""
 echo "=== 5/5 启动服务 (端口与访问方式见 baasapi/run_local.sh 输出) ==="
