@@ -716,7 +716,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   double _equityPctLineDenominator() {
     final a = _selectedAccount;
     if (a == null) return 0;
-    final m = a.monthOpenEquity;
+    final m = a.monthInitialEquity;
     if (m != null && m > 1e-12) return m;
     return a.initialBalance;
   }
@@ -1006,26 +1006,57 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
               surfaceTintColor: Colors.transparent,
             ),
       body: WaterBackground(
-        child: RefreshIndicator(
-          onRefresh: _load,
-          child: _loading && _accounts.isEmpty
-              ? const Center(child: CircularProgressIndicator())
-              : _error != null && _accounts.isEmpty && !_detailLoading
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        _error!,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: AppFinanceStyle.textDefault),
-                      ),
-                      const SizedBox(height: 16),
-                      FilledButton(onPressed: _load, child: const Text('重试')),
-                    ],
-                  ),
-                )
-              : _buildBodyScrollable(),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            // RefreshIndicator 需要可滚动子组件；Web 上纯 Center 常得到 0 高度，只剩水纹底图。
+            // Stack 子节点理论上给有界 maxHeight；非有限时回退到视口高度，避免 minHeight 无效或断言。
+            final rawH = constraints.maxHeight;
+            final minH = (rawH.isFinite && rawH > 0)
+                ? rawH
+                : MediaQuery.sizeOf(context).height;
+            Widget scrollableChild(Widget child) {
+              return SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: minH),
+                  child: child,
+                ),
+              );
+            }
+
+            return RefreshIndicator(
+              onRefresh: _load,
+              child: _loading && _accounts.isEmpty
+                  ? scrollableChild(
+                      const Center(child: CircularProgressIndicator()),
+                    )
+                  : _error != null &&
+                          _accounts.isEmpty &&
+                          !_detailLoading
+                      ? scrollableChild(
+                          Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  _error!,
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: AppFinanceStyle.textDefault,
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                                FilledButton(
+                                  onPressed: _load,
+                                  child: const Text('重试'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        )
+                      : _buildBodyScrollable(),
+            );
+          },
         ),
       ),
     );

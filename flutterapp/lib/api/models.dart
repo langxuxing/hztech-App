@@ -138,9 +138,9 @@ class AccountProfit {
   final double equityUsdt;
   final double balanceUsdt;
   final String? snapshotTime;
-  /// UTC 自然月月初权益（account_month_open）
-  final double? monthOpenEquity;
-  /// UTC 自然月月初 USDT 资产余额（account_month_open.initial_balance，OKX cashBal）
+  /// UTC 自然月月初权益（与库 account_month_balance_baseline.initial_equity 一致）
+  final double? monthInitialEquity;
+  /// UTC 自然月月初 USDT 资产余额（与库 initial_balance / OKX cashBal 一致）
   final double? monthInitialBalance;
 
   /// USDT 资产余额（OKX cashBal），与可用保证金不同
@@ -166,7 +166,7 @@ class AccountProfit {
     double? balanceUsdt,
     this.snapshotTime,
     String? botId,
-    this.monthOpenEquity,
+    this.monthInitialEquity,
     this.monthInitialBalance,
     this.cashBalance,
     this.availableMargin,
@@ -181,17 +181,20 @@ class AccountProfit {
       exchangeAccount: json['exchange_account'] as String? ?? '',
       initialBalance: (json['initial_balance'] as num?)?.toDouble() ?? 0,
       currentBalance: (json['current_balance'] as num?)?.toDouble() ?? 0,
-      profitAmount: (json['profit_amount'] as num?)?.toDouble() ?? 0,
-      profitPercent: (json['profit_percent'] as num?)?.toDouble() ?? 0,
+      profitAmount: (json['equity_profit_amount'] as num?)?.toDouble() ??
+          (json['profit_amount'] as num?)?.toDouble() ??
+          0,
+      profitPercent: (json['equity_profit_percent'] as num?)?.toDouble() ??
+          (json['profit_percent'] as num?)?.toDouble() ??
+          0,
       cashProfitAmount: (json['cash_profit_amount'] as num?)?.toDouble() ?? 0,
       cashProfitPercent: (json['cash_profit_percent'] as num?)?.toDouble() ?? 0,
       floatingProfit: (json['floating_profit'] as num?)?.toDouble() ?? 0,
       equityUsdt: (json['equity_usdt'] as num?)?.toDouble() ?? 0,
       balanceUsdt: (json['balance_usdt'] as num?)?.toDouble(),
       snapshotTime: json['snapshot_time'] as String?,
-      monthOpenEquity: (json['month_open_equity'] as num?)?.toDouble(),
-      monthInitialBalance: (json['month_initial_balance'] as num?)?.toDouble() ??
-          (json['month_open_cash'] as num?)?.toDouble(),
+      monthInitialEquity: (json['month_initial_equity'] as num?)?.toDouble(),
+      monthInitialBalance: (json['month_initial_balance'] as num?)?.toDouble(),
       cashBalance: (json['cash_balance'] as num?)?.toDouble(),
       availableMargin: (json['available_margin'] as num?)?.toDouble(),
       usedMargin: (json['used_margin'] as num?)?.toDouble(),
@@ -329,8 +332,12 @@ class BotProfitSnapshot {
       initialBalance: (json['initial_balance'] as num?)?.toDouble() ?? 0,
       currentBalance: (json['current_balance'] as num?)?.toDouble() ?? 0,
       equityUsdt: (json['equity_usdt'] as num?)?.toDouble() ?? 0,
-      profitAmount: (json['profit_amount'] as num?)?.toDouble() ?? 0,
-      profitPercent: (json['profit_percent'] as num?)?.toDouble() ?? 0,
+      profitAmount: (json['equity_profit_amount'] as num?)?.toDouble() ??
+          (json['profit_amount'] as num?)?.toDouble() ??
+          0,
+      profitPercent: (json['equity_profit_percent'] as num?)?.toDouble() ??
+          (json['profit_percent'] as num?)?.toDouble() ??
+          0,
       cashProfitAmount: (json['cash_profit_amount'] as num?)?.toDouble() ?? 0,
       cashProfitPercent: (json['cash_profit_percent'] as num?)?.toDouble() ?? 0,
       createdAt: json['created_at'] as String?,

@@ -863,32 +863,60 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
         surfaceTintColor: Colors.transparent,
       ),
       body: WaterBackground(
-        child: RefreshIndicator(
-          onRefresh: _load,
-          child: _loading && _accounts.isEmpty
-              ? const Center(child: CircularProgressIndicator())
-              : _error != null && _accounts.isEmpty && !_detailLoading
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          _error!,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: AppFinanceStyle.textDefault),
-                        ),
-                        const SizedBox(height: 16),
-                        FilledButton(
-                          onPressed: _load,
-                          child: const Text('重试'),
-                        ),
-                      ],
-                    ),
-                  ),
-                )
-              : _buildBodyScrollable(),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final rawH = constraints.maxHeight;
+            final minH = (rawH.isFinite && rawH > 0)
+                ? rawH
+                : MediaQuery.sizeOf(context).height;
+            Widget scrollableChild(Widget child) {
+              return SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: minH),
+                  child: child,
+                ),
+              );
+            }
+
+            return RefreshIndicator(
+              onRefresh: _load,
+              child: _loading && _accounts.isEmpty
+                  ? scrollableChild(
+                      const Center(child: CircularProgressIndicator()),
+                    )
+                  : _error != null &&
+                          _accounts.isEmpty &&
+                          !_detailLoading
+                      ? scrollableChild(
+                          Center(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 24,
+                              ),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text(
+                                    _error!,
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      color: AppFinanceStyle.textDefault,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 16),
+                                  FilledButton(
+                                    onPressed: _load,
+                                    child: const Text('重试'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        )
+                      : _buildBodyScrollable(),
+            );
+          },
         ),
       ),
     );

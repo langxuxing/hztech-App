@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 为 Account_List 中的 OKX 账户写入模拟数据（account_list、account_balance_snapshots、
-account_month_open）。
+account_month_balance_baseline）。
 
 默认：仅当该账户在 account_balance_snapshots 中尚无任何记录时写入。
 时间：自 2026-01-01（UTC）起至「今天」每日一条快照。
@@ -115,7 +115,7 @@ def seed_one_account(
         conn.execute(
             """INSERT INTO account_balance_snapshots
                (account_id, snapshot_at, cash_balance, available_margin, used_margin, equity_usdt,
-                profit_amount, profit_percent, cash_profit_amount, cash_profit_percent)
+                equity_profit_amount, equity_profit_percent, cash_profit_amount, cash_profit_percent)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 account_id,
@@ -137,8 +137,8 @@ def seed_one_account(
 
     for ym, (open_eq, open_cash, rec_at) in sorted(month_first.items()):
         conn.execute(
-            """INSERT OR REPLACE INTO account_month_open
-               (account_id, year_month, open_equity, open_cash, recorded_at)
+            """INSERT OR REPLACE INTO account_month_balance_baseline
+               (account_id, year_month, initial_equity, initial_balance, recorded_at)
                VALUES (?, ?, ?, ?, ?)""",
             (account_id, ym, open_eq, open_cash, rec_at),
         )
@@ -233,7 +233,7 @@ def main() -> int:
                     (aid,),
                 )
                 conn.execute(
-                    "DELETE FROM account_month_open WHERE account_id = ?",
+                    "DELETE FROM account_month_balance_baseline WHERE account_id = ?",
                     (aid,),
                 )
 

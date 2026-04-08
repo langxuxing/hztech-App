@@ -48,7 +48,7 @@ def test_daily_performance_rebuild_equity_and_efficiency():
         0.2,
     )
     db.account_positions_history_insert_batch(aid, [row], ts)
-    db.account_month_open_upsert(
+    db.account_month_balance_baseline_upsert(
         aid,
         "2026-04",
         4000.0,
@@ -88,7 +88,7 @@ def test_daily_performance_rebuild_equity_and_efficiency():
 
 
 def test_daily_performance_sparse_snapshot_chain_pct_differs_from_snapshot_pct():
-    """链式分母随上一日链末滚动；pnl_pct 分母为当月 account_month_open 口径（initial_balance 优先）。"""
+    """链式分母随上一日链末滚动；pnl_pct 分母为当月 account_month_balance_baseline 口径（initial_balance 优先）。"""
     aid = "acct-perf-chain-2"
     ts1 = "2026-04-05T12:00:00.000000Z"
     ts2 = "2026-04-06T12:00:00.000000Z"
@@ -161,7 +161,7 @@ def test_daily_performance_sparse_snapshot_chain_pct_differs_from_snapshot_pct()
     )
     db.account_positions_history_insert_batch(aid, [row1], ts1)
     db.account_positions_history_insert_batch(aid, [row2], ts2)
-    db.account_month_open_upsert(
+    db.account_month_balance_baseline_upsert(
         aid,
         "2026-04",
         4000.0,

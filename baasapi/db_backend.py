@@ -418,18 +418,18 @@ PG_INIT_STATEMENTS: list[str] = [
     available_margin DOUBLE PRECISION NOT NULL DEFAULT 0,
     used_margin DOUBLE PRECISION NOT NULL DEFAULT 0,
     equity_usdt DOUBLE PRECISION NOT NULL DEFAULT 0,
-    profit_amount DOUBLE PRECISION NOT NULL DEFAULT 0,
-    profit_percent DOUBLE PRECISION NOT NULL DEFAULT 0,
+    equity_profit_amount DOUBLE PRECISION NOT NULL DEFAULT 0,
+    equity_profit_percent DOUBLE PRECISION NOT NULL DEFAULT 0,
     cash_profit_amount DOUBLE PRECISION NOT NULL DEFAULT 0,
     cash_profit_percent DOUBLE PRECISION NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
 )""",
     "CREATE INDEX IF NOT EXISTS idx_account_balance_snapshots_account ON account_balance_snapshots(account_id)",
     "CREATE INDEX IF NOT EXISTS idx_account_balance_snapshots_at ON account_balance_snapshots(snapshot_at)",
-    """CREATE TABLE IF NOT EXISTS account_month_open (
+    """CREATE TABLE IF NOT EXISTS account_month_balance_baseline (
     account_id TEXT NOT NULL,
     year_month TEXT NOT NULL,
-    open_equity DOUBLE PRECISION NOT NULL,
+    initial_equity DOUBLE PRECISION NOT NULL,
     initial_balance DOUBLE PRECISION,
     recorded_at TEXT NOT NULL,
     PRIMARY KEY (account_id, year_month)

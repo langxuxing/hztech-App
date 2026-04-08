@@ -594,8 +594,8 @@ class TestAccountProfitApi:
         for acc in data["accounts"]:
             assert "bot_id" in acc
             assert "current_balance" in acc
-            assert "profit_amount" in acc
-            assert "profit_percent" in acc
+            assert "equity_profit_amount" in acc
+            assert "equity_profit_percent" in acc
 
 
 class TestOkxPositionsGlobalApi:

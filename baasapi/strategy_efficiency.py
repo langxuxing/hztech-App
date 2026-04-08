@@ -7,7 +7,7 @@
 字段名 ``tr`` 存的是当日价格区间 |high−low|（非负），与 OKX 日线合并字段一致；**不是**经典 True Range（需昨收），
 也**不是** ATR。经典 ATR(14) 由 ``compute_atr14_wilder_by_day`` 单独从 OHLC 递推（Wilder），供阈值参考。
 
-Account_List 账户的「UTC 自然月月初」资金/权益分母优先用库表 account_month_open（与定时任务一致），无表行时仍可从快照序列推导。
+Account_List 账户的「UTC 自然月月初」资金/权益分母优先用库表 account_month_balance_baseline（与定时任务一致），无表行时仍可从快照序列推导。
 现金日明细优先来自 account_balance_snapshots 的 available_margin（可用保证金；旧行仅误存于 cash_balance）；
 旧版 tradingbots.json 机器人用 tradingbot_profit_snapshots（权益 equity_usdt
 经 normalize_bot_profit_snapshots_for_efficiency 映射为 cash_balance）。对 K 线有、但当日无快照的日期，

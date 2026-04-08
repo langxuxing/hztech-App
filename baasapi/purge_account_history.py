@@ -73,9 +73,9 @@ def purge_account_fully(conn, account_id: str, bot_id: str | None = None) -> dic
         "DELETE FROM account_open_positions_snapshots WHERE account_id = ?",
         (account_id,),
     )
-    counts["account_month_open"] = _exec_count(
+    counts["account_month_balance_baseline"] = _exec_count(
         conn,
-        "DELETE FROM account_month_open WHERE account_id = ?",
+        "DELETE FROM account_month_balance_baseline WHERE account_id = ?",
         (account_id,),
     )
     counts["account_positions_history"] = _exec_count(
@@ -134,9 +134,9 @@ def purge_account_before(
         "DELETE FROM account_open_positions_snapshots WHERE account_id = ? AND snapshot_at < ?",
         (account_id, day_iso),
     )
-    counts["account_month_open"] = _exec_count(
+    counts["account_month_balance_baseline"] = _exec_count(
         conn,
-        "DELETE FROM account_month_open WHERE account_id = ? AND year_month < ?",
+        "DELETE FROM account_month_balance_baseline WHERE account_id = ? AND year_month < ?",
         (account_id, ym_keep),
     )
     ph_sql = (

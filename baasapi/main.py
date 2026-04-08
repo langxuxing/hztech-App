@@ -32,7 +32,7 @@ App 所需 API（与 QtraderApi.kt 一致）：
   GET  /api/tradingbots/{id}/open-positions-snapshots  已入库的当前持仓聚合快照（含多/空预估强平价；按时间倒序；需登录）
   POST /api/tradingbots/{id}/open-positions-snapshot/sync  立即拉取 OKX 当前持仓写入 account_open_positions_snapshots（仅管理员）
   POST /api/admin/balance-snapshots/sync  全量余额快照同步（与定时任务相同；仅管理员）
-  POST /api/admin/balance-snapshots/recompute-profit  按 initial_capital 重算全表 profit_*（权益）与 cash_profit_*（资产余额）（仅管理员）
+  POST /api/admin/balance-snapshots/recompute-profit  按 initial_capital 重算全表 equity_profit_*（权益）与 cash_profit_*（资产余额）（仅管理员）
   POST /api/admin/balance-snapshots/backfill-bills  按 OKX bills-archive 为各启用账户补全缺日 account_balance_snapshots，并在有插入时重算 account_daily_performance（仅管理员）
   GET|POST|PUT|DELETE /api/admin/accounts  Account_List.json + account_list 库表同步（仅管理员）
   POST /api/admin/accounts/{id}/test-connection  测连 OKX + 检查 SWAP/双向持仓/50x 杠杆（仅管理员）；Body 可选 {"auto_configure": true} 在测连成功后调用 OKX 设双向持仓/全仓/多空杠杆后复测
@@ -131,9 +131,9 @@ _ACCOUNT_SYNC_INTERVAL_SEC = max(30, min(_ACCOUNT_SYNC_INTERVAL_SEC, 86400))
 # 账户同步定时任务只启动一次，避免开发模式下重复 import / 重复注册导致同一周期跑两遍、日志交错
 _account_snapshot_timer_started = False
 _account_snapshot_timer_lock = threading.Lock()
-_month_open_timer_started = False
-_month_open_timer_lock = threading.Lock()
-_month_open_last_run_ym: str | None = None
+_month_balance_baseline_timer_started = False
+_month_balance_baseline_timer_lock = threading.Lock()
+_month_balance_baseline_last_run_ym: str | None = None
 
 # gunicorn 等多 worker 时仅一个进程启动后台定时器；持有锁的进程须保持文件打开直至退出
 _BACKGROUND_SCHEDULER_LEADER_LOCK_FP: object | None = None
@@ -726,29 +726,31 @@ def _start_account_snapshot_timer() -> None:
     t.start()
 
 
-def _start_account_month_open_timer() -> None:
-    """UTC 每月 1 日 00:10 前后写入 account_month_open；每分钟检查，同一自然月只跑一次。"""
-    global _month_open_timer_started
-    with _month_open_timer_lock:
-        if _month_open_timer_started:
+def _start_account_month_balance_baseline_timer() -> None:
+    """UTC 每月 1 日 00:10 前后写入 account_month_balance_baseline；每分钟检查，同一自然月只跑一次。"""
+    global _month_balance_baseline_timer_started
+    with _month_balance_baseline_timer_lock:
+        if _month_balance_baseline_timer_started:
             return
-        _month_open_timer_started = True
+        _month_balance_baseline_timer_started = True
 
     def _loop() -> None:
-        global _month_open_last_run_ym
+        global _month_balance_baseline_last_run_ym
         time.sleep(45)
         while True:
             try:
                 now = datetime.now(timezone.utc)
                 if now.day == 1 and now.hour == 0 and 10 <= now.minute <= 15:
                     ym = now.strftime("%Y-%m")
-                    if _month_open_last_run_ym != ym:
-                        _account_mgr.run_account_month_open_rollover(_db, app.logger)
-                        _month_open_last_run_ym = ym
+                    if _month_balance_baseline_last_run_ym != ym:
+                        _account_mgr.run_account_month_balance_baseline_rollover(
+                            _db, app.logger
+                        )
+                        _month_balance_baseline_last_run_ym = ym
             except Exception as e:
                 _db.log_insert(
                     "WARN",
-                    "account_month_open_timer_error",
+                    "account_month_balance_baseline_timer_error",
                     source="timer",
                     extra={"error": str(e)},
                 )
@@ -758,25 +760,27 @@ def _start_account_month_open_timer() -> None:
     t.start()
 
 
-def _bootstrap_account_month_open_if_needed_on_startup() -> None:
-    """启动后延迟执行：若当月 account_month_open 对任一可拉取余额的启用账户缺失，则补写一次。"""
-    global _month_open_last_run_ym
+def _bootstrap_account_month_balance_baseline_if_needed_on_startup() -> None:
+    """启动后延迟执行：若当月 account_month_balance_baseline 对任一可拉取余额的启用账户缺失，则补写一次。"""
+    global _month_balance_baseline_last_run_ym
 
     time.sleep(8)
     try:
-        if not _account_mgr.account_month_open_missing_current_month(_db):
+        if not _account_mgr.account_month_balance_baseline_missing_current_month(
+            _db
+        ):
             return
         ym = datetime.now(timezone.utc).strftime("%Y-%m")
         app.logger.info(
-            "account_month_open：当月 %s 数据缺失，启动后补写一次",
+            "account_month_balance_baseline：当月 %s 数据缺失，启动后补写一次",
             ym,
         )
-        _account_mgr.run_account_month_open_rollover(_db, app.logger)
-        _month_open_last_run_ym = ym
+        _account_mgr.run_account_month_balance_baseline_rollover(_db, app.logger)
+        _month_balance_baseline_last_run_ym = ym
     except Exception as e:
         _db.log_insert(
             "WARN",
-            "account_month_open_bootstrap_failed",
+            "account_month_balance_baseline_bootstrap_failed",
             source="timer",
             extra={"error": str(e)},
         )
@@ -1114,7 +1118,7 @@ def _collect_accounts_profit() -> list[dict]:
 @app.route("/api/account-profit", methods=["GET"])
 @require_auth
 def api_account_profit():
-    """账户盈亏：OKX 拉取权益、USDT 资产余额(cashBal→balance_usdt)、可用保证金与占用；浮亏 upl；profit_* 为权益相对期初；cash_profit_* 为资产余额相对期初；快照供曲线。"""
+    """账户盈亏：OKX 拉取权益、USDT 资产余额(cashBal→balance_usdt)、可用保证金与占用；浮亏 upl；equity_profit_* 为权益相对期初；cash_profit_* 为资产余额相对期初；快照供曲线。"""
     accounts = _filter_accounts_for_user(_collect_accounts_profit())
     return jsonify(
         {
@@ -1412,8 +1416,8 @@ def api_bot_profit_history(bot_id):
                 "available_margin": r["available_margin"],
                 "used_margin": r["used_margin"],
                 "equity_usdt": r["equity_usdt"],
-                "profit_amount": r["profit_amount"],
-                "profit_percent": r["profit_percent"],
+                "equity_profit_amount": r["equity_profit_amount"],
+                "equity_profit_percent": r["equity_profit_percent"],
                 "cash_profit_amount": r.get("cash_profit_amount", 0),
                 "cash_profit_percent": r.get("cash_profit_percent", 0),
                 "created_at": r["created_at"],
@@ -1532,12 +1536,12 @@ def api_strategy_daily_efficiency(bot_id):
             min_ym = min(d[:7] for d in day_strs_e) if day_strs_e else since[:7]
         except (ValueError, TypeError, IndexError):
             min_ym = since[:7]
-        mo_map = _db.account_month_open_list_since(bot_id, min_ym)
+        mo_map = _db.account_month_balance_baseline_list_since(bot_id, min_ym)
         for ym, row in mo_map.items():
             ib = row.get("initial_balance")
             if ib is not None and float(ib) > 0:
                 month_bases[ym] = float(ib)
-            oe = row.get("open_equity")
+            oe = row.get("initial_equity")
             if oe is not None and float(oe) > 0:
                 month_equity_bases[ym] = float(oe)
 
@@ -1572,7 +1576,7 @@ def api_strategy_daily_efficiency(bot_id):
 def api_bot_daily_realized_pnl(bot_id):
     """
     历史平仓按北京时间自然日汇总（u_time_ms=OKX uTime 平仓时刻 → Asia/Shanghai 日历日），并与 account_daily_performance 合并。
-    额外含 equity_change、cash_change、pnl_pct（相对当月 account_month_open.initial_balance%）、
+    额外含 equity_change、cash_change、pnl_pct（相对当月 account_month_balance_baseline.initial_balance%）、
     equity_base_realized_chain、pnl_pct_realized_chain、benchmark_inst_id、market_tr、efficiency_ratio。
     Query: year=2026&month=4
     """
@@ -1794,7 +1798,7 @@ def api_bot_position_history_sync(bot_id):
 def api_bot_balance_snapshot_sync(bot_id):
     """
     仅管理员：从 OKX 拉取权益、USDT 资产余额(cashBal)、可用保证金、占用并入库。
-    Account_List 账户 → account_balance_snapshots（profit_* = 权益 − account_list.initial_capital）。
+    Account_List 账户 → account_balance_snapshots（equity_profit_* = 权益 − account_list.initial_capital）。
     策略效能接口按 UTC 日汇总这些快照计算日现金增量、现金收益率%、策略能效。
     """
     denied = _require_admin()
@@ -1894,7 +1898,7 @@ def api_admin_balance_snapshots_sync():
 @app.route("/api/admin/balance-snapshots/recompute-profit", methods=["POST"])
 @require_auth
 def api_admin_balance_snapshots_recompute_profit():
-    """仅管理员：按当前 account_list.initial_capital 重算 profit_*（权益）与 cash_profit_*（资产余额）。"""
+    """仅管理员：按当前 account_list.initial_capital 重算 equity_profit_*（权益）与 cash_profit_*（资产余额）。"""
     denied = _require_admin()
     if denied:
         return denied
@@ -1915,7 +1919,7 @@ def api_admin_balance_snapshots_recompute_profit():
     return jsonify(
         {
             "success": True,
-            "message": f"已更新 {n} 条快照行的 profit_amount / profit_percent",
+            "message": f"已更新 {n} 条快照行的 equity_profit_amount / equity_profit_percent",
             "rows_updated": n,
         }
     )
@@ -2474,10 +2478,10 @@ if _BACKGROUND_SCHEDULERS_ENABLED:
             os.getppid(),
         )
         _start_account_snapshot_timer()
-        _start_account_month_open_timer()
+        _start_account_month_balance_baseline_timer()
         threading.Thread(
-            target=_bootstrap_account_month_open_if_needed_on_startup,
-            name="account_month_open_bootstrap",
+            target=_bootstrap_account_month_balance_baseline_if_needed_on_startup,
+            name="account_month_balance_baseline_bootstrap",
             daemon=True,
         ).start()
         _kline_web_sync.start_kline_nightly_scheduler(app.logger, PROJECT_ROOT)

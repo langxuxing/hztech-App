@@ -17,16 +17,16 @@ CREATE TABLE IF NOT EXISTS account_balance_snapshots (
     snapshot_at TEXT NOT NULL,
     cash_balance REAL NOT NULL DEFAULT 0,
     equity_usdt REAL NOT NULL DEFAULT 0,
-    profit_amount REAL NOT NULL DEFAULT 0,
-    profit_percent REAL NOT NULL DEFAULT 0,
+    equity_profit_amount REAL NOT NULL DEFAULT 0,
+    equity_profit_percent REAL NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_account_balance_snapshots_account ON account_balance_snapshots(account_id);
 CREATE INDEX IF NOT EXISTS idx_account_balance_snapshots_at ON account_balance_snapshots(snapshot_at);
-CREATE TABLE IF NOT EXISTS account_month_open (
+CREATE TABLE IF NOT EXISTS account_month_balance_baseline (
     account_id TEXT NOT NULL,
     year_month TEXT NOT NULL,
-    open_equity REAL NOT NULL,
+    initial_equity REAL NOT NULL,
     initial_balance REAL,
     recorded_at TEXT NOT NULL,
     PRIMARY KEY (account_id, year_month)

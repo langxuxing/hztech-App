@@ -7,7 +7,7 @@ BEGIN;
 DELETE FROM account_daily_performance WHERE account_id IN ('simpleserver-lhg', 'simpleserver-hztech');
 DELETE FROM account_balance_snapshots WHERE account_id IN ('simpleserver-lhg', 'simpleserver-hztech');
 DELETE FROM account_open_positions_snapshots WHERE account_id IN ('simpleserver-lhg', 'simpleserver-hztech');
-DELETE FROM account_month_open WHERE account_id IN ('simpleserver-lhg', 'simpleserver-hztech');
+DELETE FROM account_month_balance_baseline WHERE account_id IN ('simpleserver-lhg', 'simpleserver-hztech');
 DELETE FROM account_positions_history WHERE account_id IN ('simpleserver-lhg', 'simpleserver-hztech');
 DELETE FROM account_season WHERE account_id IN ('simpleserver-lhg', 'simpleserver-hztech');
 DELETE FROM tradingbot_mgr WHERE account_id IN ('simpleserver-lhg', 'simpleserver-hztech');

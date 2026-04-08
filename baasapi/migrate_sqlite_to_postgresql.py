@@ -47,6 +47,14 @@ def _pg_table_columns(pg: Any, table: str) -> set[str]:
     return {str(r[0]) for r in cur.fetchall()}
 
 
+def _sqlite_has_table(sq: Any, table: str) -> bool:
+    cur = sq.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (table,),
+    )
+    return cur.fetchone() is not None
+
+
 def _reload_pg_db_modules() -> None:
     for name in list(sys.modules):
         if name == "db_backend" or name == "db" or name.startswith("db."):
@@ -81,7 +89,7 @@ _CONFLICT_SPECS: list[tuple[str, str | None]] = [
     ("account_season", None),
     ("tradingbot_mgr", None),
     ("account_balance_snapshots", None),
-    ("account_month_open", "ON CONFLICT (account_id, year_month) DO UPDATE SET open_equity = EXCLUDED.open_equity, initial_balance = EXCLUDED.initial_balance, recorded_at = EXCLUDED.recorded_at"),
+    ("account_month_balance_baseline", "ON CONFLICT (account_id, year_month) DO UPDATE SET initial_equity = EXCLUDED.initial_equity, initial_balance = EXCLUDED.initial_balance, recorded_at = EXCLUDED.recorded_at"),
     ("account_positions_history", "ON CONFLICT (account_id, okx_pos_id, u_time_ms) DO NOTHING"),
     ("account_open_positions_snapshots", None),
     ("account_daily_performance", "ON CONFLICT (account_id, day) DO UPDATE SET net_realized_pnl = EXCLUDED.net_realized_pnl, close_count = EXCLUDED.close_count, equity_change = EXCLUDED.equity_change, cash_change = EXCLUDED.cash_change, pnl_pct = EXCLUDED.pnl_pct, equity_base_realized_chain = EXCLUDED.equity_base_realized_chain, pnl_pct_realized_chain = EXCLUDED.pnl_pct_realized_chain, benchmark_inst_id = EXCLUDED.benchmark_inst_id, market_tr = EXCLUDED.market_tr, efficiency_ratio = EXCLUDED.efficiency_ratio, updated_at = EXCLUDED.updated_at"),
@@ -117,6 +125,7 @@ def _copy_table(
     common_cols: list[str],
     *,
     select_sql: str | None = None,
+    sqlite_table: str | None = None,
 ) -> int:
     if not common_cols:
         return 0
@@ -127,7 +136,8 @@ def _copy_table(
         cols = [c for c in cols if c != "id"]
     if not cols:
         return 0
-    q = select_sql or f'SELECT * FROM "{table}"'
+    src = sqlite_table if sqlite_table is not None else table
+    q = select_sql or f'SELECT * FROM "{src}"'
     rows = sq.execute(q).fetchall()
     if not rows:
         return 0
@@ -276,8 +286,14 @@ def main() -> int:
             _truncate_tables(pg)
         total = 0
         for table, conflict in _CONFLICT_SPECS:
+            sqlite_src = table
+            if table == "account_month_balance_baseline":
+                if _sqlite_has_table(sq, "account_month_balance_baseline"):
+                    sqlite_src = "account_month_balance_baseline"
+                elif _sqlite_has_table(sq, "account_month_open"):
+                    sqlite_src = "account_month_open"
             try:
-                sq_cols = _sqlite_table_columns(sq, table)
+                sq_cols = _sqlite_table_columns(sq, sqlite_src)
             except sqlite3.OperationalError:
                 print(f"跳过（SQLite 无表）: {table}")
                 continue
@@ -290,7 +306,10 @@ def main() -> int:
                 continue
             common = [c for c in sq_cols if c in pg_cols]
             sel_sql: str | None = None
-            if table == "account_month_open":
+            sqlite_for_copy: str | None = (
+                sqlite_src if sqlite_src != table else None
+            )
+            if table == "account_month_balance_baseline":
                 if "open_cash" in common and "initial_balance" in common:
                     common = [c for c in common if c != "open_cash"]
                 elif "open_cash" in sq_cols and "initial_balance" not in sq_cols:
@@ -299,18 +318,48 @@ def main() -> int:
                         for c in [
                             "account_id",
                             "year_month",
-                            "open_equity",
+                            "initial_equity",
                             "initial_balance",
                             "recorded_at",
                         ]
                         if c in pg_cols
                     ]
                     sel_sql = (
-                        "SELECT account_id, year_month, open_equity, "
+                        "SELECT account_id, year_month, open_equity AS initial_equity, "
                         "open_cash AS initial_balance, recorded_at "
-                        'FROM "account_month_open"'
+                        f'FROM "{sqlite_src}"'
                     )
-            n = _copy_table(sq, pg, table, conflict, common, select_sql=sel_sql)
+                elif (
+                    sel_sql is None
+                    and "open_equity" in sq_cols
+                    and "initial_equity" not in sq_cols
+                    and "initial_equity" in pg_cols
+                ):
+                    common = [
+                        c
+                        for c in [
+                            "account_id",
+                            "year_month",
+                            "initial_equity",
+                            "initial_balance",
+                            "recorded_at",
+                        ]
+                        if c in pg_cols
+                    ]
+                    sel_sql = (
+                        "SELECT account_id, year_month, open_equity AS initial_equity, "
+                        "initial_balance, recorded_at "
+                        f'FROM "{sqlite_src}"'
+                    )
+            n = _copy_table(
+                sq,
+                pg,
+                table,
+                conflict,
+                common,
+                select_sql=sel_sql,
+                sqlite_table=sqlite_for_copy,
+            )
             print(f"{table}: 写入 {n} 行（列: {', '.join(common)}）")
             total += n
         _sync_serial_sequences(pg)
