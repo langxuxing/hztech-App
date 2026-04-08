@@ -16,7 +16,6 @@ import time
 from typing import Any
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -48,6 +47,50 @@ _OKX_TS_EXPIRED_MAX = max(1, int(os.environ.get("OKX_TIMESTAMP_EXPIRED_RETRIES",
 # urllib3 默认 pool_maxsize=10，多账户并发易触发 “Connection pool is full”
 _OKX_HTTP_POOL_MAXSIZE = max(10, int(os.environ.get("OKX_HTTP_POOL_MAXSIZE", "48")))
 _OKX_HTTP_POOL_CONNECTIONS = max(5, int(os.environ.get("OKX_HTTP_POOL_CONNECTIONS", "24")))
+# 私有请求遇 SSLError / ConnectionError（含 UNEXPECTED_EOF_WHILE_READING）时每轮重试次数
+_OKX_SSL_RETRY_ATTEMPTS = max(1, int(os.environ.get("OKX_SSL_RETRY_ATTEMPTS", "5")))
+
+
+def _okx_public_base_url() -> str:
+    """公开 REST 根 URL（与账户 base_url 无关）；可通过 OKX_PUBLIC_BASE 指向可达镜像。"""
+    raw = (os.environ.get("OKX_PUBLIC_BASE") or "https://www.okx.com").strip().rstrip("/")
+    return raw or "https://www.okx.com"
+
+
+def _okx_http_connection_headers() -> dict[str, str]:
+    """遇中间设备掐断 keep-alive 时，可设 OKX_HTTP_CLOSE=1 强制每次新连接。"""
+    if os.environ.get("OKX_HTTP_CLOSE", "").strip().lower() in ("1", "true", "yes", "on"):
+        return {"Connection": "close"}
+    return {}
+
+
+def _okx_requests_get_ssl_retries(
+    url: str,
+    *,
+    timeout: float,
+    user_agent: str,
+) -> requests.Response | None:
+    """GET：SSL/连接错误时重试；成功返回 Response（含非 2xx），彻底失败返回 None。"""
+    merged: dict[str, str] = {"User-Agent": user_agent}
+    merged.update(_okx_http_connection_headers())
+    last_err: BaseException | None = None
+    for attempt in range(_OKX_SSL_RETRY_ATTEMPTS):
+        try:
+            return requests.get(url, headers=merged, timeout=timeout)
+        except (requests.exceptions.SSLError, requests.exceptions.ConnectionError) as e:
+            last_err = e
+            if attempt < _OKX_SSL_RETRY_ATTEMPTS - 1:
+                time.sleep(0.35 * (attempt + 1))
+                continue
+    if last_err:
+        logger.debug(
+            "OKX GET SSL/连接失败（已重试 %d 次）: %s -> %s",
+            _OKX_SSL_RETRY_ATTEMPTS,
+            url[:160],
+            last_err,
+        )
+    return None
+
 
 _OKX_SRV_OFF_LOCK = threading.Lock()
 _OKX_SRV_OFF_MS = 0
@@ -72,23 +115,40 @@ def _okx_server_time_offset_ms() -> int:
     with _OKX_SRV_OFF_LOCK:
         if _OKX_SRV_OFF_MONO > 0 and (now_m - _OKX_SRV_OFF_MONO) < _OKX_SRV_OFF_TTL:
             return _OKX_SRV_OFF_MS
-    off = 0
+        prev_off = _OKX_SRV_OFF_MS
+    off = prev_off
+    err_note: str | None = None
     try:
         _okx_public_throttle()
-        t_req = Request(
-            "https://www.okx.com/api/v5/public/time",
-            headers={"User-Agent": "hztech-okx-public/1"},
+        t_url = _okx_public_base_url() + "/api/v5/public/time"
+        t_resp = _okx_requests_get_ssl_retries(
+            t_url, timeout=12.0, user_agent="hztech-okx-public/1"
         )
-        with urlopen(t_req, timeout=12) as t_resp:
-            pdata = json.loads(t_resp.read().decode())
-        if isinstance(pdata, dict) and pdata.get("code") == "0":
-            rows = pdata.get("data") or []
-            if rows and isinstance(rows[0], dict):
-                srv = int(str(rows[0].get("ts") or "0").strip() or "0")
-                if srv > 0:
-                    off = srv - int(time.time() * 1000)
+        if t_resp is None:
+            err_note = "public/time: SSL/连接失败（已重试）"
+        elif t_resp.status_code != 200:
+            err_note = f"public/time: HTTP {t_resp.status_code}"
+        else:
+            pdata: dict | list | None
+            try:
+                raw_json = t_resp.json()
+                pdata = raw_json if isinstance(raw_json, dict) else None
+            except (json.JSONDecodeError, ValueError) as e:
+                err_note = f"public/time: JSON 无效 {e}"
+                pdata = None
+            if err_note is None:
+                if isinstance(pdata, dict) and pdata.get("code") == "0":
+                    rows = pdata.get("data") or []
+                    if rows and isinstance(rows[0], dict):
+                        srv = int(str(rows[0].get("ts") or "0").strip() or "0")
+                        if srv > 0:
+                            off = srv - int(time.time() * 1000)
+                else:
+                    err_note = "public/time: 响应 code!=0 或无 data"
     except Exception as e:
-        logger.debug("OKX /api/v5/public/time 同步失败（沿用旧偏移）: %s", e)
+        err_note = str(e) or "public/time 异常"
+    if err_note:
+        logger.debug("OKX /api/v5/public/time 同步失败（沿用旧偏移）: %s", err_note)
     with _OKX_SRV_OFF_LOCK:
         _OKX_SRV_OFF_MS = off
         _OKX_SRV_OFF_MONO = time.monotonic()
@@ -116,6 +176,17 @@ def _get_okx_private_session() -> requests.Session:
         s.mount("http://", adapter)
         _thread_okx_private_sess.s = s
     return s
+
+
+def _reset_okx_private_session() -> None:
+    """丢弃当前线程的 Session，避免复用已半关闭的 TLS 连接（常见 SSLEOFError）。"""
+    s = getattr(_thread_okx_private_sess, "s", None)
+    if s is not None:
+        try:
+            s.close()
+        except Exception:
+            pass
+        _thread_okx_private_sess.s = None
 
 
 def _okx_resp_is_timestamp_expired(resp: requests.Response) -> bool:
@@ -259,31 +330,18 @@ def okx_public_get(
         path = path_only + "?" + urlencode(params)
     else:
         path = path_only
-    url = "https://www.okx.com" + path
+    url = _okx_public_base_url() + path
     last_http_err: str | None = None
     for attempt in range(_OKX_HTTP429_MAX_ATTEMPTS):
         _okx_public_throttle()
-        try:
-            req = Request(url, headers={"User-Agent": "hztech-okx-public/1"})
-            with urlopen(req, timeout=timeout) as resp:
-                data = json.loads(resp.read().decode())
-                if isinstance(data, dict) and data.get("code") != "0":
-                    return None, _okx_business_error_detail(data)
-                return data, None
-        except HTTPError as e:
-            err_body = ""
-            try:
-                raw = e.fp.read() if getattr(e, "fp", None) else b""
-                err_body = raw.decode("utf-8", errors="replace")[:500]
-            except Exception:
-                err_body = ""
-            ra = None
-            try:
-                if e.headers:
-                    ra = e.headers.get("Retry-After")
-            except Exception:
-                ra = None
-            if e.code == 429 and attempt < _OKX_HTTP429_MAX_ATTEMPTS - 1:
+        r = _okx_requests_get_ssl_retries(
+            url, timeout=timeout, user_agent="hztech-okx-public/1"
+        )
+        if r is None:
+            return None, "OKX public GET: SSL/连接失败（已重试）"
+        if r.status_code == 429:
+            if attempt < _OKX_HTTP429_MAX_ATTEMPTS - 1:
+                ra = r.headers.get("Retry-After")
                 sleep_s = _okx_retry_sleep_seconds(ra, attempt + 1)
                 logger.warning(
                     "OKX public GET 429 %s，%.2fs 后重试 (%d/%d)",
@@ -294,12 +352,23 @@ def okx_public_get(
                 )
                 time.sleep(sleep_s)
                 continue
+            err_body = (r.text or "")[:500]
             _, show_msg = _parse_okx_http_error_body(err_body)
-            last_http_err = show_msg or f"HTTP {e.code}"
+            last_http_err = show_msg or "HTTP 429"
             return None, last_http_err
-        except (URLError, json.JSONDecodeError, OSError) as e:
+        if r.status_code >= 400:
+            err_body = (r.text or "")[:500]
+            _, show_msg = _parse_okx_http_error_body(err_body)
+            last_http_err = show_msg or f"HTTP {r.status_code}"
+            return None, last_http_err
+        try:
+            data = r.json()
+        except (json.JSONDecodeError, ValueError) as e:
             logger.warning("OKX public GET error: %s -> %s", path[:120], e)
-            return None, str(e) or "public request failed"
+            return None, str(e) or "invalid JSON"
+        if isinstance(data, dict) and data.get("code") != "0":
+            return None, _okx_business_error_detail(data)
+        return data, None
     return None, last_http_err or "public request failed"
 
 
@@ -568,7 +637,6 @@ def okx_request(
     url = base + sign_path
     try:
         resp: requests.Response | None = None
-        sess = _get_okx_private_session()
         for attempt_429 in range(_OKX_HTTP429_MAX_ATTEMPTS):
             resp = None
             ts_round = 0
@@ -577,7 +645,7 @@ def okx_request(
                 ts_round += 1
                 last_net_err: BaseException | None = None
                 resp = None
-                for ssl_attempt in range(3):
+                for ssl_attempt in range(_OKX_SSL_RETRY_ATTEMPTS):
                     ts = _okx_sign_timestamp_iso()
                     prehash = ts + m + sign_path + sign_payload
                     sign = base64.b64encode(
@@ -591,9 +659,11 @@ def okx_request(
                         "Content-Type": "application/json",
                         "User-Agent": "python-requests/2.32.5",
                     }
+                    headers.update(_okx_http_connection_headers())
                     if cfg.get("sandbox"):
                         headers["x-simulated-trading"] = "1"
                     try:
+                        sess = _get_okx_private_session()
                         if m == "GET":
                             resp = sess.get(url, headers=headers, timeout=30)
                         elif m == "POST":
@@ -612,7 +682,8 @@ def okx_request(
                         requests.exceptions.ConnectionError,
                     ) as e:
                         last_net_err = e
-                        if ssl_attempt < 2:
+                        _reset_okx_private_session()
+                        if ssl_attempt < _OKX_SSL_RETRY_ATTEMPTS - 1:
                             time.sleep(0.35 * (ssl_attempt + 1))
                             continue
                         logger.warning(

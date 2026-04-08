@@ -1009,17 +1009,32 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
   /// 顶部「运行中」角标与脉冲点（略亮以保证可读）
   static const _greenRun = AppFinanceStyle.textProfit;
 
-  /// 赛季/策略控制区外层 box：底色与空日历格一致；赛季描边 RGB(32,64,21)，策略描边 RGB(72,33,46)。
+  /// 赛季/策略控制区外层 box：与右上角「全部启动/全部停止」同色同透明度（alpha 0.14 / 0.12），胶囊圆角。
   static BoxDecoration get _seasonControlBoxDecoration => BoxDecoration(
-    color: Colors.white.withValues(alpha: 0.04),
-    borderRadius: BorderRadius.circular(8),
-    border: Border.all(color: const Color.fromRGBO(32, 64, 21, 1), width: 1),
+    borderRadius: BorderRadius.circular(999),
+    border: Border.all(
+      color: AppFinanceStyle.textProfit.withValues(alpha: 0.22),
+      width: 1,
+    ),
+    color: AppFinanceStyle.textProfit.withValues(alpha: 0.14),
   );
 
   static BoxDecoration get _strategyControlBoxDecoration => BoxDecoration(
-    color: Colors.white.withValues(alpha: 0.04),
-    borderRadius: BorderRadius.circular(8),
-    border: Border.all(color: const Color.fromRGBO(72, 33, 46, 1), width: 1),
+    borderRadius: BorderRadius.circular(999),
+    border: Border.all(
+      color: AppFinanceStyle.textLoss.withValues(alpha: 0.22),
+      width: 1,
+    ),
+    color: AppFinanceStyle.textLoss.withValues(alpha: 0.12),
+  );
+
+  /// 控制区相对原先尺寸：宽约 80%、纵向由内边距与间距折算约 80%。
+  static const double _controlBoxScale = 0.8;
+  static const EdgeInsets _controlBoxPadding = EdgeInsets.fromLTRB(
+    10,
+    6,
+    10,
+    13,
   );
 
   /// 赛季/策略控制圆钮：与概览区「全部启动/停止」同款——深色实底 + 亮色图标
@@ -1027,8 +1042,8 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
   static const _ctrlStartIcon = AppFinanceStyle.textProfit;
   static const _ctrlStopFill = Color(0xFF3A1F22);
   static const _ctrlStopIcon = AppFinanceStyle.textLoss;
-  static const _ctrlRestartFill = Color(0xFF3A3214);
-  static const _ctrlRestartIcon = Color(0xFFFFD54F);
+  static const _ctrlRestartFill = Color(0xFF2C2A35);
+  static const _ctrlRestartIcon = Color(0xFFB9B5D9);
   static const _durationMuted = Color(0xFF8FA9A5);
 
   late final AnimationController _pulse;
@@ -1308,9 +1323,8 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                 ],
               ),
               const SizedBox(height: 18),
-
-              Text('赛季状态', style: labelStyle), //赛季控制
-              const SizedBox(height: 6),
+              Text('赛季控制', style: labelStyle), //赛季控制
+              const SizedBox(height: 12),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.baseline,
                 textBaseline: TextBaseline.alphabetic,
@@ -1336,60 +1350,53 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
               ),
               const SizedBox(height: 12),
 
-              Container(
-                decoration: _seasonControlBoxDecoration,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(10, 4, 5, 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Align(
-                        alignment: Alignment.topRight,
-                        child: Text(
-                          '赛季控制',
-                          style: Theme.of(context).textTheme.labelMedium
-                              ?.copyWith(
-                                color: AppFinanceStyle.labelColor,
-                                fontWeight: FontWeight.w600,
-                                letterSpacing: 0.2,
-                                fontSize: 12,
-                              ),
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              Align(
+                alignment: Alignment.center,
+                child: FractionallySizedBox(
+                  widthFactor: _controlBoxScale,
+                  child: Container(
+                    decoration: _seasonControlBoxDecoration,
+                    child: Padding(
+                      padding: _controlBoxPadding,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          _CyberCircleIconButton(
-                            size: 38,
-                            iconSize: 20,
-                            isLoading: seasonBusy,
-                            enabled:
-                                canCtl &&
-                                !seasonBusy &&
-                                widget.onSeasonStart != null,
-                            icon: Icons.play_circle_outline,
-                            fillColor: _ctrlStartFill,
-                            iconColor: _ctrlStartIcon,
-                            onTap: widget.onSeasonStart,
-                          ),
-                          _CyberCircleIconButton(
-                            size: 38,
-                            iconSize: 20,
-                            isLoading: seasonBusy,
-                            enabled:
-                                canCtl &&
-                                !seasonBusy &&
-                                widget.hasOpenSeason &&
-                                widget.onSeasonStop != null,
-                            icon: Icons.stop_circle_outlined,
-                            fillColor: _ctrlStopFill,
-                            iconColor: _ctrlStopIcon,
-                            onTap: widget.onSeasonStop,
+                          SizedBox(height: 12 * _controlBoxScale),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                            children: [
+                              _CyberCircleIconButton(
+                                size: 38 * _controlBoxScale,
+                                iconSize: 20 * _controlBoxScale,
+                                isLoading: seasonBusy,
+                                enabled:
+                                    canCtl &&
+                                    !seasonBusy &&
+                                    widget.onSeasonStart != null,
+                                icon: Icons.play_arrow_rounded,
+                                fillColor: _ctrlStartFill,
+                                iconColor: _ctrlStartIcon,
+                                onTap: widget.onSeasonStart,
+                              ),
+                              _CyberCircleIconButton(
+                                size: 38 * _controlBoxScale,
+                                iconSize: 20 * _controlBoxScale,
+                                isLoading: seasonBusy,
+                                enabled:
+                                    canCtl &&
+                                    !seasonBusy &&
+                                    widget.hasOpenSeason &&
+                                    widget.onSeasonStop != null,
+                                icon: Icons.stop_rounded,
+                                fillColor: _ctrlStopFill,
+                                iconColor: _ctrlStopIcon,
+                                onTap: widget.onSeasonStop,
+                              ),
+                            ],
                           ),
                         ],
                       ),
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -1400,10 +1407,9 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                 thickness: 1,
                 color: Colors.white.withValues(alpha: 0.08),
               ),
+              const SizedBox(height: 18),
+              Text('策略控制', style: labelStyle),
               const SizedBox(height: 12),
-
-              Text('策略状态', style: labelStyle),
-              const SizedBox(height: 6),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.baseline,
                 textBaseline: TextBaseline.alphabetic,
@@ -1429,88 +1435,83 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
               ),
 
               const SizedBox(height: 12),
-              Container(
-                decoration: _strategyControlBoxDecoration,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(10, 4, 5, 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Align(
-                        alignment: Alignment.topRight,
-                        child: Text(
-                          '策略控制',
-                          style: Theme.of(context).textTheme.labelMedium
-                              ?.copyWith(
-                                color: AppFinanceStyle.labelColor,
-                                fontWeight: FontWeight.w600,
-                                letterSpacing: 0.2,
-                                fontSize: 12,
+              Align(
+                alignment: Alignment.center,
+                child: FractionallySizedBox(
+                  widthFactor: _controlBoxScale,
+                  child: Container(
+                    decoration: _strategyControlBoxDecoration,
+                    child: Padding(
+                      padding: _controlBoxPadding,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          SizedBox(height: 12 * _controlBoxScale),
+                          if (robotBusy) ...[
+                            SizedBox(height: 8 * _controlBoxScale),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(999),
+                              child: const LinearProgressIndicator(
+                                minHeight: 3,
                               ),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      if (robotBusy) ...[
-                        const SizedBox(height: 8),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(999),
-                          child: const LinearProgressIndicator(minHeight: 3),
-                        ),
-                      ] else if (_running) ...[
-                        const SizedBox(height: 8),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(999),
-                          child: LinearProgressIndicator(
-                            minHeight: 3,
-                            backgroundColor: Colors.white.withValues(
-                              alpha: 0.06,
                             ),
-                            color: AppFinanceStyle.valueColor.withValues(
-                              alpha: 0.45,
-                            ),
-                          ),
-                        ),
-                      ],
-                      const SizedBox(height: 10),
-                      if (canCtl)
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                          children: [
-                            _CyberCircleIconButton(
-                              size: 36,
-                              iconSize: 18,
-                              isLoading: robotBusy,
-                              enabled: !robotBusy && !_running,
-                              icon: Icons.play_circle_outline,
-                              fillColor: _ctrlStartFill,
-                              iconColor: _ctrlStartIcon,
-                              onTap: widget.onStart,
-                            ),
-                            _CyberCircleIconButton(
-                              size: 36,
-                              iconSize: 18,
-                              isLoading: robotBusy,
-                              enabled: !robotBusy && _running,
-                              icon: Icons.stop_circle_outlined,
-                              fillColor: _ctrlStopFill,
-                              iconColor: _ctrlStopIcon,
-                              onTap: widget.onStop,
-                            ),
-                            _CyberCircleIconButton(
-                              size: 36,
-                              iconSize: 18,
-                              isLoading: robotBusy,
-                              enabled: !robotBusy,
-                              icon: Icons.restart_alt_outlined,
-                              fillColor: _ctrlRestartFill,
-                              iconColor: _ctrlRestartIcon,
-                              onTap: widget.onRestart,
+                          ] else if (_running) ...[
+                            SizedBox(height: 8 * _controlBoxScale),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(999),
+                              child: LinearProgressIndicator(
+                                minHeight: 3,
+                                backgroundColor: Colors.white.withValues(
+                                  alpha: 0.06,
+                                ),
+                                color: AppFinanceStyle.valueColor.withValues(
+                                  alpha: 0.45,
+                                ),
+                              ),
                             ),
                           ],
-                        )
-                      else
-                        const SizedBox.shrink(),
-                    ],
+                          SizedBox(height: 14 * _controlBoxScale),
+                          if (canCtl)
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                              children: [
+                                _CyberCircleIconButton(
+                                  size: 36 * _controlBoxScale,
+                                  iconSize: 18 * _controlBoxScale,
+                                  isLoading: robotBusy,
+                                  enabled: !robotBusy && !_running,
+                                  icon: Icons.play_arrow_rounded,
+                                  fillColor: _ctrlStartFill,
+                                  iconColor: _ctrlStartIcon,
+                                  onTap: widget.onStart,
+                                ),
+                                _CyberCircleIconButton(
+                                  size: 36 * _controlBoxScale,
+                                  iconSize: 18 * _controlBoxScale,
+                                  isLoading: robotBusy,
+                                  enabled: !robotBusy && _running,
+                                  icon: Icons.stop_rounded,
+                                  fillColor: _ctrlStopFill,
+                                  iconColor: _ctrlStopIcon,
+                                  onTap: widget.onStop,
+                                ),
+                                _CyberCircleIconButton(
+                                  size: 36 * _controlBoxScale,
+                                  iconSize: 18 * _controlBoxScale,
+                                  isLoading: robotBusy,
+                                  enabled: !robotBusy,
+                                  icon: Icons.refresh_rounded,
+                                  fillColor: _ctrlRestartFill,
+                                  iconColor: _ctrlRestartIcon,
+                                  onTap: widget.onRestart,
+                                ),
+                              ],
+                            )
+                          else
+                            const SizedBox.shrink(),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ),

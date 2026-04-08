@@ -1,20 +1,27 @@
 # -*- coding: utf-8 -*-
 """
-数据库后端选择：SQLite（默认）或 PostgreSQL。
+数据库后端选择：默认 PostgreSQL，或 SQLite。
+
+配置文件（可选）：baasapi/database_config.json
+  - 复制 database_config.example.json 为 database_config.json 后修改
+  - HZTECH_DB_CONFIG=/绝对或相对路径.json 覆盖配置文件路径（相对 baasapi 目录）
+  - 仅当对应环境变量未设置时写入配置（环境变量优先）
 
 环境变量（任选其一组合）：
-- HZTECH_DB_BACKEND=auto|sqlite|postgresql
-  - auto：若设置 DATABASE_URL 且为 postgresql/postgres 开头，或设置了 POSTGRES_HOST / POSTGRES_USER，则用 PostgreSQL；否则 SQLite。
-- DATABASE_URL=postgresql://hztech:Alpha@127.0.0.1:5432/hztech
-- 或分项：POSTGRES_HOST（默认 localhost）、POSTGRES_PORT（5432）、POSTGRES_DB（hztech）、
-  POSTGRES_USER（hztech）、POSTGRES_PASSWORD（Alpha）
+- HZTECH_DB_PROFILE=default|test|…  加载配置里 profiles.<name>（在顶层键之后合并）
+- HZTECH_DB_BACKEND=auto|sqlite|postgresql  未设置时默认为 postgresql
+- auto：若 DATABASE_URL 为 postgresql/postgres 开头，或设置了 POSTGRES_HOST / POSTGRES_USER，则用 PostgreSQL；否则 SQLite
+- DATABASE_URL=postgresql://…
+- 或分项：POSTGRES_HOST、POSTGRES_PORT、POSTGRES_DB、POSTGRES_USER、POSTGRES_PASSWORD
+- HZTECH_POSTGRES_SCHEMA=flutterapp（默认 flutterapp，连接后自动 CREATE SCHEMA 并 SET search_path）
+- HZTECH_SQLITE_DB_PATH=绝对路径 或相对 baasapi 的 sqlite 文件路径（配置项 sqlite_path）
 
 依赖：PostgreSQL 模式需安装 psycopg2-binary。
 """
 from __future__ import annotations
 
+import json
 import os
-import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -23,9 +30,116 @@ try:
 except ImportError:
     psycopg2 = None  # type: ignore[misc, assignment]
 
+# PostgreSQL 模式下不加载 sqlite（EC2 上 pyenv Python 常缺 _sqlite3）；SQLite 模式再加载，与 db.py 相同回退。
+sqlite3: Any = None
+
+
+def _load_sqlite3() -> Any:
+    """导入 sqlite3；无内置 _sqlite3 时使用 pysqlite3（与 baasapi/db.py 一致）。"""
+    global sqlite3
+    if sqlite3 is not None:
+        return sqlite3
+    try:
+        import sqlite3 as _m
+    except ModuleNotFoundError as e:
+        if "_sqlite3" in str(e):
+            import pysqlite3 as _m  # type: ignore[no-redef, misc]
+        else:
+            raise
+    sqlite3 = _m
+    return _m
+
+
 SERVER_DIR = Path(__file__).resolve().parent
-DB_DIR = SERVER_DIR / "sqlite"
-DB_PATH = DB_DIR / "tradingbots.db"
+
+
+def _config_file_path() -> Path | None:
+    raw = (os.environ.get("HZTECH_DB_CONFIG") or "").strip()
+    if raw:
+        p = Path(raw)
+        cand = p if p.is_absolute() else (SERVER_DIR / p)
+        return cand if cand.is_file() else None
+    default = SERVER_DIR / "database_config.json"
+    return default if default.is_file() else None
+
+
+def _setdefault_env(key: str, val: Any) -> None:
+    if val is None:
+        return
+    if isinstance(val, bool):
+        s = "1" if val else "0"
+    elif isinstance(val, int):
+        s = str(val)
+    elif isinstance(val, float):
+        s = str(int(val)) if val == int(val) else str(val)
+    else:
+        s = str(val).strip()
+    if not s:
+        return
+    cur = os.environ.get(key)
+    if cur is None or str(cur).strip() == "":
+        os.environ[key] = s
+
+
+def _apply_db_mapping(mapping: dict[str, Any]) -> None:
+    if mapping.get("backend") is not None:
+        _setdefault_env("HZTECH_DB_BACKEND", mapping["backend"])
+    if mapping.get("database_url") is not None:
+        _setdefault_env("DATABASE_URL", mapping["database_url"])
+    pairs = [
+        ("postgres_host", "POSTGRES_HOST"),
+        ("postgres_port", "POSTGRES_PORT"),
+        ("postgres_db", "POSTGRES_DB"),
+        ("postgres_user", "POSTGRES_USER"),
+        ("postgres_password", "POSTGRES_PASSWORD"),
+        ("postgres_schema", "HZTECH_POSTGRES_SCHEMA"),
+    ]
+    for ck, ek in pairs:
+        if mapping.get(ck) is not None:
+            _setdefault_env(ek, mapping[ck])
+    sp = mapping.get("sqlite_path")
+    if sp:
+        p = Path(str(sp))
+        full = str(p.resolve()) if p.is_absolute() else str((SERVER_DIR / p).resolve())
+        _setdefault_env("HZTECH_SQLITE_DB_PATH", full)
+
+
+def _apply_database_config_file() -> None:
+    path = _config_file_path()
+    if path is None:
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return
+    if not isinstance(data, dict):
+        return
+    base = {k: v for k, v in data.items() if k != "profiles"}
+    _apply_db_mapping(base)
+    profile = (os.environ.get("HZTECH_DB_PROFILE") or "default").strip() or "default"
+    if profile == "default":
+        return
+    profiles = data.get("profiles")
+    if not isinstance(profiles, dict):
+        return
+    section = profiles.get(profile)
+    if isinstance(section, dict):
+        _apply_db_mapping(section)
+
+
+_apply_database_config_file()
+
+
+def _sqlite_db_path() -> Path:
+    raw = (os.environ.get("HZTECH_SQLITE_DB_PATH") or "").strip()
+    if raw:
+        p = Path(raw)
+        return p if p.is_absolute() else (SERVER_DIR / p)
+    return SERVER_DIR / "sqlite" / "tradingbots.db"
+
+
+DB_PATH = _sqlite_db_path()
+DB_DIR = DB_PATH.parent
 
 
 def _auto_backend() -> str:
@@ -40,31 +154,57 @@ def _auto_backend() -> str:
 
 
 def _resolve_backend() -> str:
-    raw = (os.environ.get("HZTECH_DB_BACKEND") or "auto").strip().lower()
+    raw = (os.environ.get("HZTECH_DB_BACKEND") or "postgresql").strip().lower()
     if raw in ("postgres", "postgresql", "pg"):
         return "postgresql"
     if raw == "sqlite":
         return "sqlite"
     if raw == "auto":
         return _auto_backend()
-    return "sqlite"
+    return "postgresql"
 
 
 BACKEND = _resolve_backend()
 IS_POSTGRES = BACKEND == "postgresql"
 
-if psycopg2 is not None:
-    DB_INTEGRITY_ERRORS = (
-        sqlite3.IntegrityError,
-        psycopg2.IntegrityError,
-    )
-    DB_OPERATIONAL_ERRORS = (
-        sqlite3.OperationalError,
-        psycopg2.OperationalError,
-    )
+
+def _resolve_pg_schema() -> str:
+    raw = (os.environ.get("HZTECH_POSTGRES_SCHEMA") or "flutterapp").strip()
+    if not raw:
+        return "flutterapp"
+    first = raw[0]
+    if not (first.isalpha() or first == "_"):
+        return "flutterapp"
+    for ch in raw:
+        if not (ch.isalnum() or ch == "_"):
+            return "flutterapp"
+    return raw
+
+
+PG_SCHEMA = _resolve_pg_schema()
+
+if IS_POSTGRES:
+    if psycopg2 is not None:
+        DB_INTEGRITY_ERRORS = (psycopg2.IntegrityError,)
+        DB_OPERATIONAL_ERRORS = (psycopg2.OperationalError,)
+    else:
+        DB_INTEGRITY_ERRORS = ()
+        DB_OPERATIONAL_ERRORS = ()
 else:
-    DB_INTEGRITY_ERRORS = (sqlite3.IntegrityError,)
-    DB_OPERATIONAL_ERRORS = (sqlite3.OperationalError,)
+    _load_sqlite3()
+    assert sqlite3 is not None
+    if psycopg2 is not None:
+        DB_INTEGRITY_ERRORS = (
+            sqlite3.IntegrityError,
+            psycopg2.IntegrityError,
+        )
+        DB_OPERATIONAL_ERRORS = (
+            sqlite3.OperationalError,
+            psycopg2.OperationalError,
+        )
+    else:
+        DB_INTEGRITY_ERRORS = (sqlite3.IntegrityError,)
+        DB_OPERATIONAL_ERRORS = (sqlite3.OperationalError,)
 
 
 def adapt_sql_pg(sql: str) -> str:
@@ -131,25 +271,37 @@ def _connect_postgresql() -> PgConnectionWrapper:
         )
     url = (os.environ.get("DATABASE_URL") or "").strip()
     if url:
-        return PgConnectionWrapper(psycopg2.connect(url))
+        raw = psycopg2.connect(url)
+        schema_esc = PG_SCHEMA.replace('"', '""')
+        with raw.cursor() as cur:
+            cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema_esc}"')
+            cur.execute(f'SET search_path TO "{schema_esc}", public')
+        raw.commit()
+        return PgConnectionWrapper(raw)
     host = (os.environ.get("POSTGRES_HOST") or "localhost").strip()
     port = int((os.environ.get("POSTGRES_PORT") or "5432").strip())
     dbn = (os.environ.get("POSTGRES_DB") or "hztech").strip()
     user = (os.environ.get("POSTGRES_USER") or "hztech").strip()
     password = (os.environ.get("POSTGRES_PASSWORD") or "Alpha").strip()
-    return PgConnectionWrapper(
-        psycopg2.connect(
-            host=host,
-            port=port,
-            dbname=dbn,
-            user=user,
-            password=password,
-        )
+    raw = psycopg2.connect(
+        host=host,
+        port=port,
+        dbname=dbn,
+        user=user,
+        password=password,
     )
+    schema_esc = PG_SCHEMA.replace('"', '""')
+    with raw.cursor() as cur:
+        cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema_esc}"')
+        cur.execute(f'SET search_path TO "{schema_esc}", public')
+    raw.commit()
+    return PgConnectionWrapper(raw)
 
 
-def _configure_sqlite_connection(conn: sqlite3.Connection) -> None:
+def _configure_sqlite_connection(conn: Any) -> None:
     """降低 Flask 多线程并发读写下「database is locked」概率：WAL + 等待锁。"""
+    _load_sqlite3()
+    assert sqlite3 is not None
     conn.row_factory = sqlite3.Row
     busy_ms = int((os.environ.get("HZTECH_SQLITE_BUSY_TIMEOUT_MS") or "30000").strip())
     if busy_ms < 0:
@@ -163,9 +315,11 @@ def _configure_sqlite_connection(conn: sqlite3.Connection) -> None:
         pass
 
 
-def get_connection() -> sqlite3.Connection | PgConnectionWrapper:
+def get_connection() -> Any:
     if IS_POSTGRES:
         return _connect_postgresql()
+    _load_sqlite3()
+    assert sqlite3 is not None
     DB_DIR.mkdir(parents=True, exist_ok=True)
     timeout_s = float((os.environ.get("HZTECH_SQLITE_TIMEOUT_SEC") or "30").strip())
     if timeout_s <= 0:
@@ -276,7 +430,7 @@ PG_INIT_STATEMENTS: list[str] = [
     account_id TEXT NOT NULL,
     year_month TEXT NOT NULL,
     open_equity DOUBLE PRECISION NOT NULL,
-    open_cash DOUBLE PRECISION,
+    initial_balance DOUBLE PRECISION,
     recorded_at TEXT NOT NULL,
     PRIMARY KEY (account_id, year_month)
 )""",
@@ -363,8 +517,8 @@ def _pg_migrate_bot_profit_tables(conn: PgConnectionWrapper) -> None:
     try:
         def _has(name: str) -> bool:
             r = conn.execute(
-                "SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = %s",
-                (name,),
+                "SELECT 1 FROM pg_tables WHERE schemaname = %s AND tablename = %s",
+                (PG_SCHEMA, name),
             ).fetchone()
             return r is not None
 

@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 
 import '../../api/client.dart';
 import '../../api/models.dart';
+import '../../debug_ingest_log.dart';
 import '../../secure/prefs.dart';
+import '../../utils/network_error_message.dart';
 import '../../services/okx_public_ticker_ws.dart';
 import '../../theme/finance_style.dart';
 import '../../utils/number_display_format.dart';
@@ -109,6 +111,9 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   /// 切换账户时递增，用于丢弃过期的异步结果与日历同步。
   int _accountSwitchGeneration = 0;
 
+  /// 全量 [_load] 并发时递增；阶段二完成时仅当代数仍匹配才收起 [_detailLoading]，避免多次 pull/壳层下发列表导致遮罩卡死。
+  int _loadGeneration = 0;
+
   /// 立即断开 OKX 公共 ticker WS（切换账户须先于新请求调用）。
   void _disconnectOkxPublicTicker() {
     _tickerSub?.cancel();
@@ -198,6 +203,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
 
   Future<void> _load() async {
     if (!mounted) return;
+    final g = ++_loadGeneration;
     setState(() {
       _loading = true;
       _detailLoading = false;
@@ -207,6 +213,24 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
+      if (!mounted || g != _loadGeneration) return;
+      // #region agent log
+      unawaited(
+        debugIngestLog(
+          location: 'web_account_profile_screen.dart:_load',
+          message: 'load_start',
+          hypothesisId: 'H4',
+          data: <String, Object?>{
+            'loadGeneration': g,
+            'loadingBefore': _loading,
+            'detailLoadingBefore': _detailLoading,
+            'sharedBotsCount': widget.sharedBots.length,
+            'initialBotId': widget.initialBotId,
+            'baseUrl': baseUrl,
+          },
+        ),
+      );
+      // #endregion
       final api = ApiClient(baseUrl, token: token);
 
       // 优先 MainScreen 下发的列表；否则本页拉取（与账户管理同源）
@@ -217,9 +241,10 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         final botsResp = await api.getTradingBots();
         bots = _mergeInitialPlaceholder(botsResp.botList);
       }
+      if (!mounted || g != _loadGeneration) return;
       final botId = _pickBotIdForLoad(bots);
 
-      if (!mounted) return;
+      if (!mounted || g != _loadGeneration) return;
       // 阶段一：一有账户列表就结束全屏 loading，下拉框可立即显示
       setState(() {
         _bots = bots;
@@ -227,6 +252,20 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         _loading = false;
         _detailLoading = true;
       });
+      // #region agent log
+      unawaited(
+        debugIngestLog(
+          location: 'web_account_profile_screen.dart:_load',
+          message: 'phase1_bots_ready',
+          hypothesisId: 'H4',
+          data: <String, Object?>{
+            'botsCount': bots.length,
+            'selectedBotId': botId,
+            'fromSharedBots': widget.sharedBots.isNotEmpty,
+          },
+        ),
+      );
+      // #endregion
 
       // 阶段二：收益、历史、持仓、赛季并行（缩短首屏等待）
       try {
@@ -236,7 +275,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
           api.getTradingbotPositions(botId),
           api.getTradingbotSeasons(botId, limit: 50),
         ]);
-        if (!mounted) return;
+        if (!mounted || g != _loadGeneration) return;
         final profitResp = batch[0] as AccountProfitResponse;
         final historyResp = batch[1] as BotProfitHistoryResponse;
         final positionsResp = batch[2] as OkxPositionsResponse;
@@ -255,21 +294,66 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
           _detailLoading = false;
           _switchingAccount = false;
         });
+        // #region agent log
+        unawaited(
+          debugIngestLog(
+            location: 'web_account_profile_screen.dart:_load',
+            message: 'phase2_success',
+            hypothesisId: 'H4',
+            data: <String, Object?>{
+              'accountsCount': _accounts.length,
+              'snapshotsCount': _snapshots.length,
+              'positionsCount': _positions.length,
+              'seasonsCount': _seasons.length,
+              'selectedBotId': _selectedBotId,
+            },
+          ),
+        );
+        // #endregion
         unawaited(_syncDailyPerformanceForCharts());
         _syncOkxTickerSubscription();
       } catch (e) {
+        if (!mounted || g != _loadGeneration) return;
+        // #region agent log
+        unawaited(
+          debugIngestLog(
+            location: 'web_account_profile_screen.dart:_load',
+            message: 'phase2_error',
+            hypothesisId: 'H5',
+            data: <String, Object?>{
+              'errorType': e.runtimeType.toString(),
+              'error': e.toString(),
+              'selectedBotId': _selectedBotId,
+            },
+          ),
+        );
+        // #endregion
         if (mounted) {
           setState(() {
-            _error = '收益/历史/持仓/赛季加载失败: $e';
+            _error = '收益/历史/持仓/赛季加载失败：${friendlyNetworkError(e)}';
             _detailLoading = false;
             _switchingAccount = false;
           });
         }
       }
     } catch (e) {
+      if (!mounted || g != _loadGeneration) return;
+      // #region agent log
+      unawaited(
+        debugIngestLog(
+          location: 'web_account_profile_screen.dart:_load',
+          message: 'load_outer_error',
+          hypothesisId: 'H5',
+          data: <String, Object?>{
+            'errorType': e.runtimeType.toString(),
+            'error': e.toString(),
+          },
+        ),
+      );
+      // #endregion
       if (!mounted) return;
       setState(() {
-        _error = e.toString();
+        _error = friendlyNetworkError(e);
         _loading = false;
         _detailLoading = false;
         _switchingAccount = false;
@@ -330,7 +414,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     } catch (e) {
       if (mounted && g == _accountSwitchGeneration) {
         setState(() {
-          _error = '切换账户后加载失败: $e';
+          _error = '切换账户后加载失败：${friendlyNetworkError(e)}';
           _detailLoading = false;
           _switchingAccount = false;
         });
@@ -848,7 +932,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
           _buildNoDropdownAccountField(),
           const SizedBox(height: 24),
         ],
-        if (_accounts.isEmpty && _error == null)
+        if (_accounts.isEmpty && _error == null && !_detailLoading)
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 24),
             child: Center(
@@ -924,9 +1008,9 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
       body: WaterBackground(
         child: RefreshIndicator(
           onRefresh: _load,
-          child: _loading && _accounts.isEmpty && _effectiveBots.isEmpty
+          child: _loading && _accounts.isEmpty
               ? const Center(child: CircularProgressIndicator())
-              : _error != null && _accounts.isEmpty && _effectiveBots.isEmpty
+              : _error != null && _accounts.isEmpty && !_detailLoading
               ? Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,

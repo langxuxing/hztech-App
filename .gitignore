@@ -4,6 +4,7 @@
 **/okx.json
 src/res/okx.json
 baasapi/accounts/account_api.json
+baasapi/database_config.json
 baasapi/accounts/.bot_run/
 baasapi/sqlite/
 baasapi/data.db

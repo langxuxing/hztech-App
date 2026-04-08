@@ -1,0 +1,13 @@
+{
+  "backend": "postgresql",
+  "database_url": "postgresql://hztech:Alpha@127.0.0.1:5432/hztech",
+  "postgres_schema": "flutterapp",
+  "sqlite_path": "sqlite/tradingbots.db",
+  "profiles": {
+    "test": {
+      "backend": "postgresql",
+      "database_url": "postgresql://hztech:Alpha@127.0.0.1:5432/hztech",
+      "postgres_schema": "flutterapp"
+    }
+  }
+}

@@ -340,61 +340,65 @@ class _WebAccountConfigAdminScreenState
       icon = Icons.help_outline;
       color = AppFinanceStyle.labelColor;
     }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(icon, size: 18, color: color),
-            const SizedBox(width: 6),
-            Expanded(
-              child: Text(
-                '$index',
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: base.copyWith(fontWeight: FontWeight.w600),
+    return Align(
+      alignment: Alignment.topLeft,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon, size: 18, color: color),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  '$index',
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: base.copyWith(fontWeight: FontWeight.w600),
+                ),
               ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 4),
-        Expanded(
-          child: Text(
-            '$label',
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            label,
             maxLines: 3,
             overflow: TextOverflow.ellipsis,
             style: base.copyWith(fontWeight: FontWeight.w600),
           ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          detail,
-          maxLines: 5,
-          overflow: TextOverflow.ellipsis,
-          style: base.copyWith(
-            color: AppFinanceStyle.valueColor,
-            fontSize: 13,
-            height: 1.3,
+          const SizedBox(height: 4),
+          Text(
+            detail,
+            maxLines: 5,
+            overflow: TextOverflow.ellipsis,
+            style: base.copyWith(
+              color: AppFinanceStyle.valueColor,
+              fontSize: 13,
+              height: 1.3,
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 
-  /// 单行 8 列网格；父级较窄时横向滚动。
+  /// 单行 N 列网格（与校验项数量一致）；父级较窄时横向滚动。
   Widget _verificationChecklistGrid(BuildContext context, List<Widget> cells) {
+    final n = cells.length;
+    if (n == 0) return const SizedBox.shrink();
     const minCell = 118.0;
     const crossSpacing = 8.0;
-    const gridHeight = 158.0;
+    const gridHeight = 112.0;
     return LayoutBuilder(
       builder: (context, constraints) {
         final w = constraints.maxWidth;
-        final gridW = math.max(w, minCell * 8);
-        final inner = (gridW - 7 * crossSpacing) / 8;
+        final gridW = math.max(w, minCell * n);
+        final inner = (gridW - (n - 1) * crossSpacing) / n;
         final aspect = inner / gridHeight;
         final grid = GridView.count(
-          crossAxisCount: 8,
+          crossAxisCount: n,
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
           crossAxisSpacing: crossSpacing,
@@ -430,10 +434,6 @@ class _WebAccountConfigAdminScreenState
     }
     final checks = _asStringKeyMap(m['checks']) ?? {};
     bool? chk(String k) => _asBool(checks[k]);
-
-    final ac = _asStringKeyMap(m['account_config']) ?? {};
-    final uid = ac['uid']?.toString().trim() ?? '';
-    final uidOk = uid.isNotEmpty;
 
     final cap = row.initialCapital;
     final capStr = cap != null ? _fmtBalNum(cap) : '—';

@@ -10,8 +10,13 @@
 # 环境变量：
 #   HZTECH_SKIP_PIP_INSTALL=1   跳过本地 pip install -r baasapi/requirements.txt
 #   HZTECH_SKIP_MOBILE_BUILD=1  跳过 APK/IPA 构建
+#   HZTECH_SKIP_IOS_BUILD=1     移动端构建时默认跳过 iOS 构建（仅构建 APK）
 #   HZTECH_SKIP_WEB_BUILD=1      跳过 flutter build web
 #   HZTECH_SKIP_DB_SYNC=1       跳过本地 init_db
+#   HZTECH_SSH_INSTALL_PG_AWS_ALPHA=1  先 SSH 到远端安装 PostgreSQL（默认 Host aws-alpha；对应 BaasAPI 54.66.108.150，见 baasapi/deploy-aws.json）
+#   HZTECH_SSH_PG_TARGET=aws-alpha     上项开启时可覆盖 SSH 目标（主机别名或 user@host，亦可用 ec2-user@54.66.108.150）
+#   HZTECH_PG_USER / HZTECH_PG_PASSWORD / HZTECH_PG_DB / HZTECH_PG_SCHEMA  远端库账号（默认 hztech / Alpha / hztech / flutterapp）
+#   HZTECH_SSH_OPTS                传给 ssh 的额外选项（慎用；一般依赖 ssh config 即可）
 #   HZTECH_LOCAL_API_PORT / HZTECH_LOCAL_WEB_PORT / HZTECH_LOCAL_WEB_STATIC
 #   HZTECH_ACCOUNT_SYNC_INTERVAL_SEC  账户 OKX 定时同步间隔（秒）；未设置时 main.py 默认 300
 #   HZTECH_API_BASE_URL         未设置时默认 http://192.168.3.41:9001/（局域网联调；与 dart_defines/local.json）
@@ -25,6 +30,14 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR"
 cd "$PROJECT_ROOT"
 
+_ssh_pg=$(printf '%s' "${HZTECH_SSH_INSTALL_PG_AWS_ALPHA:-}" | tr '[:upper:]' '[:lower:]')
+if [[ "$_ssh_pg" == "1" || "$_ssh_pg" == "true" || "$_ssh_pg" == "yes" ]]; then
+  echo ""
+  echo "=== （可选）远端 PostgreSQL（HZTECH_SSH_INSTALL_PG_AWS_ALPHA，SSH: ${HZTECH_SSH_PG_TARGET:-aws-alpha}）==="
+  bash "$PROJECT_ROOT/baasapi/install_postgresql_remote.sh" "${HZTECH_SSH_PG_TARGET:-aws-alpha}"
+fi
+unset _ssh_pg
+
 if ! command -v python3 >/dev/null 2>&1; then
   echo "错误: 需要 python3" >&2
   exit 1
@@ -35,8 +48,22 @@ export HZTECH_LOCAL_API_PORT="${HZTECH_LOCAL_API_PORT:-${PORT:-9001}}"
 export HZTECH_LOCAL_WEB_PORT="${HZTECH_LOCAL_WEB_PORT:-9000}"
 export HZTECH_LOCAL_WEB_STATIC="${HZTECH_LOCAL_WEB_STATIC:-1}"
 
+# 数据库：默认 PostgreSQL（可用 HZTECH_DB_BACKEND/HZTECH_DB_CONFIG 覆盖）
+#   - 缺省: HZTECH_DB_BACKEND=postgresql
+#   - 如需 SQLite（仅本地临时调试）:
+#       export HZTECH_DB_BACKEND=sqlite
+#       export HZTECH_DB_CONFIG=baasapi/database_config.local.sqlite.json
+_DB_JSON="$PROJECT_ROOT/baasapi/database_config.json"
+_DB_SQLITE_TMPL="$PROJECT_ROOT/baasapi/database_config.local.sqlite.json"
+export HZTECH_DB_BACKEND="${HZTECH_DB_BACKEND:-postgresql}"
+if [[ "${HZTECH_DB_BACKEND}" == "sqlite" && -z "${HZTECH_DB_CONFIG:-}" && -f "$_DB_SQLITE_TMPL" ]]; then
+  export HZTECH_DB_CONFIG="$_DB_SQLITE_TMPL"
+fi
+unset _DB_JSON _DB_SQLITE_TMPL
+
 export HZTECH_API_BASE_URL="${HZTECH_API_BASE_URL:-http://192.168.3.41:9001/}"
 export FLUTTER_DART_DEFINE_FILE="${FLUTTER_DART_DEFINE_FILE:-flutterapp/dart_defines/local.json}"
+export HZTECH_SKIP_IOS_BUILD="${HZTECH_SKIP_IOS_BUILD:-1}"
 
 echo "=============================================="
 echo "  本地部署: Flutter 构建 -> 启动本地服务"

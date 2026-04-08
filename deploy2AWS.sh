@@ -22,7 +22,7 @@
 #   HZTECH_SKIP_BUILD=1    跳过步骤 1–2（移动端 + Web 构建），直接同步与重启
 #   HZTECH_SKIP_DB_SYNC=1  跳过步骤 4（远程 init_db）
 #   HZTECH_POST_DEPLOY_VERIFY=1  部署结束后 curl 探测 BaasAPI /api/health 与 FlutterApp /
-#   HZTECH_SKIP_IOS_BUILD  仅移动端构建时传给 server_mgr（与原先一致）
+#   HZTECH_SKIP_IOS_BUILD  仅移动端构建时传给 server_mgr（默认 1，跳过 iOS 构建）
 #
 # 依赖：SSH 密钥、Flutter/Android；IPA 需 macOS + Xcode
 set -euo pipefail
@@ -104,6 +104,9 @@ if [ "${HZTECH_API_BASE_URL+x}" = "" ]; then
   export HZTECH_API_BASE_URL="${_D_SCHEME}://${_D_API_HOST}:${_D_API_PORT}/"
 fi
 export FLUTTER_DART_DEFINE_FILE="${FLUTTER_DART_DEFINE_FILE:-flutterapp/dart_defines/production.json}"
+export HZTECH_SKIP_IOS_BUILD="${HZTECH_SKIP_IOS_BUILD:-1}"
+# 数据库默认使用 PostgreSQL；如有特殊需要可在执行前覆盖 HZTECH_DB_BACKEND
+export HZTECH_DB_BACKEND="${HZTECH_DB_BACKEND:-postgresql}"
 
 echo "=============================================="
 echo "  Ops 部署：Flutter 构建 → AWS 同步 → 服务重启"

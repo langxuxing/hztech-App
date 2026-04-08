@@ -5,7 +5,21 @@ from __future__ import annotations
 import db
 
 
+def _clear_aph(aid: str) -> None:
+    """PostgreSQL 等持久化测试库上避免与上次运行残留冲突。"""
+    conn = db.get_conn()
+    try:
+        conn.execute(
+            "DELETE FROM account_positions_history WHERE account_id = ?",
+            (aid,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def test_positions_history_insert_dedup():
+    _clear_aph("acct-a")
     ts = "2026-04-03T12:00:00.000000Z"
     row = {
         "posId": "452587086133239818",
@@ -38,8 +52,9 @@ def test_positions_history_insert_dedup():
 
 
 def test_positions_history_max_u_time_ms():
-    ts = "2026-04-03T12:00:00.000000Z"
     aid = "acct-max-ut"
+    _clear_aph(aid)
+    ts = "2026-04-03T12:00:00.000000Z"
     rows = [
         {
             "posId": "111",

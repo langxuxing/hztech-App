@@ -14,13 +14,15 @@ import '../widgets/water_background.dart';
 /// 科技金融色系：深空蓝、电光青；正文与全局 textDefault 一致
 const Color _deepBlue = Color(0xFF0A1628);
 const Color _electricCyan = Color(0xFF00D4FF);
-const Color _electricPurple = Color(0xFF6366F1);
+
+/// 登录页暗色输入与按钮渐变（参考设计稿：青→天蓝→宝蓝）
+const Color _loginInputFill = Color(0xFF0B1220);
+const Color _loginInputBorder = Color(0xFF334155);
+const Color _loginBtnCyan = Color(0xFF22D3EE);
+const Color _loginBtnBlue = Color(0xFF2563EB);
 
 /// 登录页固定表单宽度
 const double _formWidth = 320;
-
-/// 副标题诗句（保留原文案）
-const String _tagline = '知空守拙，细水长流；顺势扬帆，乘风破浪';
 
 /// 登录页隐藏入口：后端 API 基址预设（与 API 服务端口一致，默认 9001）。
 const List<({String label, String apiBaseUrl})> _kBackendPresets = [
@@ -130,14 +132,14 @@ class _LoginScreenState extends State<LoginScreen> {
         return StatefulBuilder(
           builder: (dialogBodyContext, setDialogState) {
             return AlertDialog(
-              title: const Text('后端 API 地址'),
+              title: const Text('服务器地址'),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
-                      '请选择后端 API 地址（9001 端口）。',
+                      '请选择服务器地址（9001端口）。',
                       style: TextStyle(
                         fontSize: 12,
                         color: AppFinanceStyle.textDefault,
@@ -199,7 +201,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     );
                     final norm = _normalizeBaseUrl(migrated);
                     if (norm.isEmpty) {
-                      _showSnack('请选择有效的 API 地址');
+                      _showSnack('请选择有效的服务器地址');
                       return;
                     }
                     try {
@@ -216,7 +218,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     } else if (dialogContext.mounted) {
                       Navigator.of(dialogContext).pop();
                     }
-                    _showSnack('已保存后端地址');
+                    _showSnack('已保存服务器地址');
                   },
                   child: const Text('保存'),
                 ),
@@ -338,10 +340,11 @@ class _LoginScreenState extends State<LoginScreen> {
   Widget _buildAppTitle() {
     return Column(
       mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         ShaderMask(
-          shaderCallback: (bounds) => const LinearGradient(
-            colors: [Color(0xFF00D4FF), Color(0xFF6366F1)],
+          shaderCallback: (bounds) => LinearGradient(
+            colors: [_electricCyan, _loginBtnBlue],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ).createShader(bounds),
@@ -364,24 +367,29 @@ class _LoginScreenState extends State<LoginScreen> {
     final inputDecoration = InputDecoration(
       labelText: '',
       hintStyle: TextStyle(
-        color: AppFinanceStyle.textDefault.withValues(alpha: 0.7),
+        color: AppFinanceStyle.textDefault.withValues(alpha: 0.65),
         fontStyle: FontStyle.italic,
       ),
       labelStyle: TextStyle(
-        color: AppFinanceStyle.textDefault.withValues(alpha: 0.8),
+        color: AppFinanceStyle.textDefault.withValues(alpha: 0.85),
       ),
       filled: true,
-      fillColor: Colors.white.withValues(alpha: 0.06),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
+      fillColor: _loginInputFill.withValues(alpha: 0.72),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
         borderSide: BorderSide(
-          color: AppFinanceStyle.textDefault.withValues(alpha: 0.3),
+          color: _loginInputBorder.withValues(alpha: 0.85),
+        ),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(14),
+        borderSide: BorderSide(
+          color: _loginInputBorder.withValues(alpha: 0.75),
         ),
       ),
       focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: _electricCyan, width: 2),
+        borderRadius: BorderRadius.circular(14),
+        borderSide: const BorderSide(color: _loginBtnCyan, width: 1.5),
       ),
       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
     );
@@ -389,6 +397,7 @@ class _LoginScreenState extends State<LoginScreen> {
     if (widget.unlockMode) {
       return Scaffold(
         backgroundColor: Colors.black,
+
         appBar: AppBar(
           // 这个部分是配置 AppBar，也就是顶部应用栏的显示内容和样式。
           // title 设置了标题文本 '欢迎使用禾正AI量化交易平台'，显示在顶部中间。
@@ -423,225 +432,277 @@ class _LoginScreenState extends State<LoginScreen> {
       );
     }
 
+    final screenW = MediaQuery.sizeOf(context).width;
+
     return Scaffold(
       backgroundColor: _deepBlue,
       appBar: AppBar(
-        title: _buildAppTitle(),
+        centerTitle: true,
+        automaticallyImplyLeading: false,
+        title: SizedBox(
+          width: double.infinity,
+          child: Center(child: _buildAppTitle()),
+        ),
         backgroundColor: Colors.transparent,
         elevation: 0,
+        scrolledUnderElevation: 0,
         foregroundColor: AppFinanceStyle.textDefault,
       ),
       body: WaterBackground(
-        // 上半区书法图；下半区半透明叠层，透出底层水纹与底色
-        child: Column(
-          children: [
-            // 上半区：知空守拙背景图，向上对齐、80% 不透明，不被登录遮挡
-            SizedBox(
-              height: MediaQuery.sizeOf(context).height * 0.42,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  Align(
-                    alignment: Alignment.topCenter,
-                    child: Opacity(
-                      opacity: 0.8,
-                      child: Image.asset(
-                        'images/zhikong.png',
-                        fit: BoxFit.cover,
-                        width: double.infinity,
-                        height: double.infinity,
-                        alignment: Alignment.topCenter,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final bodyH = constraints.maxHeight;
+            final halfH = bodyH * 0.5;
+            // 书法图宽高比约 1408:452，限制在「上半屏」内不溢出
+            final kongMaxByHeight = halfH * (1408 / 452);
+            final formW = _formWidth.clamp(0.0, screenW - 48);
+            final kongW = kIsWeb
+                ? (screenW * 0.72)
+                      .clamp(760.0, 1120.0)
+                      .toDouble()
+                      .clamp(0.0, kongMaxByHeight)
+                : kongMaxByHeight.clamp(240.0, screenW);
+
+            return Stack(
+              fit: StackFit.expand,
+              clipBehavior: Clip.none,
+              children: [
+                // 上半屏：kong-zhuo 居中（不与下半屏表单重叠）
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  height: halfH,
+                  child: IgnorePointer(
+                    child: Center(
+                      child: ShaderMask(
+                        blendMode: BlendMode.dstIn,
+                        shaderCallback: (Rect bounds) => const LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            Colors.white,
+                            Colors.white,
+                            Colors.transparent,
+                          ],
+                          stops: [0.0, 0.68, 1.0],
+                        ).createShader(bounds),
+                        child: Image.asset(
+                          'images/kong-zhuo.png',
+                          width: kongW,
+                          fit: BoxFit.fitWidth,
+                          alignment: Alignment.topCenter,
+                        ),
                       ),
                     ),
                   ),
-                ],
-              ),
-            ),
-            // 下半区：登录表单，半透明渐变（底部略加深以兼顾页脚可读）
-            Expanded(
-              child: Container(
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [
-                      Color(0x73001a24),
-                      Color(0x85000000),
-                      Color(0xA60A1628),
-                    ],
-                    stops: [0.0, 0.55, 1.0],
-                  ),
                 ),
-                child: SafeArea(
-                  top: false,
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      return Column(
-                        children: [
-                          const SizedBox(height: 20),
-                          Expanded(
-                            child: SingleChildScrollView(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 24,
-                              ),
-                              child: Center(
-                                child: SizedBox(
-                                  width: _formWidth,
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      // 后端地址输入隐藏
-                                      const SizedBox(height: 16),
-                                      TextField(
-                                        controller: _usernameCtrl,
-                                        style: const TextStyle(
-                                          color: AppFinanceStyle.textDefault,
-                                        ),
-                                        decoration: inputDecoration.copyWith(
-                                          labelText: '用户名',
-                                          hintText: '用户名',
-                                        ),
-                                        textInputAction: TextInputAction.next,
-                                      ),
-                                      const SizedBox(height: 16),
-                                      TextField(
-                                        controller: _passwordCtrl,
-                                        style: const TextStyle(
-                                          color: AppFinanceStyle.textDefault,
-                                        ),
-                                        decoration: inputDecoration
-                                            .copyWith(
-                                              labelText: '密码',
-                                              hintText: '密码',
-                                              suffixIcon: IconButton(
-                                                icon: Icon(
-                                                  _obscurePassword
-                                                      ? Icons.visibility_off
-                                                      : Icons.visibility,
+                // 下半屏：表单靠底部居中，尽量贴近底部（留出 Logo）
+                Positioned(
+                  bottom: 0,
+                  left: 0,
+                  right: 0,
+                  height: halfH,
+                  child: SafeArea(
+                    top: false,
+                    child: LayoutBuilder(
+                      builder: (context, lower) {
+                        final padBottom = MediaQuery.paddingOf(context).bottom;
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Expanded(
+                              child: Align(
+                                alignment: Alignment.bottomCenter,
+                                child: SingleChildScrollView(
+                                  padding: const EdgeInsets.fromLTRB(
+                                    24,
+                                    8,
+                                    24,
+                                    12,
+                                  ),
+                                  child: ConstrainedBox(
+                                    constraints: BoxConstraints(
+                                      minHeight:
+                                          (lower.maxHeight - 80 - padBottom)
+                                              .clamp(0.0, double.infinity),
+                                    ),
+                                    child: Align(
+                                      alignment: Alignment.bottomCenter,
+                                      child: SizedBox(
+                                        width: formW,
+                                        child: Material(
+                                          color: Colors.transparent,
+                                          child: Column(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              TextField(
+                                                controller: _usernameCtrl,
+                                                style: const TextStyle(
                                                   color: AppFinanceStyle
                                                       .textDefault,
-                                                  size: 22,
                                                 ),
-                                                onPressed: () => setState(
-                                                  () => _obscurePassword =
-                                                      !_obscurePassword,
-                                                ),
+                                                decoration: inputDecoration
+                                                    .copyWith(
+                                                      labelText: '用户名',
+                                                      hintText: '用户名',
+                                                    ),
+                                                textInputAction:
+                                                    TextInputAction.next,
                                               ),
-                                            )
-                                            .copyWith(
-                                              suffixIconConstraints:
-                                                  const BoxConstraints(
-                                                    minWidth: 44,
-                                                    minHeight: 44,
-                                                  ),
-                                            ),
-                                        obscureText: _obscurePassword,
-                                        onSubmitted: (_) => _performLogin(),
-                                      ),
-                                      const SizedBox(height: 24),
-                                      SizedBox(
-                                        width: double.infinity,
-                                        height: 48,
-                                        child: DecoratedBox(
-                                          decoration: BoxDecoration(
-                                            borderRadius: BorderRadius.circular(
-                                              12,
-                                            ),
-                                            boxShadow: [
-                                              BoxShadow(
-                                                color: _electricCyan.withValues(
-                                                  alpha: 0.3,
+                                              const SizedBox(height: 16),
+                                              TextField(
+                                                controller: _passwordCtrl,
+                                                style: const TextStyle(
+                                                  color: AppFinanceStyle
+                                                      .textDefault,
                                                 ),
-                                                blurRadius: 12,
-                                                spreadRadius: 0,
-                                              ),
-                                            ],
-                                            gradient: const LinearGradient(
-                                              colors: [
-                                                _electricCyan,
-                                                _electricPurple,
-                                              ],
-                                              begin: Alignment.centerLeft,
-                                              end: Alignment.centerRight,
-                                            ),
-                                          ),
-                                          child: Material(
-                                            color: Colors.transparent,
-                                            child: InkWell(
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                              onTap: _loading
-                                                  ? null
-                                                  : _performLogin,
-                                              child: Center(
-                                                child: _loading
-                                                    ? SizedBox(
-                                                        width: 24,
-                                                        height: 24,
-                                                        child:
-                                                            CircularProgressIndicator(
-                                                          strokeWidth: 2,
+                                                decoration: inputDecoration
+                                                    .copyWith(
+                                                      labelText: '密码',
+                                                      hintText: '密码',
+                                                      suffixIcon: IconButton(
+                                                        icon: Icon(
+                                                          _obscurePassword
+                                                              ? Icons
+                                                                    .visibility_off
+                                                              : Icons
+                                                                    .visibility,
                                                           color: AppFinanceStyle
                                                               .textDefault,
+                                                          size: 22,
                                                         ),
-                                                      )
-                                                    : const Text(
-                                                        '登 录',
-                                                        style: TextStyle(
-                                                          color:
-                                                              AppFinanceStyle
-                                                                  .textDefault,
-                                                          fontSize: 16,
-                                                          fontWeight:
-                                                              FontWeight.w600,
-                                                          letterSpacing: 4,
+                                                        onPressed: () => setState(
+                                                          () => _obscurePassword =
+                                                              !_obscurePassword,
                                                         ),
                                                       ),
+                                                    )
+                                                    .copyWith(
+                                                      suffixIconConstraints:
+                                                          const BoxConstraints(
+                                                            minWidth: 44,
+                                                            minHeight: 44,
+                                                          ),
+                                                    ),
+                                                obscureText: _obscurePassword,
+                                                onSubmitted: (_) =>
+                                                    _performLogin(),
                                               ),
-                                            ),
+                                              const SizedBox(height: 24),
+                                              SizedBox(
+                                                width: double.infinity,
+                                                height: 48,
+                                                child: DecoratedBox(
+                                                  decoration: BoxDecoration(
+                                                    borderRadius:
+                                                        BorderRadius.circular(
+                                                          14,
+                                                        ),
+                                                    boxShadow: [
+                                                      BoxShadow(
+                                                        color: _loginBtnBlue
+                                                            .withValues(
+                                                              alpha: 0.35,
+                                                            ),
+                                                        blurRadius: 14,
+                                                        spreadRadius: 0,
+                                                      ),
+                                                    ],
+                                                    gradient:
+                                                        const LinearGradient(
+                                                          colors: [
+                                                            _loginBtnCyan,
+                                                            _loginBtnBlue,
+                                                          ],
+                                                          begin: Alignment
+                                                              .centerLeft,
+                                                          end: Alignment
+                                                              .centerRight,
+                                                        ),
+                                                  ),
+                                                  child: Material(
+                                                    color: Colors.transparent,
+                                                    child: InkWell(
+                                                      borderRadius:
+                                                          BorderRadius.circular(
+                                                            14,
+                                                          ),
+                                                      onTap: _loading
+                                                          ? null
+                                                          : _performLogin,
+                                                      child: Center(
+                                                        child: _loading
+                                                            ? SizedBox(
+                                                                width: 24,
+                                                                height: 24,
+                                                                child: CircularProgressIndicator(
+                                                                  strokeWidth:
+                                                                      2,
+                                                                  color: AppFinanceStyle
+                                                                      .textDefault,
+                                                                ),
+                                                              )
+                                                            : const Text(
+                                                                '登 录',
+                                                                style: TextStyle(
+                                                                  color: AppFinanceStyle
+                                                                      .textDefault,
+                                                                  fontSize: 16,
+                                                                  fontWeight:
+                                                                      FontWeight
+                                                                          .w600,
+                                                                  letterSpacing:
+                                                                      4,
+                                                                ),
+                                                              ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                              const SizedBox(height: 12),
+                                              FutureBuilder<bool>(
+                                                future:
+                                                    _prefs.fingerprintEnabled,
+                                                builder: (context, snap) {
+                                                  final enabled =
+                                                      snap.data == true;
+                                                  return Center(
+                                                    child: IconButton(
+                                                      iconSize: 40,
+                                                      splashRadius: 28,
+                                                      onPressed:
+                                                          enabled && !_loading
+                                                          ? _authenticateBiometric
+                                                          : null,
+                                                      icon: Icon(
+                                                        Icons.fingerprint,
+                                                        color: enabled
+                                                            ? _electricCyan
+                                                            : AppFinanceStyle
+                                                                  .textDefault
+                                                                  .withValues(
+                                                                    alpha: 0.4,
+                                                                  ),
+                                                      ),
+                                                    ),
+                                                  );
+                                                },
+                                              ),
+                                            ],
                                           ),
                                         ),
                                       ),
-
-                                      const SizedBox(height: 12),
-                                      FutureBuilder<bool>(
-                                        future: _prefs.fingerprintEnabled,
-                                        builder: (context, snap) {
-                                          final enabled = snap.data == true;
-                                          return Center(
-                                            child: IconButton(
-                                              iconSize: 40,
-                                              splashRadius: 28,
-                                              onPressed: enabled && !_loading
-                                                  ? _authenticateBiometric
-                                                  : null,
-                                              icon: Icon(
-                                                Icons.fingerprint,
-                                                color: enabled
-                                                    ? _electricCyan
-                                                    : AppFinanceStyle
-                                                          .textDefault
-                                                          .withValues(
-                                                            alpha: 0.4,
-                                                          ),
-                                              ),
-                                            ),
-                                          );
-                                        },
-                                      ),
-                                    ],
+                                    ),
                                   ),
                                 ),
                               ),
                             ),
-                          ),
-                          // 底部：Logo + 品牌副标题 + 信任徽章
-                          Padding(
-                            padding: const EdgeInsets.only(top: 28, bottom: 24),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                GestureDetector(
+                            Padding(
+                              padding: EdgeInsets.only(bottom: 8 + padBottom),
+                              child: Center(
+                                child: GestureDetector(
                                   behavior: HitTestBehavior.opaque,
                                   onTap: _onLogoSecretTap,
                                   child: Image.asset(
@@ -653,28 +714,17 @@ class _LoginScreenState extends State<LoginScreen> {
                                         const SizedBox.shrink(),
                                   ),
                                 ),
-                                const SizedBox(height: 12),
-                                Text(
-                                  _tagline,
-                                  textAlign: TextAlign.center,
-                                  style: Theme.of(context).textTheme.bodySmall
-                                      ?.copyWith(
-                                        color: AppFinanceStyle.textDefault
-                                            .withValues(alpha: 0.85),
-                                        height: 1.45,
-                                      ),
-                                ),
-                              ],
+                              ),
                             ),
-                          ),
-                        ],
-                      );
-                    },
+                          ],
+                        );
+                      },
+                    ),
                   ),
                 ),
-              ),
-            ),
-          ],
+              ],
+            );
+          },
         ),
       ),
     );

@@ -9,6 +9,8 @@
 
 沙盒（模拟盘）账户需在请求头中加 x-simulated-trading: 1，base_url 均为 https://www.okx.com。
 """
+from __future__ import annotations
+
 import argparse
 import base64
 import hashlib

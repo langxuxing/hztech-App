@@ -759,6 +759,38 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
     );
   }
 
+  /// 宽屏下与 [_detailRow] 同字段样式，纵向「标签 + 值」块，供横向排列。
+  Widget _profileFieldColumn(
+    BuildContext context,
+    String label,
+    String value, {
+    int maxLines = 3,
+  }) {
+    final labelStyle = TextStyle(
+      color: AppFinanceStyle.labelColor.withValues(alpha: 0.62),
+      fontSize: 13,
+      fontWeight: FontWeight.w500,
+    );
+    const valueStyle = TextStyle(
+      color: AppFinanceStyle.valueColor,
+      fontSize: 14,
+      height: 1.4,
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: labelStyle),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: valueStyle,
+          maxLines: maxLines,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ],
+    );
+  }
+
   Widget _userCard(ManagedUserRow u) {
     final roleEnum = AppUserRole.fromApi(u.role);
     final roleLabel = AppUserRole.label(roleEnum);
@@ -874,15 +906,54 @@ class _UserManagementScreenState extends State<UserManagementScreen> {
                         actions,
                       ],
                     ),
-                  _detailRow('中文名', nameDisp),
-                  _detailRow('手机号', phoneDisp),
-                  _detailRow(
-                    roleEnum == AppUserRole.customer ? '可访问账户' : '账户范围',
-                    roleEnum == AppUserRole.customer
-                        ? accountsText
-                        : '非客户角色不按账户过滤',
-                    maxLines: roleEnum == AppUserRole.customer ? 5 : 2,
-                  ),
+                  if (narrow) ...[
+                    _detailRow('中文名', nameDisp),
+                    _detailRow('手机号', phoneDisp),
+                    _detailRow(
+                      roleEnum == AppUserRole.customer ? '可访问账户' : '账户范围',
+                      roleEnum == AppUserRole.customer
+                          ? accountsText
+                          : '非客户角色不按账户过滤',
+                      maxLines: roleEnum == AppUserRole.customer ? 5 : 2,
+                    ),
+                  ] else
+                    Padding(
+                      padding: const EdgeInsets.only(top: 12),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Expanded(
+                            child: _profileFieldColumn(
+                              context,
+                              '中文名',
+                              nameDisp,
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: _profileFieldColumn(
+                              context,
+                              '手机号',
+                              phoneDisp,
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: _profileFieldColumn(
+                              context,
+                              roleEnum == AppUserRole.customer
+                                  ? '可访问账户'
+                                  : '账户范围',
+                              roleEnum == AppUserRole.customer
+                                  ? accountsText
+                                  : '非客户角色不按账户过滤',
+                              maxLines:
+                                  roleEnum == AppUserRole.customer ? 5 : 2,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                 ],
               );
             },

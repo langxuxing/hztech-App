@@ -85,14 +85,19 @@ class AppFinanceStyle {
   static const Color webDataTableCellBg = Color.fromRGBO(0, 0, 0, 0.2);
 
   /// Web 数据表行 hover（略亮于 [webDataTableCellBg]）。
-  static const Color webDataTableRowHoverBg = Color.fromRGBO(255, 255, 255, 0.04);
+  static const Color webDataTableRowHoverBg = Color.fromRGBO(
+    255,
+    255,
+    255,
+    0.04,
+  );
 
   /// Web 子页 Tab 条外框（赛季 Hub、策略能效卡片内等与侧栏页一致）。
   static BoxDecoration webSubtleInsetPanelDecoration() => BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.04),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: cardBorder),
-      );
+    color: Colors.white.withValues(alpha: 0.04),
+    borderRadius: BorderRadius.circular(12),
+    border: Border.all(color: cardBorder),
+  );
 
   /// 汇总条主数值字号（与条高度配套；相对上一版 48 再 +50% → 72）。
   static const double webSummaryValueFontSize = 72;
@@ -106,7 +111,7 @@ class AppFinanceStyle {
   /// 移动端顶部汇总主数值字号：随逻辑宽度缩放，避免超窄屏爆版、大屏仍显「大气」。
   static double mobileSummaryValueFontSize(BuildContext context) {
     final w = MediaQuery.sizeOf(context).width;
-    return (w * 0.075).clamp(32.0, 48.0);
+    return (w * 0.075).clamp(24.0, 48.0);
   }
 
   /// 移动端表头汇总单行：小标签在左、大号数值在右（与账户总览顶部条横向布局一致）。

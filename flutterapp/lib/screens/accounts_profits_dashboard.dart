@@ -5,6 +5,7 @@ import '../api/client.dart';
 import '../api/models.dart';
 import '../secure/prefs.dart';
 import '../theme/finance_style.dart';
+import '../utils/network_error_message.dart';
 import '../utils/number_display_format.dart';
 import '../widgets/water_background.dart';
 
@@ -28,11 +29,14 @@ class _AccountProfitDetailScreenState extends State<AccountProfitDetailScreen> {
   Map<String, List<BotProfitSnapshot>> _profitHistory = {};
   bool _loading = true;
   String? _error;
+  /// 机器人列表已加载但收益/曲线请求失败时展示（避免静默失败）。
+  String? _detailError;
 
   Future<void> _load() async {
     setState(() {
       _loading = true;
       _error = null;
+      _detailError = null;
     });
     try {
       final baseUrl = await _prefs.backendBaseUrl;
@@ -66,13 +70,16 @@ class _AccountProfitDetailScreenState extends State<AccountProfitDetailScreen> {
           _accounts = accounts;
           _profitHistory = history;
         });
-      } catch (_) {
-        // 列表已显示，收益/曲线失败时保留空数据
+      } catch (e) {
+        if (!mounted) return;
+        setState(() {
+          _detailError = '收益与曲线加载失败：${friendlyNetworkError(e)}';
+        });
       }
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _error = e.toString();
+        _error = friendlyNetworkError(e);
         _loading = false;
       });
     }
@@ -169,10 +176,29 @@ class _AccountProfitDetailScreenState extends State<AccountProfitDetailScreen> {
                 )
               : ListView.builder(
                   padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
-                  itemCount: _list.length,
-                  itemBuilder: (context, i) {
-                    final bot = _list[i];
-                    final account = _accountForBot(bot, i);
+                  itemCount:
+                      _list.length + (_detailError != null && _list.isNotEmpty ? 1 : 0),
+                  itemBuilder: (context, index) {
+                    final hasBanner =
+                        _detailError != null && _list.isNotEmpty;
+                    if (hasBanner) {
+                      if (index == 0) {
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 16),
+                          child: Text(
+                            _detailError!,
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.error,
+                              fontSize: 14,
+                            ),
+                          ),
+                        );
+                      }
+                    }
+                    final listIndex =
+                        hasBanner ? index - 1 : index;
+                    final bot = _list[listIndex];
+                    final account = _accountForBot(bot, listIndex);
                     final snapshots = _profitHistory[bot.tradingbotId] ?? [];
                     final topMetricStyle = AppFinanceStyle.valueTextStyle(
                       context,

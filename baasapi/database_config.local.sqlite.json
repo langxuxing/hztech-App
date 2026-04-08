@@ -1,0 +1,4 @@
+{
+  "backend": "sqlite",
+  "sqlite_path": "sqlite/tradingbots.db"
+}

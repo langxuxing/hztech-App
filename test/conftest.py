@@ -10,21 +10,23 @@ from pathlib import Path
 
 import pytest
 
-# 使用临时 DB，避免污染开发库
+# 默认与运行时使用 database_config.json 的 profiles.test（PostgreSQL hztech 等）；
+# 切换 SQLite：在配置中设 "profiles": { "test": { "backend": "sqlite" } } 或 export HZTECH_DB_BACKEND=sqlite
+os.environ.setdefault("HZTECH_DB_PROFILE", "test")
+
 _server_dir = os.path.join(os.path.dirname(__file__), "..", "baasapi")
 sys.path.insert(0, os.path.abspath(_server_dir))
 
 import db_backend  # noqa: E402
 
-_tmp = tempfile.mkdtemp(prefix="hztech_test_")
-_test_db = Path(_tmp) / "test.db"
-db_backend.DB_PATH = _test_db
-db_backend.DB_DIR = _test_db.parent
-
 import db  # noqa: E402
 
-# db 模块内 `from db_backend import DB_PATH` 为独立绑定，需同步指向测试库路径
-db.DB_PATH = _test_db
+if not db_backend.IS_POSTGRES:
+    _tmp = tempfile.mkdtemp(prefix="hztech_")
+    _test_db = Path(_tmp) / "test.db"
+    db_backend.DB_PATH = _test_db
+    db_backend.DB_DIR = _test_db.parent
+    db.DB_PATH = _test_db
 
 db.init_db()
 _pwd = hashlib.sha256(b"i23321").hexdigest()

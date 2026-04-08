@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
 import '../app_update_prompt.dart';
 import '../auth/app_user_role.dart';
+import '../debug_ingest_log.dart';
 import '../secure/prefs.dart';
 import 'accounts_profits_dashboard.dart';
 import 'account_profit_screen.dart';
@@ -30,6 +33,48 @@ class _MainScreenState extends State<MainScreen> {
   List<UnifiedTradingBot> _sharedBots = [];
   final _prefs = SecurePrefs();
   AppUserRole _role = AppUserRole.trader;
+
+  /// 角色从缓存/接口更新后，按「同一底栏标签」重映射 [_index]，避免 tab 数量变化时仍沿用旧索引而跳到错误页面（例如「本月收益」一闪后变成「设置」）。
+  void _remapNavIndexForNewRole(AppUserRole newRole) {
+    final oldTabs = _tabs;
+    final maxOld = oldTabs.isEmpty ? 0 : oldTabs.length - 1;
+    final oldIndex = _index.clamp(0, maxOld);
+    final label = oldTabs.isNotEmpty ? oldTabs[oldIndex].label : null;
+    final oldRole = _role.apiValue;
+    final oldIndexRaw = _index;
+    _role = newRole;
+    final newTabs = _tabs;
+    if (newTabs.isEmpty) {
+      _index = 0;
+      return;
+    }
+    if (label != null) {
+      final j = newTabs.indexWhere((t) => t.label == label);
+      if (j >= 0) {
+        _index = j;
+        return;
+      }
+    }
+    _index = _index.clamp(0, newTabs.length - 1);
+    // #region agent log
+    unawaited(
+      debugIngestLog(
+        location: 'main_screen.dart:_remapNavIndexForNewRole',
+        message: 'role_remap_applied',
+        hypothesisId: 'H1',
+        data: <String, Object?>{
+          'oldRole': oldRole,
+          'newRole': newRole.apiValue,
+          'oldIndex': oldIndexRaw,
+          'oldLabel': label,
+          'newIndex': _index,
+          'newLabel': newTabs.isNotEmpty ? newTabs[_index].label : null,
+          'newTabsCount': newTabs.length,
+        },
+      ),
+    );
+    // #endregion
+  }
 
   bool get _isCustomer => _role == AppUserRole.customer;
 
@@ -92,7 +137,9 @@ class _MainScreenState extends State<MainScreen> {
 
   Future<void> _loadRole() async {
     final r = await _prefs.getAppUserRole();
-    if (mounted) setState(() => _role = r);
+    if (mounted) {
+      setState(() => _remapNavIndexForNewRole(r));
+    }
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
@@ -100,7 +147,9 @@ class _MainScreenState extends State<MainScreen> {
       final me = await api.getMe();
       if (!mounted || !me.success) return;
       await _prefs.setUserRole(me.role);
-      setState(() => _role = AppUserRole.fromApi(me.role));
+      if (mounted) {
+        setState(() => _remapNavIndexForNewRole(AppUserRole.fromApi(me.role)));
+      }
     } catch (_) {}
   }
 
@@ -224,6 +273,23 @@ class _MainScreenState extends State<MainScreen> {
         child: NavigationBar(
           selectedIndex: safeIndex,
           onDestinationSelected: (i) {
+            final tabsNow = _tabs;
+            // #region agent log
+            unawaited(
+              debugIngestLog(
+                location: 'main_screen.dart:onDestinationSelected',
+                message: 'nav_tap',
+                hypothesisId: 'H1',
+                data: <String, Object?>{
+                  'tapIndex': i,
+                  'tapLabel':
+                      (i >= 0 && i < tabsNow.length) ? tabsNow[i].label : null,
+                  'role': _role.apiValue,
+                  'tabsCount': tabsNow.length,
+                },
+              ),
+            );
+            // #endregion
             setState(() => _index = i);
             if (i == _profitTabIndex && _sharedBots.isEmpty) _loadSharedBots();
           },

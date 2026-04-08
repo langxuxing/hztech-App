@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import '../api/client.dart';
 import '../api/models.dart';
 import '../auth/app_user_role.dart';
+import '../debug_ingest_log.dart';
 import '../secure/prefs.dart';
+import '../utils/network_error_message.dart';
 import '../services/okx_public_ticker_ws.dart';
 import '../theme/finance_style.dart';
 import '../utils/number_display_format.dart';
@@ -87,6 +89,9 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
   /// 切换账户时递增，用于丢弃过期的异步结果与日历同步。
   int _accountSwitchGeneration = 0;
 
+  /// 全量 [_load] 并发时递增，避免多次触发时阶段二互相覆盖 [_detailLoading]。
+  int _loadGeneration = 0;
+
   /// 立即断开 OKX 公共 ticker WS（切换账户须先于新请求调用，避免旧连接推送干扰）。
   void _disconnectOkxPublicTicker() {
     _tickerSub?.cancel();
@@ -139,6 +144,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
 
   Future<void> _load() async {
     if (!mounted) return;
+    final g = ++_loadGeneration;
     setState(() {
       _loading = true;
       _detailLoading = false;
@@ -147,7 +153,24 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
     });
     try {
       final role = await _prefs.getAppUserRole();
-      if (!mounted) return;
+      // #region agent log
+      unawaited(
+        debugIngestLog(
+          location: 'account_profit_screen.dart:_load',
+          message: 'load_start',
+          hypothesisId: 'H2',
+          data: <String, Object?>{
+            'loadGeneration': g,
+            'loadingBefore': _loading,
+            'detailLoadingBefore': _detailLoading,
+            'role': role.apiValue,
+            'sharedBotsCount': widget.sharedBots.length,
+            'initialBotId': widget.initialBotId,
+          },
+        ),
+      );
+      // #endregion
+      if (!mounted || g != _loadGeneration) return;
       setState(() => _appUserRole = role);
       final isCustomer = role == AppUserRole.customer;
 
@@ -161,6 +184,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
         final botsResp = await api.getTradingBots();
         bots = botsResp.botList;
       }
+      if (!mounted || g != _loadGeneration) return;
       final initial = widget.initialBotId?.trim();
       if (initial != null &&
           initial.isNotEmpty &&
@@ -189,7 +213,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
         botId = isCustomer ? null : _defaultBotId;
       }
 
-      if (!mounted) return;
+      if (!mounted || g != _loadGeneration) return;
       // 阶段一：一有账户列表就结束全屏 loading；客户仅只读展示绑定账户，不显示下拉
       setState(() {
         _bots = bots;
@@ -197,6 +221,21 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
         _loading = false;
         _detailLoading = true;
       });
+      // #region agent log
+      unawaited(
+        debugIngestLog(
+          location: 'account_profit_screen.dart:_load',
+          message: 'phase1_bots_ready',
+          hypothesisId: 'H3',
+          data: <String, Object?>{
+            'botsCount': bots.length,
+            'selectedBotId': botId,
+            'isCustomer': isCustomer,
+            'fromSharedBots': widget.sharedBots.isNotEmpty,
+          },
+        ),
+      );
+      // #endregion
 
       // 阶段二：收益、历史、持仓并行（缩短首屏等待）
       try {
@@ -206,7 +245,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
             api.getBotProfitHistory(botId),
             api.getTradingbotPositions(botId),
           ]);
-          if (!mounted) return;
+          if (!mounted || g != _loadGeneration) return;
           final profitResp = out[0] as AccountProfitResponse;
           final historyResp = out[1] as BotProfitHistoryResponse;
           final posResp = out[2] as OkxPositionsResponse;
@@ -220,10 +259,26 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
             _detailLoading = false;
             _switchingAccount = false;
           });
+          // #region agent log
+          unawaited(
+            debugIngestLog(
+              location: 'account_profit_screen.dart:_load',
+              message: 'phase2_success',
+              hypothesisId: 'H2',
+              data: <String, Object?>{
+                'accountsCount': _accounts.length,
+                'snapshotsCount': _snapshots.length,
+                'positionsCount': _positions.length,
+                'selectedBotId': _selectedBotId,
+                'hasSelectedAccount': _selectedAccount != null,
+              },
+            ),
+          );
+          // #endregion
           _syncOkxTickerSubscription();
         } else {
           final profitResp = await api.getAccountProfit();
-          if (!mounted) return;
+          if (!mounted || g != _loadGeneration) return;
           setState(() {
             _accounts = profitResp.accounts ?? [];
             _snapshots = const [];
@@ -232,20 +287,64 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
             _detailLoading = false;
             _switchingAccount = false;
           });
+          // #region agent log
+          unawaited(
+            debugIngestLog(
+              location: 'account_profit_screen.dart:_load',
+              message: 'phase2_success_no_bot',
+              hypothesisId: 'H3',
+              data: <String, Object?>{
+                'accountsCount': _accounts.length,
+                'isCustomer': isCustomer,
+                'selectedBotId': _selectedBotId,
+              },
+            ),
+          );
+          // #endregion
         }
       } catch (e) {
+        if (!mounted || g != _loadGeneration) return;
+        // #region agent log
+        unawaited(
+          debugIngestLog(
+            location: 'account_profit_screen.dart:_load',
+            message: 'phase2_error',
+            hypothesisId: 'H5',
+            data: <String, Object?>{
+              'errorType': e.runtimeType.toString(),
+              'error': e.toString(),
+              'selectedBotId': _selectedBotId,
+              'detailLoadingBeforeSetState': _detailLoading,
+            },
+          ),
+        );
+        // #endregion
         if (mounted) {
           setState(() {
-            _error = '收益/历史/持仓加载失败: $e';
+            _error = '收益/历史/持仓加载失败：${friendlyNetworkError(e)}';
             _detailLoading = false;
             _switchingAccount = false;
           });
         }
       }
     } catch (e) {
+      if (!mounted || g != _loadGeneration) return;
+      // #region agent log
+      unawaited(
+        debugIngestLog(
+          location: 'account_profit_screen.dart:_load',
+          message: 'load_outer_error',
+          hypothesisId: 'H5',
+          data: <String, Object?>{
+            'errorType': e.runtimeType.toString(),
+            'error': e.toString(),
+          },
+        ),
+      );
+      // #endregion
       if (!mounted) return;
       setState(() {
-        _error = e.toString();
+        _error = friendlyNetworkError(e);
         _loading = false;
         _detailLoading = false;
         _switchingAccount = false;
@@ -296,7 +395,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
     } catch (e) {
       if (mounted && g == _accountSwitchGeneration) {
         setState(() {
-          _error = '切换账户后加载失败: $e';
+          _error = '切换账户后加载失败：${friendlyNetworkError(e)}';
           _detailLoading = false;
           _switchingAccount = false;
         });
@@ -691,19 +790,16 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 24),
             child: Center(
-              // 垂直居中
-              // 用垂直方向的 Expanded + Center 实现内容垂直居中
-              child: Expanded(
-                child: Center(
-                  child: Text(
-                    _appUserRole == AppUserRole.customer
-                        ? '请让管理员在用户管理中核对：绑定的 account_id 须与 Account_List 里的 account_id 完全一致（与 OKX 密钥 JSON 里的 name 无关）。执行 baasapi 下 python3 seed_team_users.py 可同步团队客户绑定。'
-                        : '暂无账户数据，请确认后端 accounts 已配置交易账户',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Color.fromARGB(255, 125, 18, 31),
-                      fontSize: 16,
-                    ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Text(
+                  _appUserRole == AppUserRole.customer
+                      ? '请让管理员在用户管理中核对：绑定的 account_id 须与 Account_List 里的 account_id 完全一致（与 OKX 密钥 JSON 里的 name 无关）。执行 baasapi 下 python3 seed_team_users.py 可同步团队客户绑定。'
+                      : '暂无账户数据，请确认后端 accounts 已配置交易账户',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Color.fromARGB(255, 125, 18, 31),
+                    fontSize: 16,
                   ),
                 ),
               ),
@@ -767,21 +863,27 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
       body: WaterBackground(
         child: RefreshIndicator(
           onRefresh: _load,
-          child: _loading && _accounts.isEmpty && _effectiveBots.isEmpty
+          child: _loading && _accounts.isEmpty
               ? const Center(child: CircularProgressIndicator())
-              : _error != null && _accounts.isEmpty && _effectiveBots.isEmpty
+              : _error != null && _accounts.isEmpty && !_detailLoading
               ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(
-                        _error!,
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: AppFinanceStyle.textDefault),
-                      ),
-                      const SizedBox(height: 16),
-                      FilledButton(onPressed: _load, child: const Text('重试')),
-                    ],
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          _error!,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: AppFinanceStyle.textDefault),
+                        ),
+                        const SizedBox(height: 16),
+                        FilledButton(
+                          onPressed: _load,
+                          child: const Text('重试'),
+                        ),
+                      ],
+                    ),
                   ),
                 )
               : _buildBodyScrollable(),

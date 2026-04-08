@@ -6,6 +6,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../auth/app_user_role.dart';
 import '../debug_ingest_log.dart';
 import 'backend_url_persist.dart';
+import 'web_prefs_kv.dart';
 
 const _keyToken = 'auth_token';
 const _keyUserRole = 'user_role';
@@ -115,40 +116,61 @@ const unlockDurationMs = 5 * 60 * 1000; // 5 分钟
 
 class SecurePrefs {
   SecurePrefs()
-    : _storage = FlutterSecureStorage(
-        aOptions: androidOptions,
-        // macOS 沙盒：默认 useDataProtectionKeyChain 易触发 -34018（钥匙串 entitlement）
-        mOptions: (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS)
-            ? const MacOsOptions(useDataProtectionKeyChain: false)
-            : MacOsOptions.defaultOptions,
-      );
+    : _storage = kIsWeb
+        ? null
+        : FlutterSecureStorage(
+            aOptions: androidOptions,
+            // macOS 沙盒：默认 useDataProtectionKeyChain 易触发 -34018（钥匙串 entitlement）
+            mOptions: (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS)
+                ? const MacOsOptions(useDataProtectionKeyChain: false)
+                : MacOsOptions.defaultOptions,
+          );
 
   static const androidOptions = AndroidOptions(
     encryptedSharedPreferences: true,
   );
 
-  final FlutterSecureStorage _storage;
+  /// Web 端不使用：[`flutter_secure_storage_web`] 在部分浏览器/隐私设置下会因
+  /// `window.crypto` 等触发 `!` 空断言；登录态等改走 [localStorage]（见 [web_prefs_kv_web.dart]）。
+  final FlutterSecureStorage? _storage;
 
-  Future<String?> get authToken => _storage.read(key: _keyToken);
+  Future<String?> get authToken async {
+    if (kIsWeb) return webPrefsRead(_keyToken);
+    return _storage!.read(key: _keyToken);
+  }
+
   Future<void> setAuthToken(String? value) async {
+    if (kIsWeb) {
+      await webPrefsWrite(_keyToken, value);
+      return;
+    }
     if (value == null || value.isEmpty) {
-      await _storage.delete(key: _keyToken);
+      await _storage!.delete(key: _keyToken);
     } else {
-      await _storage.write(key: _keyToken, value: value);
+      await _storage!.write(key: _keyToken, value: value);
     }
   }
 
   /// 登录或 GET /api/me 后写入，与后端 role 一致。
   Future<void> setUserRole(String? role) async {
+    if (kIsWeb) {
+      await webPrefsWrite(
+        _keyUserRole,
+        role != null && role.isNotEmpty ? role.trim().toLowerCase() : null,
+      );
+      return;
+    }
     if (role == null || role.isEmpty) {
-      await _storage.delete(key: _keyUserRole);
+      await _storage!.delete(key: _keyUserRole);
     } else {
-      await _storage.write(key: _keyUserRole, value: role.trim().toLowerCase());
+      await _storage!.write(key: _keyUserRole, value: role.trim().toLowerCase());
     }
   }
 
   Future<AppUserRole> getAppUserRole() async {
-    final v = await _storage.read(key: _keyUserRole);
+    final v = kIsWeb
+        ? await webPrefsRead(_keyUserRole)
+        : await _storage!.read(key: _keyUserRole);
     return AppUserRole.fromApi(v);
   }
 
@@ -213,21 +235,33 @@ class SecurePrefs {
   }
 
   Future<bool> get fingerprintEnabled async {
-    final v = await _storage.read(key: _keyFingerprint);
+    final v = kIsWeb
+        ? await webPrefsRead(_keyFingerprint)
+        : await _storage!.read(key: _keyFingerprint);
     return v == 'true';
   }
 
   Future<void> setFingerprintEnabled(bool value) async {
-    await _storage.write(key: _keyFingerprint, value: value.toString());
+    if (kIsWeb) {
+      await webPrefsWrite(_keyFingerprint, value.toString());
+      return;
+    }
+    await _storage!.write(key: _keyFingerprint, value: value.toString());
   }
 
   Future<int> get _unlockedUntilMs async {
-    final v = await _storage.read(key: _keyUnlockedUntil);
+    final v = kIsWeb
+        ? await webPrefsRead(_keyUnlockedUntil)
+        : await _storage!.read(key: _keyUnlockedUntil);
     return int.tryParse(v ?? '') ?? 0;
   }
 
   Future<void> setUnlockedUntilMs(int value) async {
-    await _storage.write(key: _keyUnlockedUntil, value: value.toString());
+    if (kIsWeb) {
+      await webPrefsWrite(_keyUnlockedUntil, value.toString());
+      return;
+    }
+    await _storage!.write(key: _keyUnlockedUntil, value: value.toString());
   }
 
   Future<bool> get isUnlocked async {
@@ -241,8 +275,16 @@ class SecurePrefs {
   }
 
   Future<void> clearOnLogout() async {
-    await _storage.delete(key: _keyToken);
-    await _storage.delete(key: _keyUserRole);
-    await _storage.delete(key: _keyUnlockedUntil);
+    if (kIsWeb) {
+      await webPrefsDelete(_keyToken);
+      await webPrefsDelete(_keyUserRole);
+      await webPrefsDelete(_keyUnlockedUntil);
+      return;
+    }
+    final storage = _storage;
+    if (storage == null) return;
+    await storage.delete(key: _keyToken);
+    await storage.delete(key: _keyUserRole);
+    await storage.delete(key: _keyUnlockedUntil);
   }
 }

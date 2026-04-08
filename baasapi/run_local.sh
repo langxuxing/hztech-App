@@ -9,6 +9,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
+# 数据库：优先 database_config.json；否则自动使用 database_config.local.sqlite.json（SQLite，见 deploy2Local.sh）
+_DB_JSON="$SCRIPT_DIR/database_config.json"
+_DB_SQLITE_TMPL="$SCRIPT_DIR/database_config.local.sqlite.json"
+if [[ -f "$_DB_JSON" ]]; then
+  export HZTECH_DB_BACKEND="${HZTECH_DB_BACKEND:-postgresql}"
+elif [[ -f "$_DB_SQLITE_TMPL" ]]; then
+  export HZTECH_DB_CONFIG="${HZTECH_DB_CONFIG:-$_DB_SQLITE_TMPL}"
+else
+  export HZTECH_DB_BACKEND="${HZTECH_DB_BACKEND:-auto}"
+fi
+unset _DB_JSON _DB_SQLITE_TMPL
+
 # 与当前 python3 一致安装依赖（与 deploy2Local 共用 install_python_deps.sh）
 case "${HZTECH_SKIP_PIP_INSTALL:-}" in
 1 | true | yes) ;;

@@ -1,19 +1,11 @@
 # -*- coding: utf-8 -*-
-"""持久化：默认 SQLite；可通过环境变量切换 PostgreSQL（见 db_backend）。"""
+"""持久化：默认 PostgreSQL；可通过 database_config.json 或环境变量切换 SQLite（见 db_backend）。"""
 from __future__ import annotations
 
 import json
 import os
-import time
-
-try:
-    import sqlite3
-except ModuleNotFoundError as e:
-    if "_sqlite3" in str(e):
-        import pysqlite3 as sqlite3  # type: ignore[no-redef]  # 无 _sqlite3 时用 pysqlite3
-    else:
-        raise
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -28,19 +20,51 @@ from db_backend import (
     DB_OPERATIONAL_ERRORS,
     DB_PATH,
     IS_POSTGRES,
+    PG_SCHEMA,
     PgConnectionWrapper,
     SERVER_DIR,
     get_connection,
     pg_run_init,
 )
 
+# 仅 SQLite 模式需要；PostgreSQL（如 AWS）上 Python 可能无 _sqlite3，须在确认 backend 后再加载。
+sqlite3: Any = None
+
+
+def _ensure_sqlite3() -> Any:
+    global sqlite3
+    if sqlite3 is not None:
+        return sqlite3
+    try:
+        import sqlite3 as _m
+    except ModuleNotFoundError as e:
+        if "_sqlite3" in str(e):
+            import pysqlite3 as _m  # type: ignore[no-redef, misc]
+        else:
+            raise
+    sqlite3 = _m
+    return _m
+
+
+if not IS_POSTGRES:
+    _ensure_sqlite3()
+
 # 与 SQLite 类型注解兼容：PostgreSQL 时使用封装连接
-def get_conn() -> sqlite3.Connection | PgConnectionWrapper:
+def get_conn() -> Any:
     return get_connection()
 
 
 def _run_user_migrations_pg(conn: PgConnectionWrapper) -> None:
     """PostgreSQL：执行 add_user_*.sql（INSERT 转为 ON CONFLICT；ALTER 失败则忽略）。"""
+    try:
+        import psycopg2
+    except ImportError:
+        psycopg2 = None  # type: ignore[misc, assignment]
+    # 新库已由 PG_INIT 含 full_name/phone 等列时，ALTER 会报 DuplicateColumn（ProgrammingError）
+    _pg_alter_errors: tuple[type[BaseException], ...] = DB_OPERATIONAL_ERRORS
+    if psycopg2 is not None:
+        _pg_alter_errors = (*DB_OPERATIONAL_ERRORS, psycopg2.ProgrammingError)
+
     migrations_dir = SERVER_DIR / "migrations"
     if not migrations_dir.is_dir():
         return
@@ -54,7 +78,7 @@ def _run_user_migrations_pg(conn: PgConnectionWrapper) -> None:
                 try:
                     conn.execute(part)
                     conn.commit()
-                except DB_OPERATIONAL_ERRORS:
+                except _pg_alter_errors:
                     conn.rollback()
             continue
         if "INSERT OR IGNORE" in text.upper():
@@ -322,9 +346,10 @@ def _ensure_account_open_positions_avg_columns(
             cur = conn.execute(
                 """
                 SELECT column_name FROM information_schema.columns
-                WHERE table_schema = 'public'
+                WHERE table_schema = %s
                   AND table_name = 'account_open_positions_snapshots'
                 """
+                , (PG_SCHEMA,)
             )
             cols = {str(r[0]) for r in cur.fetchall()}
             if "long_avg_px" not in cols:
@@ -372,9 +397,10 @@ def _ensure_account_balance_snapshots_margin_columns(
             cur = conn.execute(
                 """
                 SELECT column_name FROM information_schema.columns
-                WHERE table_schema = 'public'
+                WHERE table_schema = %s
                   AND table_name = 'account_balance_snapshots'
                 """
+                , (PG_SCHEMA,)
             )
             cols = {str(r[0]) for r in cur.fetchall()}
             need_migrate = False
@@ -440,9 +466,10 @@ def _ensure_account_balance_snapshots_cash_profit_columns(
             cur = conn.execute(
                 """
                 SELECT column_name FROM information_schema.columns
-                WHERE table_schema = 'public'
+                WHERE table_schema = %s
                   AND table_name = 'account_balance_snapshots'
                 """
+                , (PG_SCHEMA,)
             )
             cols = {str(r[0]) for r in cur.fetchall()}
             if not cols:
@@ -492,9 +519,10 @@ def _ensure_account_daily_performance_chain_columns(
             cur = conn.execute(
                 """
                 SELECT column_name FROM information_schema.columns
-                WHERE table_schema = 'public'
+                WHERE table_schema = %s
                   AND table_name = 'account_daily_performance'
                 """
+                , (PG_SCHEMA,)
             )
             cols = {str(r[0]) for r in cur.fetchall()}
             if not cols:
@@ -544,9 +572,10 @@ def _ensure_account_month_open_initial_balance(
             cur = conn.execute(
                 """
                 SELECT column_name FROM information_schema.columns
-                WHERE table_schema = 'public'
+                WHERE table_schema = %s
                   AND table_name = 'account_month_open'
                 """
+                , (PG_SCHEMA,)
             )
             cols = {str(r[0]) for r in cur.fetchall()}
             if "initial_balance" in cols:
@@ -628,9 +657,10 @@ def _ensure_account_daily_performance_v3(
             cur = conn.execute(
                 """
                 SELECT column_name FROM information_schema.columns
-                WHERE table_schema = 'public'
+                WHERE table_schema = %s
                   AND table_name = 'account_daily_performance'
                 """
+                , (PG_SCHEMA,)
             )
             cols = {str(r[0]) for r in cur.fetchall()}
             if not cols:
@@ -1764,8 +1794,8 @@ def account_positions_history_aggregate_u_time_range(
                                  COALESCE(pnl, 0) + COALESCE(fee, 0) + COALESCE(funding_fee, 0)))
             FROM account_positions_history
             WHERE account_id = ?
-              AND CAST(u_time_ms AS INTEGER) >= ?
-              AND CAST(u_time_ms AS INTEGER) <= ?
+              AND CAST(u_time_ms AS BIGINT) >= ?
+              AND CAST(u_time_ms AS BIGINT) <= ?
             """,
             (aid, int(u_time_start_ms), int(u_time_end_ms)),
         )
@@ -2458,7 +2488,7 @@ def account_positions_history_max_u_time_ms(account_id: str) -> int | None:
     conn = get_conn()
     try:
         cur = conn.execute(
-            """SELECT MAX(CAST(u_time_ms AS INTEGER)) FROM account_positions_history
+            """SELECT MAX(CAST(u_time_ms AS BIGINT)) FROM account_positions_history
                WHERE account_id = ?""",
             (aid,),
         )
@@ -2553,10 +2583,10 @@ def account_positions_history_query_by_account(
     clauses = ["account_id = ?"]
     params: list = [aid]
     if before_utime_ms is not None:
-        clauses.append("CAST(u_time_ms AS INTEGER) < ?")
+        clauses.append("CAST(u_time_ms AS BIGINT) < ?")
         params.append(int(before_utime_ms))
     if since_utime_ms is not None:
-        clauses.append("CAST(u_time_ms AS INTEGER) >= ?")
+        clauses.append("CAST(u_time_ms AS BIGINT) >= ?")
         params.append(int(since_utime_ms))
     where_sql = " AND ".join(clauses)
     params.append(lim)
@@ -2569,7 +2599,7 @@ def account_positions_history_query_by_account(
                       c_time_ms, u_time_ms, raw_json, synced_at
                FROM account_positions_history
                WHERE {where_sql}
-               ORDER BY CAST(u_time_ms AS INTEGER) DESC
+               ORDER BY CAST(u_time_ms AS BIGINT) DESC
                LIMIT ?""",
             tuple(params),
         )
@@ -2662,14 +2692,14 @@ def account_positions_daily_realized(
             cur = conn.execute(
                 """
                 SELECT strftime('%Y-%m-%d',
-                       datetime(CAST(u_time_ms AS INTEGER) / 1000, 'unixepoch', '+8 hours')) AS d,
+                       datetime(CAST(u_time_ms AS BIGINT) / 1000, 'unixepoch', '+8 hours')) AS d,
                        SUM(COALESCE(realized_pnl,
                                     COALESCE(pnl, 0) + COALESCE(fee, 0) + COALESCE(funding_fee, 0))) AS net_pnl,
                        COUNT(*) AS close_count
                 FROM account_positions_history
                 WHERE account_id = ?
-                  AND CAST(u_time_ms AS INTEGER) >= ?
-                  AND CAST(u_time_ms AS INTEGER) < ?
+                  AND CAST(u_time_ms AS BIGINT) >= ?
+                  AND CAST(u_time_ms AS BIGINT) < ?
                 GROUP BY d
                 ORDER BY d
                 """,
@@ -2958,7 +2988,7 @@ def account_daily_performance_rebuild_for_accounts(
                 cur = conn.execute(
                     """
                     SELECT strftime('%Y-%m-%d',
-                           datetime(CAST(u_time_ms AS INTEGER) / 1000, 'unixepoch', '+8 hours')) AS d,
+                           datetime(CAST(u_time_ms AS BIGINT) / 1000, 'unixepoch', '+8 hours')) AS d,
                            SUM(COALESCE(realized_pnl,
                                         COALESCE(pnl, 0) + COALESCE(fee, 0) + COALESCE(funding_fee, 0))) AS net_pnl,
                            COUNT(*) AS close_count

@@ -5,8 +5,21 @@ from __future__ import annotations
 import db
 
 
+def _clear_aph(aid: str) -> None:
+    conn = db.get_conn()
+    try:
+        conn.execute(
+            "DELETE FROM account_positions_history WHERE account_id = ?",
+            (aid,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def test_position_history_reads_inserted_rows(client, auth_headers):
     aid = "simpleserver-lhg"
+    _clear_aph(aid)
     synced = "2026-04-01T00:00:00.000000Z"
     okx_row = {
         "posId": "pytest-pos-history-1",
@@ -34,6 +47,7 @@ def test_position_history_reads_inserted_rows(client, auth_headers):
 
 def test_position_history_before_utime_pagination(client, auth_headers):
     aid = "simpleserver-hztech"
+    _clear_aph(aid)
     synced = "2026-04-01T00:00:00.000000Z"
     db.account_positions_history_insert_batch(
         aid,

@@ -444,7 +444,8 @@ class _AccountsListState extends State<AccountsList> {
                               child: FinanceCard(
                                 padding: EdgeInsets.symmetric(
                                   horizontal: kIsWeb ? 20 : 16,
-                                  vertical: kIsWeb ? 16 : 14,
+                                  // 账户概览卡片竖直内边距再 +20%
+                                  vertical: kIsWeb ? 25.3 : 22.2,
                                 ),
                                 child: Builder(
                                   builder: (context) {
@@ -458,8 +459,7 @@ class _AccountsListState extends State<AccountsList> {
                                         (Theme.of(
                                               context,
                                             ).textTheme.titleLarge?.fontSize ??
-                                            22) +
-                                        2;
+                                            22) ;
                                     final upl = _floatingForAccount(a);
                                     final pct = a.profitPercent;
                                     TextStyle metricValue(Color c) =>
@@ -472,31 +472,38 @@ class _AccountsListState extends State<AccountsList> {
                                               fontWeight: FontWeight.bold,
                                               fontSize: titleSize,
                                             );
-                                    return Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.stretch,
-                                      children: [
-                                        Text(
-                                          _accountTitle(a),
-                                          style:
-                                              (Theme.of(
-                                                        context,
-                                                      ).textTheme.titleLarge ??
-                                                      const TextStyle())
-                                                  .copyWith(
-                                                    fontWeight: FontWeight.w800,
-                                                    fontSize: titleSize,
-                                                    color: AppFinanceStyle
-                                                        .valueColor,
-                                                  ),
-                                        ),
-                                        const SizedBox(height: 12),
-                                        Row(
-                                          mainAxisAlignment:
-                                              MainAxisAlignment.spaceAround,
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: [
+                                    return ConstrainedBox(
+                                      constraints: BoxConstraints(
+                                        minHeight: kIsWeb ? 128 : 110,
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.stretch,
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          Text(
+                                            _accountTitle(a),
+                                            style:
+                                                (Theme.of(
+                                                          context,
+                                                        )
+                                                            .textTheme
+                                                            .titleLarge ??
+                                                        const TextStyle())
+                                                    .copyWith(
+                                                      fontWeight: FontWeight.w800,
+                                                      fontSize: titleSize,
+                                                      color: AppFinanceStyle
+                                                          .valueColor,
+                                                    ),
+                                          ),
+                                          Row(
+                                            mainAxisAlignment:
+                                                MainAxisAlignment.spaceAround,
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.end,
+                                            children: [
                                             Column(
                                               children: [
                                                 Text(
@@ -586,7 +593,8 @@ class _AccountsListState extends State<AccountsList> {
                                             ),
                                           ],
                                         ),
-                                      ],
+                                        ],
+                                      ),
                                     );
                                   },
                                 ),
