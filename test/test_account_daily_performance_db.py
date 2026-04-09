@@ -74,21 +74,20 @@ def test_daily_performance_rebuild_equity_and_efficiency():
     q = db.account_daily_performance_query_month(aid, 2026, 4)
     r = next(x for x in q if x["day"] == "2026-04-05")
     assert abs(r["net_pnl"] - 99.0) < 1e-6
-    assert r["close_count"] == 1
-    assert r["equity_change"] is not None and abs(r["equity_change"] - 99.0) < 1e-6
+    assert r["close_pos_count"] == 1
+    assert r["equlity_changed"] is not None and abs(r["equlity_changed"] - 99.0) < 1e-6
+    assert r["balance_changed"] is not None and abs(r["balance_changed"]) < 1e-9
+    assert r["balance_changed_pct"] is not None and abs(r["balance_changed_pct"]) < 1e-9
     exp_pct = 99.0 / 4000.0 * 100.0
     assert r["pnl_pct"] is not None and abs(r["pnl_pct"] - exp_pct) < 1e-6
-    assert r["equity_base_realized_chain"] == 4000.0
-    assert r["pnl_pct_realized_chain"] is not None
-    assert abs(r["pnl_pct_realized_chain"] - exp_pct) < 1e-6
-    assert r["benchmark_inst_id"] == "PEPE-USDT-SWAP"
-    assert r["market_tr"] == 0.2
+    assert r["instrument_id"] == "PEPE-USDT-SWAP"
+    assert r["market_truevolatility"] == 0.2
     assert r["efficiency_ratio"] is not None
     assert abs(r["efficiency_ratio"] - 99.0 / (0.2 * 1e9)) < 1e-12
 
 
-def test_daily_performance_sparse_snapshot_chain_pct_differs_from_snapshot_pct():
-    """链式分母随上一日链末滚动；pnl_pct 分母为当月 account_month_balance_baseline 口径（initial_balance 优先）。"""
+def test_daily_performance_sparse_snapshot_pnl_pct_fixed_month_denom():
+    """连续两日 pnl_pct 分母均为当月 account_month_balance_baseline 口径（initial_balance 优先）。"""
     aid = "acct-perf-chain-2"
     ts1 = "2026-04-05T12:00:00.000000Z"
     ts2 = "2026-04-06T12:00:00.000000Z"
@@ -182,8 +181,3 @@ def test_daily_performance_sparse_snapshot_chain_pct_differs_from_snapshot_pct()
     assert abs(d6["net_pnl"] - net6) < 1e-6
     assert d5["pnl_pct"] is not None and abs(d5["pnl_pct"] - net5 / 4000.0 * 100.0) < 1e-6
     assert d6["pnl_pct"] is not None and abs(d6["pnl_pct"] - net6 / 4000.0 * 100.0) < 1e-6
-    chain_after_5 = 4000.0 + net5
-    assert d6["equity_base_realized_chain"] is not None
-    assert abs(d6["equity_base_realized_chain"] - chain_after_5) < 1e-6
-    assert d6["pnl_pct_realized_chain"] is not None
-    assert abs(d6["pnl_pct_realized_chain"] - net6 / chain_after_5 * 100.0) < 1e-6

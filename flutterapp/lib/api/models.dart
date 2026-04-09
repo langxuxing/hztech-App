@@ -187,8 +187,12 @@ class AccountProfit {
       profitPercent: (json['equity_profit_percent'] as num?)?.toDouble() ??
           (json['profit_percent'] as num?)?.toDouble() ??
           0,
-      cashProfitAmount: (json['cash_profit_amount'] as num?)?.toDouble() ?? 0,
-      cashProfitPercent: (json['cash_profit_percent'] as num?)?.toDouble() ?? 0,
+      cashProfitAmount: (json['balance_profit_amount'] as num?)?.toDouble() ??
+          (json['cash_profit_amount'] as num?)?.toDouble() ??
+          0,
+      cashProfitPercent: (json['balance_profit_percent'] as num?)?.toDouble() ??
+          (json['cash_profit_percent'] as num?)?.toDouble() ??
+          0,
       floatingProfit: (json['floating_profit'] as num?)?.toDouble() ?? 0,
       equityUsdt: (json['equity_usdt'] as num?)?.toDouble() ?? 0,
       balanceUsdt: (json['balance_usdt'] as num?)?.toDouble(),
@@ -338,8 +342,12 @@ class BotProfitSnapshot {
       profitPercent: (json['equity_profit_percent'] as num?)?.toDouble() ??
           (json['profit_percent'] as num?)?.toDouble() ??
           0,
-      cashProfitAmount: (json['cash_profit_amount'] as num?)?.toDouble() ?? 0,
-      cashProfitPercent: (json['cash_profit_percent'] as num?)?.toDouble() ?? 0,
+      cashProfitAmount: (json['balance_profit_amount'] as num?)?.toDouble() ??
+          (json['cash_profit_amount'] as num?)?.toDouble() ??
+          0,
+      cashProfitPercent: (json['balance_profit_percent'] as num?)?.toDouble() ??
+          (json['cash_profit_percent'] as num?)?.toDouble() ??
+          0,
       createdAt: json['created_at'] as String?,
       cashBalance: (json['cash_balance'] as num?)?.toDouble(),
       availableMargin: (json['available_margin'] as num?)?.toDouble(),
@@ -379,45 +387,47 @@ class DailyRealizedPnlDayRow {
   DailyRealizedPnlDayRow({
     required this.day,
     required this.netPnl,
-    required this.closeCount,
-    this.equityChange,
-    this.cashChange,
+    required this.closePosCount,
+    this.equlityChanged,
+    this.balanceChanged,
+    this.balanceChangedPct,
     this.pnlPct,
-    this.equityBaseRealizedChain,
-    this.pnlPctRealizedChain,
-    this.benchmarkInstId,
-    this.marketTr,
+    this.instrumentId,
+    this.marketTruevolatility,
     this.efficiencyRatio,
     this.performanceUpdatedAt,
   });
 
   final String day;
   final double netPnl;
-  final int closeCount;
-  final double? equityChange;
-  final double? cashChange;
+  final int closePosCount;
+  final double? equlityChanged;
+  final double? balanceChanged;
+  final double? balanceChangedPct;
   final double? pnlPct;
-  final double? equityBaseRealizedChain;
-  final double? pnlPctRealizedChain;
-  final String? benchmarkInstId;
-  final double? marketTr;
+  final String? instrumentId;
+  final double? marketTruevolatility;
   final double? efficiencyRatio;
   final String? performanceUpdatedAt;
 
+  /// 优先读现行字段名；`??` 右侧为旧版 API 兼容。
   factory DailyRealizedPnlDayRow.fromJson(Map<String, dynamic> json) {
+    final closeRaw = json['close_pos_count'] ?? json['close_count'];
+    final eqRaw = json['equlity_changed'] ?? json['equity_change'];
+    final balRaw =
+        json['balance_changed'] ?? json['cash_change'] ?? json['cash_changed'];
+    final instRaw = json['instrument_id'] ?? json['benchmark_inst_id'];
+    final mtvRaw = json['market_truevolatility'] ?? json['market_tr'];
     return DailyRealizedPnlDayRow(
       day: json['day'] as String? ?? '',
       netPnl: (json['net_pnl'] as num?)?.toDouble() ?? 0,
-      closeCount: (json['close_count'] as num?)?.toInt() ?? 0,
-      equityChange: (json['equity_change'] as num?)?.toDouble(),
-      cashChange: (json['cash_change'] as num?)?.toDouble(),
+      closePosCount: (closeRaw as num?)?.toInt() ?? 0,
+      equlityChanged: (eqRaw as num?)?.toDouble(),
+      balanceChanged: (balRaw as num?)?.toDouble(),
+      balanceChangedPct: (json['balance_changed_pct'] as num?)?.toDouble(),
       pnlPct: (json['pnl_pct'] as num?)?.toDouble(),
-      equityBaseRealizedChain:
-          (json['equity_base_realized_chain'] as num?)?.toDouble(),
-      pnlPctRealizedChain:
-          (json['pnl_pct_realized_chain'] as num?)?.toDouble(),
-      benchmarkInstId: json['benchmark_inst_id'] as String?,
-      marketTr: (json['market_tr'] as num?)?.toDouble(),
+      instrumentId: instRaw as String?,
+      marketTruevolatility: (mtvRaw as num?)?.toDouble(),
       efficiencyRatio: (json['efficiency_ratio'] as num?)?.toDouble(),
       performanceUpdatedAt: json['performance_updated_at'] as String?,
     );
@@ -766,16 +776,20 @@ class OpenPositionsSnapshotsResponse {
   }
 }
 
-/// 赛季：启停时间、初期权益/现金、盈利、盈利率（与 account_season.account_id 对应）
+/// 赛季：启停时间、初期/期末权益与 USDT 余额、盈利、盈利率（与 account_season.account_id 对应）
 class BotSeason {
   final int id;
   final String accountId;
   final String? startedAt;
   final String? stoppedAt;
-  final double initialBalance;
-  final double? initialCash;
+  /// 赛季开始时账户权益（USDT）
+  final double initialEquity;
+  /// 赛季开始时 USDT 资产余额（cashBal）
+  final double? initialBalance;
+  /// 赛季结束时权益
+  final double? finalEquity;
+  /// 赛季结束时 USDT 余额
   final double? finalBalance;
-  final double? finalCash;
   final double? profitAmount;
   final double? profitPercent;
   final bool? isActive;
@@ -786,10 +800,10 @@ class BotSeason {
     required this.accountId,
     this.startedAt,
     this.stoppedAt,
-    required this.initialBalance,
-    this.initialCash,
+    required this.initialEquity,
+    this.initialBalance,
+    this.finalEquity,
     this.finalBalance,
-    this.finalCash,
     this.profitAmount,
     this.profitPercent,
     this.isActive,
@@ -797,15 +811,19 @@ class BotSeason {
   });
 
   factory BotSeason.fromJson(Map<String, dynamic> json) {
+    final ie = (json['initial_equity'] as num?)?.toDouble();
+    final ib = (json['initial_balance'] as num?)?.toDouble();
+    final fe = (json['final_equity'] as num?)?.toDouble();
+    final fb = (json['final_balance'] as num?)?.toDouble();
     return BotSeason(
       id: json['id'] as int? ?? 0,
       accountId: (json['account_id'] ?? json['bot_id']) as String? ?? '',
       startedAt: json['started_at'] as String?,
       stoppedAt: json['stopped_at'] as String?,
-      initialBalance: (json['initial_balance'] as num?)?.toDouble() ?? 0,
-      initialCash: (json['initial_cash'] as num?)?.toDouble(),
-      finalBalance: (json['final_balance'] as num?)?.toDouble(),
-      finalCash: (json['final_cash'] as num?)?.toDouble(),
+      initialEquity: ie ?? 0,
+      initialBalance: ib,
+      finalEquity: fe,
+      finalBalance: fb,
       profitAmount: (json['profit_amount'] as num?)?.toDouble(),
       profitPercent: (json['profit_percent'] as num?)?.toDouble(),
       isActive: json['is_active'] as bool?,

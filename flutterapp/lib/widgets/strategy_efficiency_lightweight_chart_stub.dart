@@ -14,5 +14,24 @@ class StrategyEfficiencyLightweightChart extends StatelessWidget {
   final double height;
 
   @override
-  Widget build(BuildContext context) => const SizedBox.shrink();
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: height,
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Text(
+            rows.isEmpty
+                ? '暂无策略能效日线数据。'
+                : '策略能效组合图仅在 Web 端展示；请在浏览器中打开本页。',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              fontSize: 13,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }

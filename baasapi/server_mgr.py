@@ -14,7 +14,9 @@ import time
 
 # 项目根目录（baasapi 的上一级）
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_PATH = PROJECT_ROOT / "baasapi" / "deploy-aws.json"
+DEFAULT_DEPLOY_CONFIG_PATH = PROJECT_ROOT / "baasapi" / "deploy-aws.json"
+# 兼容旧名（仅文档/外部引用）
+CONFIG_PATH = DEFAULT_DEPLOY_CONFIG_PATH
 GRADLEW = PROJECT_ROOT / "gradlew"
 flutterapp = PROJECT_ROOT / "flutterapp"
 APK_DEBUG_DIR = PROJECT_ROOT / "app" / "build" / "outputs" / "apk" / "debug"
@@ -36,9 +38,43 @@ def _ios_build_requested() -> bool:
     return v in ("0", "false", "no")
 
 
+def resolve_deploy_config_path() -> Path:
+    """部署 JSON 路径：环境变量 DEPLOY_CONFIG（相对路径相对项目根）。"""
+    raw = os.environ.get("DEPLOY_CONFIG", "").strip()
+    if not raw:
+        return DEFAULT_DEPLOY_CONFIG_PATH
+    p = Path(raw)
+    return p.resolve() if p.is_absolute() else (PROJECT_ROOT / p).resolve()
+
+
 def load_config():
-    with open(CONFIG_PATH, encoding="utf-8") as f:
+    path = resolve_deploy_config_path()
+    if not path.is_file():
+        raise FileNotFoundError("未找到部署配置: %s" % path)
+    with open(path, encoding="utf-8") as f:
         return json.load(f)
+
+
+def default_hztech_api_base_url() -> str:
+    """与 deploy2AWS.sh 一致：双机取 baasapi 段 host，单机补齐 host；用于未设置 HZTECH_API_BASE_URL 时。"""
+    c = load_config()
+    scheme = str(c.get("scheme") or "http")
+    api_port = int(
+        c.get("baasapi_port", c.get("app_port", c.get("web_port", 9001)))
+    )
+    fa = c.get("flutterapp") if isinstance(c.get("flutterapp"), dict) else {}
+    ba = c.get("baasapi") if isinstance(c.get("baasapi"), dict) else {}
+    if not fa:
+        fa = c.get("web") if isinstance(c.get("web"), dict) else {}
+    if not ba:
+        ba = c.get("api") if isinstance(c.get("api"), dict) else {}
+    dual = isinstance(fa, dict) and isinstance(ba, dict)
+    wh = (fa.get("host") or c.get("host") or "").strip()
+    ah = (ba.get("host") or "").strip()
+    if not dual and not ah:
+        ah = wh
+    host = ah if dual or ah else wh
+    return "%s://%s:%s/" % (scheme, host, api_port)
 
 
 def _top_level_base(c: dict) -> dict:
@@ -171,7 +207,6 @@ def _rsync_deploy_exclude_patterns() -> list[str]:
         "baasapi/build_and_deploy.sh",
         "baasapi/seed_mock_account_data.py",
         "baasapi/seed_test_seasons.py",
-        "baasapi/seed_test_profit_data.py",
         "baasapi/accounts/test_account_key.py",
         # 本地 SQLite 库体积大且不应覆盖远端生产库；远端由 init_db / 迁移维护
         "baasapi/sqlite/*.db",
@@ -221,8 +256,12 @@ def _run_rsync(cmd: list, retries: int = 3) -> None:
                 raise
 
 
-def _rsync_one(cfg: dict, extra_excludes: list | None, sync_flutter_web: bool):
-    """同步项目根到指定主机。extra_excludes 追加排除项；sync_flutter_web 为 True 时再同步 flutter build/web。"""
+def _rsync_one(
+    cfg: dict, extra_excludes: list | None, sync_flutter_web: bool, rsync_mirror: bool = True
+):
+    """同步项目根到指定主机。extra_excludes 追加排除项；sync_flutter_web 为 True 时再同步 flutter build/web。
+
+    rsync_mirror：True 时 rsync 带 --delete（远端与源目录镜像一致）；False 时不删除远端多余文件（慎用）。"""
     remote_base = f"{cfg['user']}@{cfg['host']}:{cfg['remote_path']}"
     ssh_e = _rsync_ssh_e(cfg)
     excludes: list[str] = []
@@ -231,7 +270,7 @@ def _rsync_one(cfg: dict, extra_excludes: list | None, sync_flutter_web: bool):
     if extra_excludes:
         for x in extra_excludes:
             excludes.extend(["--exclude", x])
-    cmd = ["rsync", "-avz", "--delete"]
+    cmd = ["rsync", "-avz"] + (["--delete"] if rsync_mirror else [])
     cmd.extend(excludes)
     cmd.extend(["-e", ssh_e])
     cmd.extend([str(PROJECT_ROOT) + "/", remote_base + "/"])
@@ -244,34 +283,48 @@ def _rsync_one(cfg: dict, extra_excludes: list | None, sync_flutter_web: bool):
         remote_web_dir = f"{cfg['remote_path']}/flutterapp/build/web"
         run_ssh(f"mkdir -p {shlex.quote(remote_web_dir)}", cfg=cfg)
         remote_web = remote_base + "/flutterapp/build/web/"
-        _run_rsync(
-            ["rsync", "-avz", "--delete", "-e", ssh_e, str(web_src) + "/", remote_web],
-        )
+        wcmd = ["rsync", "-avz"] + (["--delete"] if rsync_mirror else [])
+        wcmd.extend(["-e", ssh_e, str(web_src) + "/", remote_web])
+        _run_rsync(wcmd)
 
 
-def _rsync_flutter_host_web_apk_only(cfg: dict) -> None:
+def _rsync_flutter_host_web_apk_only(cfg: dict, rsync_mirror: bool = True) -> None:
     """双机部署时 Flutter 主机：仅同步 apk/、flutterapp/build/web/、baasapi/serve_web_static.py 与 requirements.txt。
 
     不推送完整 baasapi 源码；不部署数据库目录，并在同步末尾删除远端 baasapi/sqlite/（若有遗留）。
+
+    rsync_mirror 为 False 时不执行远端 rm -rf baasapi，且 rsync 不带 --delete。
     """
     ssh_e = _rsync_ssh_e(cfg)
     remote_base = f"{cfg['user']}@{cfg['host']}:{cfg['remote_path']}"
     rp = cfg["remote_path"]
-    # 清空远端 baasapi/，避免历史上整包同步留下的 main.py、sqlite 等与 API 主机混淆
-    run_ssh(
-        "mkdir -p %s %s && rm -rf %s && mkdir -p %s"
-        % (
-            shlex.quote(rp + "/apk"),
-            shlex.quote(rp + "/flutterapp/build/web"),
-            shlex.quote(rp + "/baasapi"),
-            shlex.quote(rp + "/baasapi"),
-        ),
-        cfg=cfg,
-    )
+    if rsync_mirror:
+        # 清空远端 baasapi/，避免历史上整包同步留下的 main.py、sqlite 等与 API 主机混淆
+        run_ssh(
+            "mkdir -p %s %s && rm -rf %s && mkdir -p %s"
+            % (
+                shlex.quote(rp + "/apk"),
+                shlex.quote(rp + "/flutterapp/build/web"),
+                shlex.quote(rp + "/baasapi"),
+                shlex.quote(rp + "/baasapi"),
+            ),
+            cfg=cfg,
+        )
+    else:
+        run_ssh(
+            "mkdir -p %s %s %s"
+            % (
+                shlex.quote(rp + "/apk"),
+                shlex.quote(rp + "/flutterapp/build/web"),
+                shlex.quote(rp + "/baasapi"),
+            ),
+            cfg=cfg,
+        )
+    del_flags = ["--delete"] if rsync_mirror else []
     apk_src = PROJECT_ROOT / "apk"
     if apk_src.is_dir():
         _run_rsync(
-            ["rsync", "-avz", "--delete", "-e", ssh_e, str(apk_src) + "/", remote_base + "/apk/"]
+            ["rsync", "-avz"] + del_flags + ["-e", ssh_e, str(apk_src) + "/", remote_base + "/apk/"]
         )
     web_src = flutterapp / "build" / "web"
     if web_src.is_dir() and (web_src / "index.html").is_file():
@@ -279,7 +332,9 @@ def _rsync_flutter_host_web_apk_only(cfg: dict) -> None:
             [
                 "rsync",
                 "-avz",
-                "--delete",
+            ]
+            + del_flags
+            + [
                 "-e",
                 ssh_e,
                 str(web_src) + "/",
@@ -300,20 +355,21 @@ def _rsync_flutter_host_web_apk_only(cfg: dict) -> None:
     _flutter_host_remove_sqlite(cfg)
 
 
-def rsync_sync(exclude=None):
+def rsync_sync(exclude=None, rsync_mirror: bool = True):
     """同步到 AWS：单机为整包 + Flutter Web；双机时先 BaasAPI 主机（完整后端），再 Flutter 主机（仅 Web+APK+最小静态脚本）。
 
-    排除项见 _rsync_deploy_exclude_patterns（测试/IDE/Gradle/Dart 源码/本地部署脚本等）。"""
+    排除项见 _rsync_deploy_exclude_patterns（测试/IDE/Gradle/Dart 源码/本地部署脚本等）。
+    rsync_mirror：见 _rsync_one。"""
     ex = list(exclude) if exclude else []
     if has_dual_deploy():
         c_api = target_config("baasapi")
         api_ex = ex + ["flutterapp", "apk"]
-        _rsync_one(c_api, api_ex, sync_flutter_web=False)
+        _rsync_one(c_api, api_ex, sync_flutter_web=False, rsync_mirror=rsync_mirror)
         c_web = target_config("flutterapp")
-        _rsync_flutter_host_web_apk_only(c_web)
+        _rsync_flutter_host_web_apk_only(c_web, rsync_mirror=rsync_mirror)
     else:
         c_web = target_config("flutterapp")
-        _rsync_one(c_web, ex, sync_flutter_web=True)
+        _rsync_one(c_web, ex, sync_flutter_web=True, rsync_mirror=rsync_mirror)
 
 
 def _flutter_build_env():
@@ -696,6 +752,51 @@ def _api_listen_port(cfg: dict) -> int:
     return int(cfg.get("baasapi_port", cfg.get("app_port", cfg.get("web_port", 9001))))
 
 
+def run_verify_deploy() -> int:
+    """HTTP 探测 BaasAPI /api/health 与 Flutter Web /（503 视为 Web 未构建但可达）。返回 0 全部成功。"""
+    import urllib.error
+    import urllib.request
+
+    def _one(url: str, label: str) -> bool:
+        try:
+            with urllib.request.urlopen(url, timeout=15) as r:
+                code = r.status
+        except urllib.error.HTTPError as e:
+            code = e.code
+        except OSError:
+            code = 0
+        ok = code in (200, 503)
+        print(
+            "  %s %s -> HTTP %s (%s)"
+            % ("OK" if ok else "WARN", label, code, url)
+        )
+        return ok
+
+    c = load_config()
+    scheme = str(c.get("scheme") or "http")
+    web_port = int(c.get("flutterapp_port", c.get("web_port", 9000)))
+    api_port = _api_listen_port(c)
+    fa = c.get("flutterapp") if isinstance(c.get("flutterapp"), dict) else {}
+    ba = c.get("baasapi") if isinstance(c.get("baasapi"), dict) else {}
+    if not fa:
+        fa = c.get("web") if isinstance(c.get("web"), dict) else {}
+    if not ba:
+        ba = c.get("api") if isinstance(c.get("api"), dict) else {}
+    dual = isinstance(fa, dict) and isinstance(ba, dict)
+    wh = (fa.get("host") or c.get("host") or "").strip()
+    ah = (ba.get("host") or "").strip()
+    if not dual and not ah:
+        ah = wh
+    ok = True
+    if dual:
+        ok = _one("%s://%s:%s/api/health" % (scheme, ah, api_port), "BaasAPI health") and ok
+        ok = _one("%s://%s:%s/" % (scheme, wh, web_port), "FlutterApp /") and ok
+    else:
+        ok = _one("%s://%s:%s/api/health" % (scheme, wh, api_port), "BaasAPI health") and ok
+        ok = _one("%s://%s:%s/" % (scheme, wh, web_port), "FlutterApp /") and ok
+    return 0 if ok else 1
+
+
 def remote_restart_api():
     """在 BaasAPI 主机上启动完整后端（/api/*、/kline、/download 等 + DB + 定时任务）。"""
     c = target_config("baasapi")
@@ -807,7 +908,7 @@ def remote_pip_install_only():
     print("Remote requirements install done.")
 
 
-def deploy_and_start(port=None, start_server=True):
+def deploy_and_start(port=None, start_server=True, rsync_mirror: bool = True):
     """同步到 AWS；可选在远程安装依赖并启动服务。"""
     c = load_config()
     cweb = target_config("flutterapp")
@@ -821,7 +922,7 @@ def deploy_and_start(port=None, start_server=True):
         )
     else:
         print("Syncing to %s:%s ..." % (cweb["host"], cweb["remote_path"]))
-    rsync_sync()
+    rsync_sync(rsync_mirror=rsync_mirror)
     if not start_server:
         print("Sync done. Skip start. Run: python baasapi/server_mgr.py deploy --no-start")
         return
@@ -878,6 +979,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "deploy":
         start = "--no-start" not in sys.argv
         do_build = "--build" in sys.argv
+        rsync_mirror = "--rsync-no-delete" not in sys.argv
         if do_build:
             rc = run_build_mobile()
             if rc != 0:
@@ -887,8 +989,11 @@ if __name__ == "__main__":
         deploy_and_start(
             port=int(cfg.get("flutterapp_port", cfg.get("web_port", cfg.get("port", 9000)))),
             start_server=start,
+            rsync_mirror=rsync_mirror,
         )
         sys.exit(0)
+    if len(sys.argv) > 1 and sys.argv[1] == "verify":
+        sys.exit(run_verify_deploy())
     if len(sys.argv) > 1 and sys.argv[1] == "restart":
         remote_restart()
         sys.exit(0)
@@ -916,5 +1021,5 @@ if __name__ == "__main__":
     target, key = get_ssh_target()
     print("SSH target:", target, "key:", key)
     print(
-        "Usage: python server_mgr.py [build | build-debug | build-ios | build-web | deploy [--build] [--build-web] [--no-start] | restart | pip-remote | db-sync | shell]"
+        "Usage: python server_mgr.py [build | build-debug | build-ios | build-web | deploy [--build] [--build-web] [--no-start] [--rsync-no-delete] | restart | pip-remote | db-sync | verify | shell]"
     )

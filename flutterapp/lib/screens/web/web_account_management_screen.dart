@@ -349,8 +349,6 @@ class _WebAccountManagementScreenState
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(icon, size: 18, color: color),
-              const SizedBox(width: 6),
               Expanded(
                 child: Text(
                   '$index',
@@ -359,16 +357,18 @@ class _WebAccountManagementScreenState
                   style: base.copyWith(fontWeight: FontWeight.w600),
                 ),
               ),
+              const SizedBox(width: 6),
+              Icon(icon, size: 18, color: color),
             ],
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 12),
           Text(
             label,
             maxLines: 3,
             overflow: TextOverflow.ellipsis,
             style: base.copyWith(fontWeight: FontWeight.w600),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 12),
           Text(
             detail,
             maxLines: 5,
@@ -917,8 +917,6 @@ class _WebAccountManagementScreenState
                                                   letterSpacing: 0.3,
                                                 ),
                                           ),
-
-                                          _infoLine(context, '标的', a.symbol),
                                           _infoLine(
                                             context,
                                             '密钥文件',
@@ -933,13 +931,6 @@ class _WebAccountManagementScreenState
                                             context,
                                             '策略',
                                             a.tradingStrategy,
-                                          ),
-                                          _infoLine(
-                                            context,
-                                            '初始资金',
-                                            a.initialCapital != null
-                                                ? '${a.initialCapital}'
-                                                : null,
                                           ),
 
                                           if (testRec != null &&
@@ -1054,7 +1045,7 @@ class _WebAccountManagementScreenState
                                                   AppFinanceStyle.labelTextStyle(
                                                     context,
                                                   ).copyWith(
-                                                    fontSize: 13,
+                                                    fontSize: 20,
                                                     fontWeight: FontWeight.w600,
                                                   ),
                                             ),

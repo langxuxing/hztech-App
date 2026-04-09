@@ -311,7 +311,7 @@ class _SummaryStrip extends StatelessWidget {
               trailingLabel: !narrow,
             ),
             _SummaryCell(
-              label: basis == _DashboardBasis.equity ? '总权益盈亏' : '总现金盈亏',
+              label: basis == _DashboardBasis.equity ? '总盈亏' : '总现金收益',
               value: formatUiInteger(profit),
               valueStyle: v().copyWith(
                 color: profit >= 0
@@ -321,7 +321,7 @@ class _SummaryStrip extends StatelessWidget {
               trailingLabel: !narrow,
             ),
             _SummaryCell(
-              label: basis == _DashboardBasis.equity ? '权益收益率' : '现金收益率',
+              label: basis == _DashboardBasis.equity ? '平均收益率' : '平均现金收益率',
               value: formatUiPercentLabel(pct),
               valueStyle: v(),
               trailingLabel: !narrow,
@@ -493,7 +493,7 @@ class _OverviewGlassCard extends StatelessWidget {
                 ),
               ),
               _OverviewStatCol(
-                label: basis == _DashboardBasis.equity ? '权益涨跌' : '现金涨跌',
+                label: basis == _DashboardBasis.equity ? '收益率' : '现金收益率',
                 value: formatUiPercentLabel(
                   basis == _DashboardBasis.equity
                       ? account.profitPercent

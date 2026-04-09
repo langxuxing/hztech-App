@@ -818,26 +818,49 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
     );
   }
 
-  Widget _buildBodyScrollable() {
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: ListView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
-            children: [_buildAccountPageContent()],
+  /// 仅可滚动主体。[RefreshIndicator] 的直接子节点必须是 Scrollable，不能是 Stack。
+  Widget _buildProfitScrollView(double minHeightForPlaceholder) {
+    if (_loading && _accounts.isEmpty) {
+      return SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: minHeightForPlaceholder),
+          child: const Center(child: CircularProgressIndicator()),
+        ),
+      );
+    }
+    if (_error != null && _accounts.isEmpty && !_detailLoading) {
+      return SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: minHeightForPlaceholder),
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    _error!,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: AppFinanceStyle.textDefault),
+                  ),
+                  const SizedBox(height: 16),
+                  FilledButton(
+                    onPressed: _load,
+                    child: const Text('重试'),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
-        AccountDetailLoadingOverlay(
-          visible: _detailLoading,
-          message: _switchingAccount
-              ? '正在切换账户…'
-              : '正在加载收益数据…',
-          subtitle: _switchingAccount
-              ? '正在拉取该账户的收益、持仓与曲线'
-              : null,
-        ),
-      ],
+      );
+    }
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+      children: [_buildAccountPageContent()],
     );
   }
 
@@ -869,52 +892,24 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
             final minH = (rawH.isFinite && rawH > 0)
                 ? rawH
                 : MediaQuery.sizeOf(context).height;
-            Widget scrollableChild(Widget child) {
-              return SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(minHeight: minH),
-                  child: child,
+            return Stack(
+              children: [
+                Positioned.fill(
+                  child: RefreshIndicator(
+                    onRefresh: _load,
+                    child: _buildProfitScrollView(minH),
+                  ),
                 ),
-              );
-            }
-
-            return RefreshIndicator(
-              onRefresh: _load,
-              child: _loading && _accounts.isEmpty
-                  ? scrollableChild(
-                      const Center(child: CircularProgressIndicator()),
-                    )
-                  : _error != null &&
-                          _accounts.isEmpty &&
-                          !_detailLoading
-                      ? scrollableChild(
-                          Center(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 24,
-                              ),
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Text(
-                                    _error!,
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(
-                                      color: AppFinanceStyle.textDefault,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 16),
-                                  FilledButton(
-                                    onPressed: _load,
-                                    child: const Text('重试'),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        )
-                      : _buildBodyScrollable(),
+                AccountDetailLoadingOverlay(
+                  visible: _detailLoading,
+                  message: _switchingAccount
+                      ? '正在切换账户…'
+                      : '正在加载收益数据…',
+                  subtitle: _switchingAccount
+                      ? '正在拉取该账户的收益、持仓与曲线'
+                      : null,
+                ),
+              ],
             );
           },
         ),

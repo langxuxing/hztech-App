@@ -11,7 +11,6 @@ DELETE FROM account_month_balance_baseline WHERE account_id IN ('simpleserver-lh
 DELETE FROM account_positions_history WHERE account_id IN ('simpleserver-lhg', 'simpleserver-hztech');
 DELETE FROM account_season WHERE account_id IN ('simpleserver-lhg', 'simpleserver-hztech');
 DELETE FROM tradingbot_mgr WHERE account_id IN ('simpleserver-lhg', 'simpleserver-hztech');
-DELETE FROM tradingbot_profit_snapshots WHERE bot_id IN ('simpleserver-lhg', 'simpleserver-hztech');
 DELETE FROM strategy_events WHERE bot_id IN ('simpleserver-lhg', 'simpleserver-hztech');
 DELETE FROM account_list WHERE account_id IN ('simpleserver-lhg', 'simpleserver-hztech');
 

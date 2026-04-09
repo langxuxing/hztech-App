@@ -22,8 +22,19 @@
     "enbaled": true
   },  
   {
-    "account_id": "Defi_Demo",
-    "account_name": "Defi样板",
+    "account_id": "Cheng_Live",
+    "account_name": "程文斌",
+    "exchange_account": "OKX",
+    "symbol": "PEPE-USDT-SWAP",
+    "Initial_capital": 1000,
+    "trading_strategy": "Moneyflow-V2.1",
+    "account_key_file": "OKX_Cheng_Live.json",
+    "script_file": "moneyflow_test_live.sh",
+    "enbaled": true
+  },
+  {
+    "account_id": "DeFi_Demo",
+    "account_name": "DeFi样板",
     "exchange_account": "OKX",
     "symbol": "PEPE-USDT-SWAP",
     "Initial_capital": 500,
@@ -89,7 +100,7 @@
   },
   {
     "account_id": "HzTech_Moneyflow@001",
-    "account_name": "细水长流1-禾正现金流",
+    "account_name": "细水长流1",
     "exchange_account": "OKX",
     "symbol": "PEPE-USDT-SWAP",
     "Initial_capital": 5000,
@@ -100,7 +111,7 @@
   },
   {
     "account_id": "HzTech_Moneyflow@002",
-    "account_name": "细水长流2-Defi专户",
+    "account_name": "细水长流2",
     "exchange_account": "OKX",
     "symbol": "PEPE-USDT-SWAP",
     "Initial_capital": 500,
@@ -111,7 +122,7 @@
   },
   {
     "account_id": "HzTech_Moneyflow@003",
-    "account_name": "细水长流3-复利增长",
+    "account_name": "细水长流3",
     "exchange_account": "OKX",
     "symbol": "PEPE-USDT-SWAP",
     "Initial_capital": 5000,
@@ -122,7 +133,7 @@
   },
   {
     "account_id": "HzTech_Moneyflow@004",
-    "account_name": "细水长流4-董哥哥VIP",
+    "account_name": "细水长流4-VIP",
     "exchange_account": "OKX",
     "symbol": "PEPE-USDT-SWAP",
     "Initial_capital": 7153,

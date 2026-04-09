@@ -1,6 +1,11 @@
 -- 一次性迁移（PostgreSQL / SQLite 3.25+ 语法略有差异时请分环境执行）
 -- account_month_balance_baseline.open_cash -> initial_balance（旧表名见 rename_account_month_open_to_balance_baseline.sql）
--- account_daily_performance: +equity_change, +cash_change, -equity_base（请先补全链式列若旧库缺失）
+--
+-- account_daily_performance：下述注释为「当时」新增列名。现行列名已改为
+-- close_pos_count、equlity_changed、balance_changed、instrument_id、market_truevolatility
+--（见 baasapi/db.py 中 _rename_account_daily_performance_legacy_columns，
+--  或手工脚本 rename_account_daily_performance_legacy_column_names.sql）。
+-- 历史步骤：+equity_change, +cash_change, -equity_base
 
 -- PostgreSQL:
 -- ALTER TABLE account_month_balance_baseline RENAME COLUMN open_cash TO initial_balance;

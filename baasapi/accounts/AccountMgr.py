@@ -389,7 +389,7 @@ def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None 
 
         total_eq, cash_bal, avail_eq, used_m = _okx_balance_amounts(live)
         profit_amount, profit_percent = profit_vs_initial(initial, total_eq)
-        cash_profit_amount, cash_profit_percent = cash_profit_vs_initial(
+        balance_profit_amount, balance_profit_percent = cash_profit_vs_initial(
             initial, cash_bal
         )
 
@@ -402,8 +402,8 @@ def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None 
             equity_profit_percent=profit_percent,
             available_margin=avail_eq,
             used_margin=used_m,
-            cash_profit_amount=cash_profit_amount,
-            cash_profit_percent=cash_profit_percent,
+            balance_profit_amount=balance_profit_amount,
+            balance_profit_percent=balance_profit_percent,
         )
 
         log.debug(
@@ -547,7 +547,7 @@ def backfill_account_snapshots_from_okx_bills(
         ratio = (eq_prev / avail_prev) if avail_prev > 1e-12 else 1.0
         equity = cash_b * ratio
         profit_amount, profit_percent = profit_vs_initial(initial, equity)
-        cash_profit_amount, cash_profit_percent = cash_profit_vs_initial(
+        balance_profit_amount, balance_profit_percent = cash_profit_vs_initial(
             initial, cash_b
         )
         snap_at = f"{day_s}T23:59:59.000000Z"
@@ -560,8 +560,8 @@ def backfill_account_snapshots_from_okx_bills(
             equity_profit_percent=profit_percent,
             available_margin=0.0,
             used_margin=0.0,
-            cash_profit_amount=cash_profit_amount,
-            cash_profit_percent=cash_profit_percent,
+            balance_profit_amount=balance_profit_amount,
+            balance_profit_percent=balance_profit_percent,
         )
         inserted += 1
         cur_d = cur_d + timedelta(days=1)
@@ -607,7 +607,7 @@ def refresh_balance_snapshot_one(
 
     total_eq, cash_bal, avail_eq, used_m = _okx_balance_amounts(live)
     profit_amount, profit_percent = profit_vs_initial(initial, total_eq)
-    cash_profit_amount, cash_profit_percent = cash_profit_vs_initial(
+    balance_profit_amount, balance_profit_percent = cash_profit_vs_initial(
         initial, cash_bal
     )
 
@@ -620,8 +620,8 @@ def refresh_balance_snapshot_one(
         equity_profit_percent=profit_percent,
         available_margin=avail_eq,
         used_margin=used_m,
-        cash_profit_amount=cash_profit_amount,
-        cash_profit_percent=cash_profit_percent,
+        balance_profit_amount=balance_profit_amount,
+        balance_profit_percent=balance_profit_percent,
     )
 
     log.info(
@@ -650,104 +650,6 @@ def refresh_balance_snapshot_one(
             f"{n_b} 个缺日并已重算 account_daily_performance"
         )
     return True, "已写入 account_balance_snapshots"
-
-
-def _load_tradingbots_json_bots() -> list[dict]:
-    """已弃用 accounts/tradingbots.json；账户仅以 Account_List.json 为准。"""
-    return []
-
-
-def fetch_and_save_tradingbot_snapshots(
-    db_module: Any, logger: logging.Logger | None = None
-) -> None:
-    """兼容入口：原 tradingbots.json 路径已弃用，此函数不再写入数据。"""
-    log = logger or logging.getLogger(__name__)
-    import exchange.okx as okx_mod
-
-    bots = _load_tradingbots_json_bots()
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    for b in bots:
-        bot_id = (b.get("tradingbot_id") or "").strip()
-        if not bot_id:
-            continue
-        api_file = (b.get("account_api_file") or "").strip()
-        if not api_file:
-            continue
-        config_path = ACCOUNTS_DIR / api_file
-        if not config_path.is_file():
-            continue
-        try:
-            balance = okx_mod.okx_fetch_balance(config_path=config_path)
-            if balance is None:
-                continue
-            total_eq = float(balance.get("equity_usdt") or balance.get("total_eq") or 0.0)
-            prev = db_module.bot_profit_latest_by_bot(bot_id)
-            initial = float(prev["initial_balance"]) if prev else total_eq
-            if prev is None and total_eq > 0:
-                initial = total_eq
-            profit_amount = total_eq - initial
-            profit_percent = (profit_amount / initial * 100.0) if initial else 0.0
-            db_module.bot_profit_insert(
-                bot_id=bot_id,
-                snapshot_at=ts,
-                initial_balance=initial,
-                current_balance=total_eq,
-                equity_usdt=total_eq,
-                profit_amount=profit_amount,
-                profit_percent=profit_percent,
-            )
-            log.debug(
-                "bot_profit_snapshot: %s equity=%s",
-                bot_id[:_LOG_ACCOUNT_COL_WIDTH].ljust(_LOG_ACCOUNT_COL_WIDTH),
-                int(round(total_eq)),
-            )
-        except Exception as e:
-            db_module.log_insert(
-                "WARN",
-                "bot_profit_snapshot_failed",
-                source="account_mgr",
-                extra={"bot_id": bot_id, "error": str(e)},
-            )
-
-
-def refresh_tradingbot_balance_snapshot_one(
-    db_module: Any,
-    bot_id: str,
-    config_path: Path,
-    logger: logging.Logger | None = None,
-) -> tuple[bool, str]:
-    """遗留：原 tradingbots-only bot 的余额写入 tradingbot_profit_snapshots（当前无数据源）。"""
-    log = logger or logging.getLogger(__name__)
-    import exchange.okx as okx_mod
-
-    bid = (bot_id or "").strip()
-    if not bid:
-        return False, "缺少 bot_id"
-    if not config_path.is_file():
-        return False, "密钥文件不存在"
-
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    balance = okx_mod.okx_fetch_balance(config_path=config_path)
-    if balance is None:
-        return False, "OKX 余额拉取失败"
-    total_eq = float(balance.get("equity_usdt") or balance.get("total_eq") or 0.0)
-    prev = db_module.bot_profit_latest_by_bot(bid)
-    initial = float(prev["initial_balance"]) if prev else total_eq
-    if prev is None and total_eq > 0:
-        initial = total_eq
-    profit_amount = total_eq - initial
-    profit_percent = (profit_amount / initial * 100.0) if initial else 0.0
-    db_module.bot_profit_insert(
-        bot_id=bid,
-        snapshot_at=ts,
-        initial_balance=initial,
-        current_balance=total_eq,
-        equity_usdt=total_eq,
-        profit_amount=profit_amount,
-        profit_percent=profit_percent,
-    )
-    log.info("bot_profit_snapshot_one_ok: %s equity=%s", bid, int(round(total_eq)))
-    return True, "已写入 tradingbot_profit_snapshots"
 
 
 def _account_benchmark_inst_map() -> dict[str, str]:
@@ -1178,7 +1080,7 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
             total_eq, cash_bal, avail_eq, used_m = _okx_balance_amounts(live)
             upl = float(live.get("upl") or 0.0)
             profit_amount, profit_percent = profit_vs_initial(initial, total_eq)
-            cash_profit_amount, cash_profit_percent = cash_profit_vs_initial(
+            balance_profit_amount, balance_profit_percent = cash_profit_vs_initial(
                 initial, cash_bal
             )
             out.append(
@@ -1191,8 +1093,8 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
                     "current_balance": total_eq,
                     "equity_profit_amount": profit_amount,
                     "equity_profit_percent": profit_percent,
-                    "cash_profit_amount": cash_profit_amount,
-                    "cash_profit_percent": cash_profit_percent,
+                    "balance_profit_amount": balance_profit_amount,
+                    "balance_profit_percent": balance_profit_percent,
                     "floating_profit": upl,
                     "equity_usdt": total_eq,
                     "balance_usdt": cash_bal,
@@ -1211,8 +1113,8 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
             used_m = float(snap.get("used_margin") or 0.0)
             if avail_eq <= 1e-12:
                 avail_eq = cash_bal
-            cpa = snap.get("cash_profit_amount")
-            cpp = snap.get("cash_profit_percent")
+            cpa = snap.get("balance_profit_amount", snap.get("cash_profit_amount"))
+            cpp = snap.get("balance_profit_percent", snap.get("cash_profit_percent"))
             if cpa is None or cpp is None:
                 cpa, cpp = cash_profit_vs_initial(initial, cash_bal)
             else:
@@ -1231,8 +1133,8 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
                     "equity_profit_percent": float(
                         snap.get("equity_profit_percent", snap.get("profit_percent", 0))
                     ),
-                    "cash_profit_amount": cpa,
-                    "cash_profit_percent": cpp,
+                    "balance_profit_amount": cpa,
+                    "balance_profit_percent": cpp,
                     "floating_profit": 0.0,
                     "equity_usdt": eq,
                     "balance_usdt": cash_bal,
@@ -1255,8 +1157,8 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
                     "current_balance": 0,
                     "equity_profit_amount": 0,
                     "equity_profit_percent": 0,
-                    "cash_profit_amount": 0,
-                    "cash_profit_percent": 0,
+                    "balance_profit_amount": 0,
+                    "balance_profit_percent": 0,
                     "floating_profit": 0,
                     "equity_usdt": 0,
                     "balance_usdt": 0,

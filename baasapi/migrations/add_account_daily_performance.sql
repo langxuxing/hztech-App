@@ -1,16 +1,20 @@
--- 平仓按日汇总：净盈亏、权益口径日收益率%、对标标的 TR 的策略能效（与 init_db 中 DDL 一致，供已有库手工执行）
+-- 平仓按日汇总（SQLite 手工建表 / 对照）
+-- 列：close_pos_count, equlity_changed, balance_changed, balance_changed_pct, instrument_id,
+--     market_truevolatility（及 net_realized_pnl, pnl_pct, efficiency_ratio, updated_at）；
+--     与 baasapi/db.py 中 init_db() 内联 CREATE 一致。
+-- PostgreSQL：使用同目录下 add_account_daily_performance.postgresql.sql（与 db_backend.pg_run_init 一致）。
+-- 旧列名迁移：rename_account_daily_performance_legacy_column_names.sql 或启动服务 init_db。
 CREATE TABLE IF NOT EXISTS account_daily_performance (
     account_id TEXT NOT NULL,
     day TEXT NOT NULL,
     net_realized_pnl REAL NOT NULL DEFAULT 0,
-    close_count INTEGER NOT NULL DEFAULT 0,
-    equity_change REAL,
-    cash_change REAL,
+    close_pos_count INTEGER NOT NULL DEFAULT 0,
+    equlity_changed REAL,
+    balance_changed REAL,
+    balance_changed_pct REAL,
     pnl_pct REAL,
-    equity_base_realized_chain REAL,
-    pnl_pct_realized_chain REAL,
-    benchmark_inst_id TEXT NOT NULL DEFAULT '',
-    market_tr REAL,
+    instrument_id TEXT NOT NULL DEFAULT '',
+    market_truevolatility REAL,
     efficiency_ratio REAL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (account_id, day)

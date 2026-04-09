@@ -152,25 +152,6 @@ def test_merge_cash_yield_uses_month_base():
     assert r["month_start_cash"] == 2000.0
 
 
-def test_normalize_bot_profit_snapshots_for_efficiency():
-    raw = [
-        {
-            "snapshot_at": "2026-04-01T10:00:00.000Z",
-            "equity_usdt": 100.0,
-            "current_balance": 99.0,
-        },
-        {"snapshot_at": "2026-04-01T20:00:00.000Z", "current_balance": 104.0},
-    ]
-    norm = se.normalize_bot_profit_snapshots_for_efficiency(raw)
-    assert len(norm) == 2
-    assert norm[0]["cash_balance"] == 100.0
-    assert norm[0]["equity_usdt"] == 100.0
-    assert norm[1]["cash_balance"] == 104.0
-    assert norm[1]["equity_usdt"] == 104.0
-    by = se.daily_cash_delta_by_utc_day(norm)
-    assert by["2026-04-01"]["cash_delta_usdt"] == 4.0
-
-
 def test_merge_includes_equity_and_atr_placeholder():
     bars = [
         {

@@ -264,6 +264,23 @@ class PgConnectionWrapper:
         self._raw.close()
 
 
+def _pg_apply_schema_search_path(raw: Any) -> None:
+    """建 schema（若有权限）并设置 search_path。云库常见仅授予 schema 内权限，无库级 CREATE。"""
+    from psycopg2 import errors as pg_errors
+
+    schema_esc = PG_SCHEMA.replace('"', '""')
+    cur = raw.cursor()
+    try:
+        try:
+            cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema_esc}"')
+        except pg_errors.InsufficientPrivilege:
+            raw.rollback()
+        cur.execute(f'SET search_path TO "{schema_esc}", public')
+        raw.commit()
+    finally:
+        cur.close()
+
+
 def _connect_postgresql() -> PgConnectionWrapper:
     if psycopg2 is None:
         raise RuntimeError(
@@ -272,11 +289,7 @@ def _connect_postgresql() -> PgConnectionWrapper:
     url = (os.environ.get("DATABASE_URL") or "").strip()
     if url:
         raw = psycopg2.connect(url)
-        schema_esc = PG_SCHEMA.replace('"', '""')
-        with raw.cursor() as cur:
-            cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema_esc}"')
-            cur.execute(f'SET search_path TO "{schema_esc}", public')
-        raw.commit()
+        _pg_apply_schema_search_path(raw)
         return PgConnectionWrapper(raw)
     host = (os.environ.get("POSTGRES_HOST") or "localhost").strip()
     port = int((os.environ.get("POSTGRES_PORT") or "5432").strip())
@@ -290,11 +303,7 @@ def _connect_postgresql() -> PgConnectionWrapper:
         user=user,
         password=password,
     )
-    schema_esc = PG_SCHEMA.replace('"', '""')
-    with raw.cursor() as cur:
-        cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema_esc}"')
-        cur.execute(f'SET search_path TO "{schema_esc}", public')
-    raw.commit()
+    _pg_apply_schema_search_path(raw)
     return PgConnectionWrapper(raw)
 
 
@@ -330,6 +339,7 @@ def get_connection() -> Any:
 
 
 # ---------- PostgreSQL 初次建表（与 SQLite init_db 表结构对齐） ----------
+# 手工对照 SQL：migrations/add_account_daily_performance.postgresql.sql、add_account_season.postgresql.sql
 PG_INIT_STATEMENTS: list[str] = [
     """CREATE TABLE IF NOT EXISTS users (
     id SERIAL PRIMARY KEY,
@@ -351,19 +361,6 @@ PG_INIT_STATEMENTS: list[str] = [
 )""",
     "CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at)",
     "CREATE INDEX IF NOT EXISTS idx_logs_level ON logs(level)",
-    """CREATE TABLE IF NOT EXISTS tradingbot_profit_snapshots (
-    id SERIAL PRIMARY KEY,
-    bot_id TEXT NOT NULL,
-    snapshot_at TEXT NOT NULL,
-    initial_balance DOUBLE PRECISION NOT NULL DEFAULT 0,
-    current_balance DOUBLE PRECISION NOT NULL DEFAULT 0,
-    equity_usdt DOUBLE PRECISION NOT NULL DEFAULT 0,
-    profit_amount DOUBLE PRECISION NOT NULL DEFAULT 0,
-    profit_percent DOUBLE PRECISION NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
-)""",
-    "CREATE INDEX IF NOT EXISTS idx_tradingbot_profit_snapshots_bot_id ON tradingbot_profit_snapshots(bot_id)",
-    "CREATE INDEX IF NOT EXISTS idx_tradingbot_profit_snapshots_snapshot_at ON tradingbot_profit_snapshots(snapshot_at)",
     """CREATE TABLE IF NOT EXISTS strategy_events (
     id SERIAL PRIMARY KEY,
     bot_id TEXT NOT NULL,
@@ -379,10 +376,10 @@ PG_INIT_STATEMENTS: list[str] = [
     account_id TEXT NOT NULL,
     started_at TEXT NOT NULL,
     stopped_at TEXT,
-    initial_balance DOUBLE PRECISION NOT NULL DEFAULT 0,
-    initial_cash DOUBLE PRECISION,
+    initial_equity DOUBLE PRECISION NOT NULL DEFAULT 0,
+    initial_balance DOUBLE PRECISION,
+    final_equity DOUBLE PRECISION,
     final_balance DOUBLE PRECISION,
-    final_cash DOUBLE PRECISION,
     profit_amount DOUBLE PRECISION,
     profit_percent DOUBLE PRECISION,
     created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
@@ -420,8 +417,8 @@ PG_INIT_STATEMENTS: list[str] = [
     equity_usdt DOUBLE PRECISION NOT NULL DEFAULT 0,
     equity_profit_amount DOUBLE PRECISION NOT NULL DEFAULT 0,
     equity_profit_percent DOUBLE PRECISION NOT NULL DEFAULT 0,
-    cash_profit_amount DOUBLE PRECISION NOT NULL DEFAULT 0,
-    cash_profit_percent DOUBLE PRECISION NOT NULL DEFAULT 0,
+    balance_profit_amount DOUBLE PRECISION NOT NULL DEFAULT 0,
+    balance_profit_percent DOUBLE PRECISION NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
 )""",
     "CREATE INDEX IF NOT EXISTS idx_account_balance_snapshots_account ON account_balance_snapshots(account_id)",
@@ -484,14 +481,13 @@ PG_INIT_STATEMENTS: list[str] = [
     account_id TEXT NOT NULL,
     day TEXT NOT NULL,
     net_realized_pnl DOUBLE PRECISION NOT NULL DEFAULT 0,
-    close_count INTEGER NOT NULL DEFAULT 0,
-    equity_change DOUBLE PRECISION,
-    cash_change DOUBLE PRECISION,
+    close_pos_count INTEGER NOT NULL DEFAULT 0,
+    equlity_changed DOUBLE PRECISION,
+    balance_changed DOUBLE PRECISION,
+    balance_changed_pct DOUBLE PRECISION,
     pnl_pct DOUBLE PRECISION,
-    equity_base_realized_chain DOUBLE PRECISION,
-    pnl_pct_realized_chain DOUBLE PRECISION,
-    benchmark_inst_id TEXT NOT NULL DEFAULT '',
-    market_tr DOUBLE PRECISION,
+    instrument_id TEXT NOT NULL DEFAULT '',
+    market_truevolatility DOUBLE PRECISION,
     efficiency_ratio DOUBLE PRECISION,
     updated_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
     PRIMARY KEY (account_id, day)
@@ -514,73 +510,11 @@ PG_INIT_STATEMENTS: list[str] = [
 ]
 
 
-def _pg_migrate_bot_profit_tables(conn: PgConnectionWrapper) -> None:
-    """与 SQLite _migrate_bot_profit_tables_to_tradingbot_profit_snapshots 一致。"""
+def _pg_drop_legacy_bot_profit_tables(conn: PgConnectionWrapper) -> None:
+    """废弃旧 bot 盈利快照表；与 SQLite _drop_legacy_bot_profit_tables 一致。"""
     try:
-        def _has(name: str) -> bool:
-            r = conn.execute(
-                "SELECT 1 FROM pg_tables WHERE schemaname = %s AND tablename = %s",
-                (PG_SCHEMA, name),
-            ).fetchone()
-            return r is not None
-
-        t_final = "tradingbot_profit_snapshots"
-        t_mid = "tradingbot_profit"
-        t_old = "bot_profit_snapshots"
-        if _has(t_mid) and _has(t_final):
-            row_new = conn.execute(f"SELECT COUNT(*) FROM {t_final}").fetchone()
-            row_mid = conn.execute(f"SELECT COUNT(*) FROM {t_mid}").fetchone()
-            n_new = int(row_new[0]) if row_new else 0
-            n_mid = int(row_mid[0]) if row_mid else 0
-            if n_new == 0 and n_mid > 0:
-                conn.execute(f"DROP TABLE {t_final}")
-                conn.execute(f"ALTER TABLE {t_mid} RENAME TO {t_final}")
-            elif n_mid > 0:
-                conn.execute(
-                    f"""INSERT INTO {t_final}
-                       (bot_id, snapshot_at, initial_balance, current_balance, equity_usdt, profit_amount, profit_percent, created_at)
-                       SELECT b.bot_id, b.snapshot_at, b.initial_balance, b.current_balance, b.equity_usdt,
-                              b.profit_amount, b.profit_percent, b.created_at
-                       FROM {t_mid} b
-                       WHERE NOT EXISTS (
-                         SELECT 1 FROM {t_final} t
-                         WHERE t.bot_id = b.bot_id AND t.snapshot_at = b.snapshot_at
-                       )"""
-                )
-                conn.execute(f"DROP TABLE {t_mid}")
-            else:
-                conn.execute(f"DROP TABLE {t_mid}")
-        elif _has(t_mid) and not _has(t_final):
-            conn.execute(f"ALTER TABLE {t_mid} RENAME TO {t_final}")
-        if not _has(t_old):
-            conn.commit()
-            return
-        if not _has(t_final):
-            conn.execute(f"ALTER TABLE {t_old} RENAME TO {t_final}")
-            conn.commit()
-            return
-        row_new = conn.execute(f"SELECT COUNT(*) FROM {t_final}").fetchone()
-        row_old = conn.execute(f"SELECT COUNT(*) FROM {t_old}").fetchone()
-        n_new = int(row_new[0]) if row_new else 0
-        n_old = int(row_old[0]) if row_old else 0
-        if n_new == 0 and n_old > 0:
-            conn.execute(f"DROP TABLE {t_final}")
-            conn.execute(f"ALTER TABLE {t_old} RENAME TO {t_final}")
-            conn.commit()
-            return
-        if n_old > 0:
-            conn.execute(
-                f"""INSERT INTO {t_final}
-                   (bot_id, snapshot_at, initial_balance, current_balance, equity_usdt, profit_amount, profit_percent, created_at)
-                   SELECT b.bot_id, b.snapshot_at, b.initial_balance, b.current_balance, b.equity_usdt,
-                          b.profit_amount, b.profit_percent, b.created_at
-                   FROM {t_old} b
-                   WHERE NOT EXISTS (
-                     SELECT 1 FROM {t_final} t
-                     WHERE t.bot_id = b.bot_id AND t.snapshot_at = b.snapshot_at
-                   )"""
-            )
-        conn.execute(f"DROP TABLE {t_old}")
+        for t in ("tradingbot_profit_snapshots", "tradingbot_profit", "bot_profit_snapshots"):
+            conn.execute(f"DROP TABLE IF EXISTS {t}")
         conn.commit()
     except Exception:
         conn.rollback()
@@ -599,7 +533,7 @@ def _pg_drop_balance_snapshot_initial_capital(conn: PgConnectionWrapper) -> None
 
 def pg_run_init(conn: PgConnectionWrapper) -> None:
     """执行 PG_INIT_STATEMENTS 建表（幂等）。"""
-    _pg_migrate_bot_profit_tables(conn)
+    _pg_drop_legacy_bot_profit_tables(conn)
     _pg_drop_balance_snapshot_initial_capital(conn)
     for stmt in PG_INIT_STATEMENTS:
         conn.execute(stmt)

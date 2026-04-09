@@ -302,7 +302,7 @@ def cmd_season_start() -> int:
             "account_id": aid,
             "script": label,
             "action": "season_start",
-            "initial_balance": eq,
+            "initial_equity": eq,
             "ts": ts,
         },
     )
@@ -313,8 +313,8 @@ def cmd_season_start() -> int:
                 "action": "season_start",
                 "account_id": aid,
                 "started_at": ts,
-                "initial_balance": eq,
-                "initial_cash": cash,
+                "initial_equity": eq,
+                "initial_balance": cash,
             },
             ensure_ascii=False,
         )
@@ -337,7 +337,7 @@ def cmd_season_stop() -> int:
             "account_id": aid,
             "script": label,
             "action": "season_stop",
-            "final_balance": eq,
+            "final_equity": eq,
             "ts": ts,
         },
     )
@@ -348,8 +348,8 @@ def cmd_season_stop() -> int:
                 "action": "season_stop",
                 "account_id": aid,
                 "stopped_at": ts,
-                "final_balance": eq,
-                "final_cash": cash,
+                "final_equity": eq,
+                "final_balance": cash,
             },
             ensure_ascii=False,
         )

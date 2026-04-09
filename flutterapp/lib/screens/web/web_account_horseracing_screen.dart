@@ -124,7 +124,7 @@ class _WebAccountHorseracingScreenState
         final monthPnl =
             pnl.monthTotalPnl ??
             pnl.days.fold<double>(0, (s, d) => s + d.netPnl);
-        final closeSum = pnl.days.fold<int>(0, (s, d) => s + d.closeCount);
+        final closeSum = pnl.days.fold<int>(0, (s, d) => s + d.closePosCount);
         final initial = ap?.initialBalance ?? 0;
         final retPct = initial > 1e-6
             ? (monthPnl / initial) * 100.0

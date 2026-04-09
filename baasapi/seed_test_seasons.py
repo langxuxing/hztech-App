@@ -22,7 +22,7 @@ PROFIT_MAX = 400
 
 
 def _generate_month_seasons(account_id: str) -> list[tuple]:
-    """生成一个账户当月 4 个赛季：started_at, stopped_at, initial_balance, final_balance, profit_amount, profit_percent。"""
+    """生成一个账户当月 4 个赛季：started_at, stopped_at, initial_equity, final_equity, profit_amount, profit_percent。"""
     now = datetime.now(timezone.utc)
     # 过去 30 天均分 4 个赛季（每赛季约 7～8 天），保证 started_at < stopped_at <= now
     period_start = now - timedelta(days=30)
@@ -65,7 +65,7 @@ def seed():
             for r in rows:
                 conn.execute(
                     """INSERT INTO account_season
-                       (account_id, started_at, stopped_at, initial_balance, final_balance, profit_amount, profit_percent)
+                       (account_id, started_at, stopped_at, initial_equity, final_equity, profit_amount, profit_percent)
                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
                     r,
                 )

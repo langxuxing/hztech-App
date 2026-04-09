@@ -123,7 +123,7 @@ class DailyPerfPnlPctLineChart extends StatelessWidget {
   }
 }
 
-/// 按日柱状图：有正负着色（net_pnl 或 cash_change）
+/// 按日柱状图：有正负着色（net_pnl 或 balance_changed）
 class DailyPerfSignedBarChart extends StatelessWidget {
   const DailyPerfSignedBarChart({
     super.key,
@@ -229,7 +229,7 @@ class DailyPerfCashChangePctLineChart extends StatelessWidget {
     final byDay = _rowsByDayOfMonth(days, year, month);
     final spots = <FlSpot>[];
     for (var d = 1; d <= last; d++) {
-      final ch = byDay[d]?.cashChange;
+      final ch = byDay[d]?.balanceChanged;
       if (ch != null && ch.isFinite) {
         spots.add(FlSpot(d.toDouble(), ch / denom * 100.0));
       }
@@ -237,7 +237,7 @@ class DailyPerfCashChangePctLineChart extends StatelessWidget {
     if (spots.isEmpty) {
       return Center(
         child: Text(
-          '暂无 cash_change 日数据',
+          '暂无 balance_changed 日数据',
           style: AppFinanceStyle.labelTextStyle(context),
           textAlign: TextAlign.center,
         ),

@@ -12,7 +12,7 @@ import '../api/models.dart';
 
 /// Web：使用 TradingView [Lightweight Charts](https://www.tradingview.com/lightweight-charts/) 展示策略能效。
 /// 按日柱：每日波动率%（左上半轴，斜线底纹）分档着色；现金收益率%（左下半轴，网格底纹）分档着色。
-/// 策略能效折线（右轴）：&lt;0.25 灰、0.25–0.5 绿、≥0.5 深绿。
+/// 策略能效折线（右轴）：单序列展示全部有效点（避免分段线仅 1 个点时不渲染）。
 class StrategyEfficiencyLightweightChart extends StatefulWidget {
   const StrategyEfficiencyLightweightChart({
     super.key,
@@ -78,209 +78,201 @@ class _StrategyEfficiencyLightweightChartState
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 <style>
 html,body{margin:0;padding:0;height:100%;background:#141419;overflow:hidden;}
+#c{width:100%;height:100%;}
+#msg{position:absolute;left:12px;top:10px;right:12px;color:#b4b4c0;font:12px/1.4 system-ui,sans-serif;z-index:2;pointer-events:none;}
 </style>
 </head>
 <body>
-<div id="c" style="width:100%;height:100%;"></div>
+<div id="msg"></div>
+<div id="c"></div>
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
 <script>
 (function(){
   var B64 = '$b64';
   var DATA;
   try { DATA = JSON.parse(atob(B64)); } catch (e) { DATA = []; }
+  var msgEl = document.getElementById('msg');
+  function setMsg(t) { if (msgEl) msgEl.textContent = t || ''; }
   function n(v) {
     if (v == null || v !== v) return null;
     var x = Number(v);
     return (x === x && x !== Infinity && x !== -Infinity) ? x : null;
   }
-  var el = document.getElementById('c');
-  if (!el || typeof LightweightCharts === 'undefined') return;
-  var chart = LightweightCharts.createChart(el, {
-    layout: {
-      background: { type: 'solid', color: '#141419' },
-      textColor: '#F7F7F7',
-    },
-    grid: {
-      vertLines: { color: 'rgba(42,42,53,0.55)' },
-      horzLines: { color: 'rgba(42,42,53,0.55)' },
-    },
-    rightPriceScale: { borderColor: '#2a2a35', scaleMargins: { top: 0.05, bottom: 0.05 } },
-    leftPriceScale: { visible: true, borderColor: '#2a2a35' },
-    timeScale: {
-      borderColor: '#2a2a35',
-      timeVisible: true,
-      secondsVisible: false,
-      fixLeftEdge: true,
-      fixRightEdge: true,
-      barSpacing: 10,
-      minBarSpacing: 4,
-    },
-    crosshair: { vertLine: { color: '#555' }, horzLine: { color: '#555' } },
-  });
-  var patternCache = {};
-  function barPattern(kind, baseRgba) {
-    var key = kind + '|' + baseRgba;
-    if (patternCache[key]) return patternCache[key];
-    var sz = kind === 'grid' ? 12 : 10;
-    var p = document.createElement('canvas');
-    p.width = sz;
-    p.height = sz;
-    var x = p.getContext('2d');
-    if (!x) return baseRgba;
-    x.fillStyle = baseRgba;
-    x.fillRect(0, 0, sz, sz);
-    if (kind === 'grid') {
-      // 现金收益率%：正交网格底纹（与每日波动率%斜纹区分）
-      x.strokeStyle = 'rgba(255,255,255,0.4)';
-      x.lineWidth = 1;
-      for (var g = 0; g <= sz; g += 4) {
+  function boot() {
+    var el = document.getElementById('c');
+    if (!el) return;
+    if (typeof LightweightCharts === 'undefined') {
+      setMsg('图表库未能加载（请检查网络或对 cdn.jsdelivr.net 的访问）。');
+      return;
+    }
+    if (!DATA || !DATA.length) {
+      setMsg('暂无日线数据。');
+      return;
+    }
+    var chart = LightweightCharts.createChart(el, {
+      layout: {
+        background: { type: 'solid', color: '#141419' },
+        textColor: '#F7F7F7',
+      },
+      grid: {
+        vertLines: { color: 'rgba(42,42,53,0.55)' },
+        horzLines: { color: 'rgba(42,42,53,0.55)' },
+      },
+      rightPriceScale: { borderColor: '#2a2a35', scaleMargins: { top: 0.05, bottom: 0.05 } },
+      leftPriceScale: { visible: true, borderColor: '#2a2a35' },
+      timeScale: {
+        borderColor: '#2a2a35',
+        timeVisible: true,
+        secondsVisible: false,
+        fixLeftEdge: true,
+        fixRightEdge: true,
+        barSpacing: 10,
+        minBarSpacing: 4,
+      },
+      crosshair: { vertLine: { color: '#555' }, horzLine: { color: '#555' } },
+    });
+    var patternCache = {};
+    function barPattern(kind, baseRgba) {
+      var key = kind + '|' + baseRgba;
+      if (patternCache[key]) return patternCache[key];
+      var sz = kind === 'grid' ? 12 : 10;
+      var p = document.createElement('canvas');
+      p.width = sz;
+      p.height = sz;
+      var x = p.getContext('2d');
+      if (!x) return baseRgba;
+      x.fillStyle = baseRgba;
+      x.fillRect(0, 0, sz, sz);
+      if (kind === 'grid') {
+        x.strokeStyle = 'rgba(255,255,255,0.4)';
+        x.lineWidth = 1;
+        for (var g = 0; g <= sz; g += 4) {
+          x.beginPath();
+          x.moveTo(0, g);
+          x.lineTo(sz, g);
+          x.stroke();
+          x.beginPath();
+          x.moveTo(g, 0);
+          x.lineTo(g, sz);
+          x.stroke();
+        }
+        x.strokeStyle = 'rgba(0,0,0,0.22)';
+        x.lineWidth = 1;
+        x.strokeRect(0.5, 0.5, sz - 1, sz - 1);
+      } else {
+        x.strokeStyle = 'rgba(0,0,0,0.24)';
+        x.lineWidth = 1.2;
         x.beginPath();
-        x.moveTo(0, g);
-        x.lineTo(sz, g);
+        for (var o = -sz * 2; o <= sz * 2; o += 4) {
+          x.moveTo(o, 0);
+          x.lineTo(o + sz, sz);
+        }
         x.stroke();
+        x.strokeStyle = 'rgba(255,255,255,0.16)';
         x.beginPath();
-        x.moveTo(g, 0);
-        x.lineTo(g, sz);
+        for (var o2 = -sz; o2 <= sz * 2; o2 += 4) {
+          x.moveTo(o2, sz);
+          x.lineTo(o2 + sz, 0);
+        }
         x.stroke();
       }
-      x.strokeStyle = 'rgba(0,0,0,0.22)';
-      x.lineWidth = 1;
-      x.strokeRect(0.5, 0.5, sz - 1, sz - 1);
+      var probe = document.createElement('canvas').getContext('2d');
+      var pat = probe && probe.createPattern(p, 'repeat');
+      patternCache[key] = pat || baseRgba;
+      return patternCache[key];
+    }
+    function trBarColor(tp) {
+      if (tp == null || tp !== tp) return 'rgba(160, 160, 176, 0.45)';
+      if (tp < 6) return 'rgba(245, 245, 245, 0.58)';
+      if (tp <= 10) return 'rgba(234, 179, 8, 0.75)';
+      return 'rgba(239, 68, 68, 0.82)';
+    }
+    function cashYieldBarColor(cp) {
+      if (cp == null || cp !== cp) return 'rgba(160, 160, 176, 0.4)';
+      if (cp < 0.5) return 'rgba(107, 114, 128, 0.58)';
+      if (cp < 1) return 'rgba(245, 245, 245, 0.52)';
+      return 'rgba(34, 197, 94, 0.62)';
+    }
+    var trH = chart.addHistogramSeries({
+      priceScaleId: 'left_tr',
+      priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+      base: 0,
+    });
+    var cashH = chart.addHistogramSeries({
+      priceScaleId: 'left_cash',
+      priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+      base: 0,
+    });
+    chart.priceScale('left_tr').applyOptions({
+      scaleMargins: { top: 0.04, bottom: 0.52 },
+    });
+    chart.priceScale('left_cash').applyOptions({
+      scaleMargins: { top: 0.52, bottom: 0.06 },
+    });
+    var cashArr = [];
+    var trArr = [];
+    for (var i = 0; i < DATA.length; i++) {
+      var d = DATA[i];
+      if (!d || !d.day) continue;
+      var cp = n(d.cashPct);
+      var tp = n(d.trPct);
+      var cashBase = cashYieldBarColor(cp);
+      var trBase = trBarColor(tp);
+      cashArr.push({
+        time: d.day,
+        value: cp == null ? 0 : Math.round(cp * 100) / 100,
+        color: barPattern('grid', cashBase),
+      });
+      trArr.push({
+        time: d.day,
+        value: tp == null ? 0 : Math.round(tp * 100) / 100,
+        color: barPattern('diag', trBase),
+      });
+    }
+    trH.setData(trArr);
+    cashH.setData(cashArr);
+    var linePts = [];
+    for (var j = 0; j < DATA.length; j++) {
+      var row = DATA[j];
+      if (!row || !row.day) continue;
+      var rv = n(row.ratio);
+      if (rv != null) linePts.push({ time: row.day, value: rv });
+    }
+    if (linePts.length) {
+      var serE = chart.addLineSeries({
+        priceScaleId: 'right',
+        color: 'rgba(107, 114, 128, 0.95)',
+        lineWidth: 2,
+        priceFormat: { type: 'price', precision: 6, minMove: 0.000001 },
+      });
+      serE.setData(linePts);
     } else {
-      // 每日波动率%：斜线底纹
-      x.strokeStyle = 'rgba(0,0,0,0.24)';
-      x.lineWidth = 1.2;
-      x.beginPath();
-      for (var o = -sz * 2; o <= sz * 2; o += 4) {
-        x.moveTo(o, 0);
-        x.lineTo(o + sz, sz);
-      }
-      x.stroke();
-      x.strokeStyle = 'rgba(255,255,255,0.16)';
-      x.beginPath();
-      for (var o2 = -sz; o2 <= sz * 2; o2 += 4) {
-        x.moveTo(o2, sz);
-        x.lineTo(o2 + sz, 0);
-      }
-      x.stroke();
+      setMsg('柱图已加载；策略能效折线暂无有效点（多为当日无现金增量或波幅为 0）。');
     }
-    var probe = document.createElement('canvas').getContext('2d');
-    var pat = probe && probe.createPattern(p, 'repeat');
-    patternCache[key] = pat || baseRgba;
-    return patternCache[key];
-  }
-  function trBarColor(tp) {
-    if (tp == null || tp !== tp) return 'rgba(160, 160, 176, 0.45)';
-    if (tp < 6) return 'rgba(245, 245, 245, 0.58)';
-    if (tp <= 10) return 'rgba(234, 179, 8, 0.75)';
-    return 'rgba(239, 68, 68, 0.82)';
-  }
-  function cashYieldBarColor(cp) {
-    if (cp == null || cp !== cp) return 'rgba(160, 160, 176, 0.4)';
-    if (cp < 0.5) return 'rgba(107, 114, 128, 0.58)';
-    if (cp < 1) return 'rgba(245, 245, 245, 0.52)';
-    return 'rgba(34, 197, 94, 0.62)';
-  }
-  function effLineColor(rv) {
-    if (rv == null || rv !== rv) return null;
-    if (rv < 0.25) return 'rgba(107, 114, 128, 0.98)';
-    if (rv < 0.5) return 'rgba(74, 222, 128, 0.98)';
-    return 'rgba(22, 101, 52, 0.98)';
-  }
-  var trH = chart.addHistogramSeries({
-    priceScaleId: 'left_tr',
-    priceFormat: { type: 'price', precision: 0, minMove: 1 },
-    base: 0,
-  });
-  var cashH = chart.addHistogramSeries({
-    priceScaleId: 'left_cash',
-    priceFormat: { type: 'price', precision: 1, minMove: 0.1 },
-    base: 0,
-  });
-  chart.priceScale('left_tr').applyOptions({
-    scaleMargins: { top: 0.04, bottom: 0.52 },
-  });
-  chart.priceScale('left_cash').applyOptions({
-    scaleMargins: { top: 0.52, bottom: 0.06 },
-  });
-  var cashArr = [];
-  var trArr = [];
-  for (var i = 0; i < DATA.length; i++) {
-    var d = DATA[i];
-    if (!d || !d.day) continue;
-    var cp = n(d.cashPct);
-    var tp = n(d.trPct);
-    var cashBase = cashYieldBarColor(cp);
-    var trBase = trBarColor(tp);
-    cashArr.push({
-      time: d.day,
-      value: cp == null ? 0 : Math.round(cp * 10) / 10,
-      color: barPattern('grid', cashBase),
-    });
-    trArr.push({
-      time: d.day,
-      value: tp == null ? 0 : Math.round(tp),
-      color: barPattern('diag', trBase),
-    });
-  }
-  trH.setData(trArr);
-  cashH.setData(cashArr);
-  var curE = null;
-  var runE = [];
-  for (var j = 0; j < DATA.length; j++) {
-    var row = DATA[j];
-    if (!row || !row.day) continue;
-    var rv = n(row.ratio);
-    var ec = effLineColor(rv);
-    if (ec == null) {
-      if (curE != null && runE.length) {
-        var serE = chart.addLineSeries({
-          priceScaleId: 'right',
-          color: curE,
-          lineWidth: 2,
-          priceFormat: { type: 'price', precision: 8, minMove: 0.00000001 },
-        });
-        serE.setData(runE);
-        runE = [];
-        curE = null;
-      }
-      continue;
+    chart.timeScale().fitContent();
+    function resize() {
+      var w = el.clientWidth;
+      var h = el.clientHeight;
+      if (w > 0 && h > 0) chart.applyOptions({ width: w, height: h });
     }
-    if (ec !== curE) {
-      if (curE != null && runE.length) {
-        var serE2 = chart.addLineSeries({
-          priceScaleId: 'right',
-          color: curE,
-          lineWidth: 2,
-          priceFormat: { type: 'price', precision: 8, minMove: 0.00000001 },
-        });
-        serE2.setData(runE);
+    try {
+      var ro = new ResizeObserver(resize);
+      ro.observe(el);
+    } catch (e) {}
+    var nFrames = 0;
+    function rafSize() {
+      resize();
+      nFrames++;
+      if (nFrames < 8 && (el.clientWidth < 2 || el.clientHeight < 2)) {
+        requestAnimationFrame(rafSize);
       }
-      runE = [];
-      curE = ec;
     }
-    runE.push({ time: row.day, value: rv });
+    requestAnimationFrame(rafSize);
   }
-  if (curE != null && runE.length) {
-    var serE3 = chart.addLineSeries({
-      priceScaleId: 'right',
-      color: curE,
-      lineWidth: 2,
-      priceFormat: { type: 'price', precision: 8, minMove: 0.00000001 },
-    });
-    serE3.setData(runE);
-  }
-  chart.timeScale().fitContent();
-  function resize() {
-    chart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
-  }
-  try {
-    var ro = new ResizeObserver(resize);
-    ro.observe(el);
-  } catch (e) {}
-  resize();
+  if (document.readyState === 'complete') boot();
+  else window.addEventListener('load', boot);
 })();
 </script>
 </body>

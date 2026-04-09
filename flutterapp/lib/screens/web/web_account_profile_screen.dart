@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../api/client.dart';
@@ -116,6 +117,64 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   /// 全量 [_load] 并发时递增；阶段二完成时仅当代数仍匹配才收起 [_detailLoading]，避免多次 pull/壳层下发列表导致遮罩卡死。
   int _loadGeneration = 0;
 
+  String? _lastProfileBuildSig;
+  String? _lastProfileLayoutSig;
+  String? _lastScrollBranchSig;
+
+  void _profileLog(String event, [Map<String, Object?>? data]) {
+    if (!kDebugMode) return;
+    if (data == null || data.isEmpty) {
+      debugPrint('[WebAccountProfile] $event');
+      return;
+    }
+    final tail = data.entries.map((e) => '${e.key}=${e.value}').join(' ');
+    debugPrint('[WebAccountProfile] $event $tail');
+  }
+
+  bool _profileGuardLoad(int g, String where) {
+    if (!mounted) {
+      _profileLog('load_bail', {'where': where, 'g': g, 'reason': 'unmounted'});
+      return false;
+    }
+    if (g != _loadGeneration) {
+      _profileLog('load_bail', {
+        'where': where,
+        'g': g,
+        'curGen': _loadGeneration,
+      });
+      return false;
+    }
+    return true;
+  }
+
+  bool _profileGuardSwitch(int g, String where) {
+    if (!mounted) {
+      _profileLog('switch_bail', {
+        'where': where,
+        'g': g,
+        'reason': 'unmounted',
+      });
+      return false;
+    }
+    if (g != _accountSwitchGeneration) {
+      _profileLog('switch_bail', {
+        'where': where,
+        'g': g,
+        'curGen': _accountSwitchGeneration,
+      });
+      return false;
+    }
+    return true;
+  }
+
+  void _traceScrollBranch(String branch, double minH) {
+    if (!kDebugMode) return;
+    final s = '$branch|${minH.toStringAsFixed(1)}';
+    if (s == _lastScrollBranchSig) return;
+    _lastScrollBranchSig = s;
+    _profileLog('scroll_branch', {'branch': branch, 'minH': minH});
+  }
+
   /// 立即断开 OKX 公共 ticker WS（切换账户须先于新请求调用）。
   void _disconnectOkxPublicTicker() {
     _tickerSub?.cancel();
@@ -161,7 +220,16 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
 
   /// 保持当前选中账户，拉取最新收益、曲线、持仓与赛季（用于定时刷新与下拉切换后的全量刷新）
   Future<void> _refreshLatestData() async {
-    if (!mounted || _loading || _detailLoading) return;
+    if (!mounted || _loading || _detailLoading) {
+      if (kDebugMode) {
+        _profileLog('refresh_skip', {
+          'mounted': mounted,
+          'loading': _loading,
+          'detailLoading': _detailLoading,
+        });
+      }
+      return;
+    }
     final list = _bots.isNotEmpty ? _bots : widget.sharedBots;
     final botId =
         _selectedBotId ??
@@ -171,7 +239,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
-      if (!mounted || g != _accountSwitchGeneration) return;
+      if (!_profileGuardSwitch(g, 'refresh_after_prefs')) return;
       final api = ApiClient(baseUrl, token: token);
       final batch = await Future.wait([
         api.getAccountProfit(),
@@ -179,7 +247,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         api.getTradingbotPositions(botId),
         api.getTradingbotSeasons(botId, limit: 50),
       ]);
-      if (!mounted || g != _accountSwitchGeneration) return;
+      if (!_profileGuardSwitch(g, 'refresh_after_batch')) return;
       final profitResp = batch[0] as AccountProfitResponse;
       final historyResp = batch[1] as BotProfitHistoryResponse;
       final positionsResp = batch[2] as OkxPositionsResponse;
@@ -207,6 +275,11 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     if (!mounted) return;
     final g = ++_loadGeneration;
     _accountSwitchGeneration++;
+    _profileLog('load_begin', {
+      'g': g,
+      'loadGen': _loadGeneration,
+      'switchGen': _accountSwitchGeneration,
+    });
     setState(() {
       _loading = true;
       _detailLoading = false;
@@ -216,7 +289,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
-      if (!mounted || g != _loadGeneration) return;
+      if (!_profileGuardLoad(g, 'after_prefs')) return;
       // #region agent log
       unawaited(
         debugIngestLog(
@@ -244,16 +317,21 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         final botsResp = await api.getTradingBots();
         bots = _mergeInitialPlaceholder(botsResp.botList);
       }
-      if (!mounted || g != _loadGeneration) return;
+      if (!_profileGuardLoad(g, 'after_fetch_bots')) return;
       final botId = _pickBotIdForLoad(bots);
 
-      if (!mounted || g != _loadGeneration) return;
+      if (!_profileGuardLoad(g, 'before_phase1')) return;
       // 阶段一：一有账户列表就结束全屏 loading，下拉框可立即显示
       setState(() {
         _bots = bots;
         _selectedBotId = botId;
         _loading = false;
         _detailLoading = true;
+      });
+      _profileLog('phase1_ok', {
+        'g': g,
+        'bots': bots.length,
+        'selectedBotId': botId,
       });
       // #region agent log
       unawaited(
@@ -278,7 +356,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
           api.getTradingbotPositions(botId),
           api.getTradingbotSeasons(botId, limit: 50),
         ]);
-        if (!mounted || g != _loadGeneration) return;
+        if (!_profileGuardLoad(g, 'after_phase2_batch')) return;
         final profitResp = batch[0] as AccountProfitResponse;
         final historyResp = batch[1] as BotProfitHistoryResponse;
         final positionsResp = batch[2] as OkxPositionsResponse;
@@ -296,6 +374,14 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
           _cashPerfDays = const [];
           _detailLoading = false;
           _switchingAccount = false;
+        });
+        _profileLog('phase2_ok', {
+          'g': g,
+          'accounts': _accounts.length,
+          'snapshots': _snapshots.length,
+          'positions': _positions.length,
+          'seasons': _seasons.length,
+          'botId': _selectedBotId,
         });
         // #region agent log
         unawaited(
@@ -316,7 +402,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         unawaited(_syncDailyPerformanceForCharts());
         _syncOkxTickerSubscription();
       } catch (e) {
-        if (!mounted || g != _loadGeneration) return;
+        if (!_profileGuardLoad(g, 'phase2_catch')) return;
         // #region agent log
         unawaited(
           debugIngestLog(
@@ -340,7 +426,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         }
       }
     } catch (e) {
-      if (!mounted || g != _loadGeneration) return;
+      if (!_profileGuardLoad(g, 'outer_catch')) return;
       // #region agent log
       unawaited(
         debugIngestLog(
@@ -368,6 +454,11 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     _loadGeneration++;
     _disconnectOkxPublicTicker();
     final g = ++_accountSwitchGeneration;
+    _profileLog('switch_begin', {
+      'botId': botId,
+      'switchGen': g,
+      'loadGen': _loadGeneration,
+    });
     setState(() {
       _selectedBotId = botId;
       _positions = [];
@@ -381,14 +472,14 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
-      if (!mounted || g != _accountSwitchGeneration) return;
+      if (!_profileGuardSwitch(g, 'switch_after_prefs')) return;
       final api = ApiClient(baseUrl, token: token);
 
       final phase1 = await Future.wait([
         api.getAccountProfit(),
         api.getBotProfitHistory(botId),
       ]);
-      if (!mounted || g != _accountSwitchGeneration) return;
+      if (!_profileGuardSwitch(g, 'switch_after_phase1')) return;
       final profitResp = phase1[0] as AccountProfitResponse;
       final historyResp = phase1[1] as BotProfitHistoryResponse;
       setState(() {
@@ -403,7 +494,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         api.getTradingbotPositions(botId),
         api.getTradingbotSeasons(botId, limit: 50),
       ]);
-      if (!mounted || g != _accountSwitchGeneration) return;
+      if (!_profileGuardSwitch(g, 'switch_after_phase2')) return;
       final positionsResp = phase2[0] as OkxPositionsResponse;
       final seasonsResp = phase2[1] as TradingbotSeasonsResponse;
       setState(() {
@@ -414,9 +505,11 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
         _detailLoading = false;
         _switchingAccount = false;
       });
+      _profileLog('switch_done', {'botId': botId, 'switchGen': g});
       _syncOkxTickerSubscription();
     } catch (e) {
       if (mounted && g == _accountSwitchGeneration) {
+        _profileLog('switch_error', {'botId': botId, 'error': e.toString()});
         setState(() {
           _error = '切换账户后加载失败：${friendlyNetworkError(e)}';
           _detailLoading = false;
@@ -434,6 +527,10 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
       _bots = _mergeInitialPlaceholder(List.from(widget.sharedBots));
       _selectedBotId = _pickBotIdForLoad(_bots);
     }
+    _profileLog('initState', {
+      'sharedBots': widget.sharedBots.length,
+      'initialBotId': widget.initialBotId,
+    });
     _load();
     _syncAutoRefreshTimer();
   }
@@ -501,6 +598,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     if (singleInst == null) {
       final had = _liveLastPx != null;
       _disconnectOkxPublicTicker();
+      _profileLog('okx_ticker', {'action': 'off', 'hadLivePx': had});
       if (had) {
         setState(() {});
       }
@@ -523,6 +621,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
       _liveLastPx = null;
     }
     _tickerWs!.subscribe(singleInst);
+    _profileLog('okx_ticker', {'action': 'subscribe', 'instId': singleInst});
     final stream = _tickerWs!.priceStream;
     if (stream != null) {
       _tickerSub = stream.listen((px) {
@@ -957,29 +1056,68 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     );
   }
 
-  Widget _buildBodyScrollable() {
+  /// 仅可滚动主体（不含遮罩）。[RefreshIndicator] 的直接子节点必须是 Scrollable，不能是 Stack。
+  Widget _buildAccountScrollView(double minHeightForPlaceholder) {
     final wide = MediaQuery.sizeOf(context).width >= _kLayoutWideBp;
-    return Stack(
-      children: [
-        Positioned.fill(
-          child: SingleChildScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            padding: const EdgeInsets.fromLTRB(32, 32, 32, 32),
-            child: _buildAccountPageContent(wide),
+    if (_loading && _accounts.isEmpty) {
+      _traceScrollBranch('spinner', minHeightForPlaceholder);
+      return SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: minHeightForPlaceholder),
+          child: const Center(child: CircularProgressIndicator()),
+        ),
+      );
+    }
+    if (_error != null && _accounts.isEmpty && !_detailLoading) {
+      _traceScrollBranch('error_full', minHeightForPlaceholder);
+      return SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: minHeightForPlaceholder),
+          child: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  _error!,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: AppFinanceStyle.textDefault),
+                ),
+                const SizedBox(height: 16),
+                FilledButton(onPressed: _load, child: const Text('重试')),
+              ],
+            ),
           ),
         ),
-        AccountDetailLoadingOverlay(
-          visible: _detailLoading,
-          message: _switchingAccount ? '正在切换账户…' : '正在加载账户画像…',
-          subtitle: _switchingAccount ? '正在拉取该账户的收益、持仓、赛季与曲线' : null,
-        ),
-      ],
+      );
+    }
+    _traceScrollBranch('content', minHeightForPlaceholder);
+    return SingleChildScrollView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(32, 32, 32, 32),
+      child: _buildAccountPageContent(wide),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     _syncNoDropdownAccountLabel();
+    final buildSig =
+        'L=$_loading|D=$_detailLoading|Sw=$_switchingAccount|A=${_accounts.length}|B=${_bots.length}|E=${_error != null}|sel=$_selectedBotId';
+    if (kDebugMode && buildSig != _lastProfileBuildSig) {
+      _lastProfileBuildSig = buildSig;
+      _profileLog('build', {
+        'loading': _loading,
+        'detailLoading': _detailLoading,
+        'switchingAccount': _switchingAccount,
+        'accounts': _accounts.length,
+        'bots': _bots.length,
+        'hasError': _error != null,
+        'selectedBotId': _selectedBotId,
+        'sharedBotsIn': widget.sharedBots.length,
+      });
+    }
     final canPop = Navigator.of(context).canPop();
     final scaffold = Scaffold(
       backgroundColor: AppFinanceStyle.backgroundDark,
@@ -1008,53 +1146,36 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
       body: WaterBackground(
         child: LayoutBuilder(
           builder: (context, constraints) {
-            // RefreshIndicator 需要可滚动子组件；Web 上纯 Center 常得到 0 高度，只剩水纹底图。
-            // Stack 子节点理论上给有界 maxHeight；非有限时回退到视口高度，避免 minHeight 无效或断言。
             final rawH = constraints.maxHeight;
             final minH = (rawH.isFinite && rawH > 0)
                 ? rawH
                 : MediaQuery.sizeOf(context).height;
-            Widget scrollableChild(Widget child) {
-              return SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                child: ConstrainedBox(
-                  constraints: BoxConstraints(minHeight: minH),
-                  child: child,
-                ),
-              );
+            if (kDebugMode) {
+              final ls =
+                  '${constraints.maxWidth.toStringAsFixed(0)}x${rawH.toStringAsFixed(0)} minH=${minH.toStringAsFixed(0)}';
+              if (ls != _lastProfileLayoutSig) {
+                _lastProfileLayoutSig = ls;
+                _profileLog('layout', {'constraints': ls});
+              }
             }
-
-            return RefreshIndicator(
-              onRefresh: _load,
-              child: _loading && _accounts.isEmpty
-                  ? scrollableChild(
-                      const Center(child: CircularProgressIndicator()),
-                    )
-                  : _error != null &&
-                          _accounts.isEmpty &&
-                          !_detailLoading
-                      ? scrollableChild(
-                          Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Text(
-                                  _error!,
-                                  textAlign: TextAlign.center,
-                                  style: TextStyle(
-                                    color: AppFinanceStyle.textDefault,
-                                  ),
-                                ),
-                                const SizedBox(height: 16),
-                                FilledButton(
-                                  onPressed: _load,
-                                  child: const Text('重试'),
-                                ),
-                              ],
-                            ),
-                          ),
-                        )
-                      : _buildBodyScrollable(),
+            return Stack(
+              children: [
+                Positioned.fill(
+                  child: RefreshIndicator(
+                    onRefresh: _load,
+                    child: _buildAccountScrollView(minH),
+                  ),
+                ),
+                AccountDetailLoadingOverlay(
+                  visible: _detailLoading,
+                  message: _switchingAccount
+                      ? '正在切换账户…'
+                      : '正在加载账户画像…',
+                  subtitle: _switchingAccount
+                      ? '正在拉取该账户的收益、持仓、赛季与曲线'
+                      : null,
+                ),
+              ],
             );
           },
         ),
@@ -1336,7 +1457,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
               maxBars: 8,
               useDailyBarsForEndMonth: true,
               dailyPerformanceRows: _equityPerfDays,
-              dailyPerformancePick: (r) => r.equityChange,
+              dailyPerformancePick: (r) => r.equlityChanged,
             ),
           ),
           const SizedBox(height: 16),
@@ -1353,7 +1474,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
               gridMaxHeight: plotH,
               titleToBodyExtraGap: _kProfileCalendarTitleExtraGap,
               dailyPerformanceRows: _equityPerfDays,
-              dailyPerformancePick: (r) => r.equityChange,
+              dailyPerformancePick: (r) => r.equlityChanged,
             ),
           ),
         ],
@@ -1392,7 +1513,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                       titleToBodyExtraGap: _kProfileCalendarTitleExtraGap,
                       centerCalendarGridInExpanded: true,
                       dailyPerformanceRows: _equityPerfDays,
-                      dailyPerformancePick: (r) => r.equityChange,
+                      dailyPerformancePick: (r) => r.equlityChanged,
                     ),
                   ),
                 ),
@@ -1457,7 +1578,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                             maxBars: 8,
                             useDailyBarsForEndMonth: true,
                             dailyPerformanceRows: _equityPerfDays,
-                            dailyPerformancePick: (r) => r.equityChange,
+                            dailyPerformancePick: (r) => r.equlityChanged,
                           ),
                         ),
                       ),
@@ -1533,7 +1654,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
               maxBars: 8,
               useDailyBarsForEndMonth: true,
               dailyPerformanceRows: _cashPerfDays,
-              dailyPerformancePick: (r) => r.cashChange,
+              dailyPerformancePick: (r) => r.balanceChanged,
             ),
           ),
           const SizedBox(height: 16),
@@ -1550,7 +1671,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
               gridMaxHeight: plotH,
               titleToBodyExtraGap: _kProfileCalendarTitleExtraGap,
               dailyPerformanceRows: _cashPerfDays,
-              dailyPerformancePick: (r) => r.cashChange,
+              dailyPerformancePick: (r) => r.balanceChanged,
             ),
           ),
         ],
@@ -1589,7 +1710,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                       titleToBodyExtraGap: _kProfileCalendarTitleExtraGap,
                       centerCalendarGridInExpanded: true,
                       dailyPerformanceRows: _cashPerfDays,
-                      dailyPerformancePick: (r) => r.cashChange,
+                      dailyPerformancePick: (r) => r.balanceChanged,
                     ),
                   ),
                 ),
@@ -1654,7 +1775,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                             maxBars: 8,
                             useDailyBarsForEndMonth: true,
                             dailyPerformanceRows: _cashPerfDays,
-                            dailyPerformancePick: (r) => r.cashChange,
+                            dailyPerformancePick: (r) => r.balanceChanged,
                           ),
                         ),
                       ),

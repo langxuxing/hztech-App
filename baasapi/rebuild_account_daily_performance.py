@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 从 account_positions_history 按北京时间日历日汇总平仓净盈亏，重建 account_daily_performance（全账户；
-不设 equity_base 列；pnl_pct 分母为当月 account_month_balance_baseline 口径，与链式列一致）。
+不设 equity_base 列；pnl_pct 分母为当月 account_month_balance_baseline 口径）。
 
 用法（在 baasapi 目录下或设置 PYTHONPATH）：
   python -m baasapi.rebuild_account_daily_performance

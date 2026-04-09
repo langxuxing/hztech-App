@@ -129,18 +129,7 @@ def _ensure_account_schema_columns(conn: sqlite3.Connection) -> None:
             conn.execute(
                 "ALTER TABLE account_balance_snapshots DROP COLUMN initial_capital"
             )
-    # account_month_balance_baseline：open_cash → initial_balance 见 _ensure_account_month_balance_baseline_initial_balance
-    cur = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='account_season'"
-    )
-    if not cur.fetchone():
-        return
-    cur = conn.execute("PRAGMA table_info(account_season)")
-    cols_b = {str(r[1]) for r in cur.fetchall()}
-    if "initial_cash" not in cols_b:
-        conn.execute("ALTER TABLE account_season ADD COLUMN initial_cash REAL")
-    if "final_cash" not in cols_b:
-        conn.execute("ALTER TABLE account_season ADD COLUMN final_cash REAL")
+    # account_season 列名迁移见 _ensure_account_season_equity_balance_column_names
 
 
 def _migrate_account_meta_to_account_list(conn: sqlite3.Connection) -> None:
@@ -219,69 +208,10 @@ def _migrate_account_season_spaced_name_and_bot_id(conn: sqlite3.Connection) -> 
     )
 
 
-def _migrate_bot_profit_tables_to_tradingbot_profit_snapshots(conn: sqlite3.Connection) -> None:
-    """
-    统一到表 tradingbot_profit_snapshots：
-    旧 bot_profit_snapshots、中间名 tradingbot_profit 合并或重命名；两中间态并存时合并后删空表。
-    """
-    cur = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name IN "
-        "('bot_profit_snapshots', 'tradingbot_profit', 'tradingbot_profit_snapshots')"
-    )
-    names = {str(r[0]) for r in cur.fetchall()}
-    t_final = "tradingbot_profit_snapshots"
-    t_mid = "tradingbot_profit"
-    t_old = "bot_profit_snapshots"
-    if t_mid in names and t_final in names:
-        n_new = int(conn.execute(f"SELECT COUNT(*) FROM {t_final}").fetchone()[0])
-        n_mid = int(conn.execute(f"SELECT COUNT(*) FROM {t_mid}").fetchone()[0])
-        if n_new == 0 and n_mid > 0:
-            conn.execute(f"DROP TABLE {t_final}")
-            conn.execute(f"ALTER TABLE {t_mid} RENAME TO {t_final}")
-        elif n_mid > 0:
-            conn.execute(
-                f"""INSERT INTO {t_final}
-                   (bot_id, snapshot_at, initial_balance, current_balance, equity_usdt, profit_amount, profit_percent, created_at)
-                   SELECT b.bot_id, b.snapshot_at, b.initial_balance, b.current_balance, b.equity_usdt,
-                          b.profit_amount, b.profit_percent, b.created_at
-                   FROM {t_mid} b
-                   WHERE NOT EXISTS (
-                     SELECT 1 FROM {t_final} t
-                     WHERE t.bot_id = b.bot_id AND t.snapshot_at = b.snapshot_at
-                   )"""
-            )
-            conn.execute(f"DROP TABLE {t_mid}")
-        else:
-            conn.execute(f"DROP TABLE {t_mid}")
-        names.discard(t_mid)
-    elif t_mid in names and t_final not in names:
-        conn.execute(f"ALTER TABLE {t_mid} RENAME TO {t_final}")
-        names.discard(t_mid)
-        names.add(t_final)
-    if t_old not in names:
-        return
-    if t_final not in names:
-        conn.execute(f"ALTER TABLE {t_old} RENAME TO {t_final}")
-        return
-    n_new = int(conn.execute(f"SELECT COUNT(*) FROM {t_final}").fetchone()[0])
-    n_old = int(conn.execute(f"SELECT COUNT(*) FROM {t_old}").fetchone()[0])
-    if n_new == 0 and n_old > 0:
-        conn.execute(f"DROP TABLE {t_final}")
-        conn.execute(f"ALTER TABLE {t_old} RENAME TO {t_final}")
-        return
-    if n_old > 0:
-        conn.execute(
-            f"""INSERT INTO {t_final}
-               (bot_id, snapshot_at, initial_balance, current_balance, equity_usdt, profit_amount, profit_percent, created_at)
-               SELECT b.bot_id, b.snapshot_at, b.initial_balance, b.current_balance, b.equity_usdt,
-                      b.profit_amount, b.profit_percent, b.created_at
-               FROM {t_old} b
-               WHERE NOT EXISTS (
-                 SELECT 1 FROM {t_final} t
-                 WHERE t.bot_id = b.bot_id AND t.snapshot_at = b.snapshot_at
-               )"""
-        )
-    conn.execute(f"DROP TABLE {t_old}")
+def _drop_legacy_bot_profit_tables(conn: sqlite3.Connection) -> None:
+    """废弃旧 bot 盈利快照表；收益与策略效能已统一使用 account_balance_snapshots。"""
+    for t in ("tradingbot_profit_snapshots", "tradingbot_profit", "bot_profit_snapshots"):
+        conn.execute(f"DROP TABLE IF EXISTS {t}")
 
 
 def _migrate_bot_seasons_to_account_season(conn: sqlite3.Connection) -> None:
@@ -508,10 +438,10 @@ def _ensure_account_balance_snapshots_margin_columns(
         conn.execute("UPDATE account_balance_snapshots SET cash_balance = 0")
 
 
-def _ensure_account_balance_snapshots_cash_profit_columns(
+def _rename_account_balance_snapshots_cash_profit_to_balance_profit(
     conn: sqlite3.Connection | PgConnectionWrapper,
 ) -> None:
-    """补列 cash_profit_amount / cash_profit_percent（相对 account_list.initial_capital 的 USDT 资产余额口径）。"""
+    """cash_profit_amount / cash_profit_percent → balance_profit_*（幂等）。"""
     if IS_POSTGRES:
         try:
             cur = conn.execute(
@@ -519,21 +449,27 @@ def _ensure_account_balance_snapshots_cash_profit_columns(
                 SELECT column_name FROM information_schema.columns
                 WHERE table_schema = %s
                   AND table_name = 'account_balance_snapshots'
-                """
-                , (PG_SCHEMA,)
+                """,
+                (PG_SCHEMA,),
             )
             cols = {str(r[0]) for r in cur.fetchall()}
             if not cols:
                 return
-            if "cash_profit_amount" not in cols:
+            if (
+                "balance_profit_amount" not in cols
+                and "cash_profit_amount" in cols
+            ):
                 conn.execute(
                     "ALTER TABLE account_balance_snapshots "
-                    "ADD COLUMN cash_profit_amount DOUBLE PRECISION NOT NULL DEFAULT 0"
+                    "RENAME COLUMN cash_profit_amount TO balance_profit_amount"
                 )
-            if "cash_profit_percent" not in cols:
+            if (
+                "balance_profit_percent" not in cols
+                and "cash_profit_percent" in cols
+            ):
                 conn.execute(
                     "ALTER TABLE account_balance_snapshots "
-                    "ADD COLUMN cash_profit_percent DOUBLE PRECISION NOT NULL DEFAULT 0"
+                    "RENAME COLUMN cash_profit_percent TO balance_profit_percent"
                 )
             conn.commit()
         except Exception:
@@ -549,14 +485,68 @@ def _ensure_account_balance_snapshots_cash_profit_columns(
         return
     cur = conn.execute("PRAGMA table_info(account_balance_snapshots)")
     cols = {str(r[1]) for r in cur.fetchall()}
-    if "cash_profit_amount" not in cols:
+    if "balance_profit_amount" not in cols and "cash_profit_amount" in cols:
         conn.execute(
-            "ALTER TABLE account_balance_snapshots ADD COLUMN cash_profit_amount "
+            "ALTER TABLE account_balance_snapshots RENAME COLUMN "
+            "cash_profit_amount TO balance_profit_amount"
+        )
+    if "balance_profit_percent" not in cols and "cash_profit_percent" in cols:
+        conn.execute(
+            "ALTER TABLE account_balance_snapshots RENAME COLUMN "
+            "cash_profit_percent TO balance_profit_percent"
+        )
+
+
+def _ensure_account_balance_snapshots_balance_profit_columns(
+    conn: sqlite3.Connection | PgConnectionWrapper,
+) -> None:
+    """补列 balance_profit_amount / balance_profit_percent（相对 account_list.initial_capital 的 USDT 资产余额口径）。"""
+    if IS_POSTGRES:
+        try:
+            cur = conn.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = %s
+                  AND table_name = 'account_balance_snapshots'
+                """
+                ,
+                (PG_SCHEMA,),
+            )
+            cols = {str(r[0]) for r in cur.fetchall()}
+            if not cols:
+                return
+            if "balance_profit_amount" not in cols:
+                conn.execute(
+                    "ALTER TABLE account_balance_snapshots "
+                    "ADD COLUMN balance_profit_amount DOUBLE PRECISION NOT NULL DEFAULT 0"
+                )
+            if "balance_profit_percent" not in cols:
+                conn.execute(
+                    "ALTER TABLE account_balance_snapshots "
+                    "ADD COLUMN balance_profit_percent DOUBLE PRECISION NOT NULL DEFAULT 0"
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        return
+    if not isinstance(conn, sqlite3.Connection):
+        return
+    cur = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name='account_balance_snapshots'"
+    )
+    if not cur.fetchone():
+        return
+    cur = conn.execute("PRAGMA table_info(account_balance_snapshots)")
+    cols = {str(r[1]) for r in cur.fetchall()}
+    if "balance_profit_amount" not in cols:
+        conn.execute(
+            "ALTER TABLE account_balance_snapshots ADD COLUMN balance_profit_amount "
             "REAL NOT NULL DEFAULT 0"
         )
-    if "cash_profit_percent" not in cols:
+    if "balance_profit_percent" not in cols:
         conn.execute(
-            "ALTER TABLE account_balance_snapshots ADD COLUMN cash_profit_percent "
+            "ALTER TABLE account_balance_snapshots ADD COLUMN balance_profit_percent "
             "REAL NOT NULL DEFAULT 0"
         )
 
@@ -627,33 +617,20 @@ def _ensure_account_balance_snapshots_equity_profit_column_rename(
         )
 
 
-def _ensure_account_daily_performance_chain_columns(
+def _drop_account_daily_performance_realized_chain_columns(
     conn: sqlite3.Connection | PgConnectionWrapper,
 ) -> None:
-    """account_daily_performance 补列：链式已实现分母与收益率%。"""
+    """移除 account_daily_performance 链式已实现列（已不再使用）。"""
     if IS_POSTGRES:
         try:
-            cur = conn.execute(
-                """
-                SELECT column_name FROM information_schema.columns
-                WHERE table_schema = %s
-                  AND table_name = 'account_daily_performance'
-                """
-                , (PG_SCHEMA,)
+            conn.execute(
+                "ALTER TABLE account_daily_performance "
+                "DROP COLUMN IF EXISTS equity_base_realized_chain"
             )
-            cols = {str(r[0]) for r in cur.fetchall()}
-            if not cols:
-                return
-            if "equity_base_realized_chain" not in cols:
-                conn.execute(
-                    "ALTER TABLE account_daily_performance "
-                    "ADD COLUMN equity_base_realized_chain DOUBLE PRECISION"
-                )
-            if "pnl_pct_realized_chain" not in cols:
-                conn.execute(
-                    "ALTER TABLE account_daily_performance "
-                    "ADD COLUMN pnl_pct_realized_chain DOUBLE PRECISION"
-                )
+            conn.execute(
+                "ALTER TABLE account_daily_performance "
+                "DROP COLUMN IF EXISTS pnl_pct_realized_chain"
+            )
             conn.commit()
         except Exception:
             conn.rollback()
@@ -668,16 +645,15 @@ def _ensure_account_daily_performance_chain_columns(
         return
     cur = conn.execute("PRAGMA table_info(account_daily_performance)")
     cols = {str(r[1]) for r in cur.fetchall()}
-    if "equity_base_realized_chain" not in cols:
-        conn.execute(
-            "ALTER TABLE account_daily_performance "
-            "ADD COLUMN equity_base_realized_chain REAL"
-        )
-    if "pnl_pct_realized_chain" not in cols:
-        conn.execute(
-            "ALTER TABLE account_daily_performance "
-            "ADD COLUMN pnl_pct_realized_chain REAL"
-        )
+    for col in ("equity_base_realized_chain", "pnl_pct_realized_chain"):
+        if col not in cols:
+            continue
+        try:
+            conn.execute(
+                f"ALTER TABLE account_daily_performance DROP COLUMN {col}"
+            )
+        except (sqlite3.OperationalError, OSError):
+            pass
 
 
 def _ensure_account_month_balance_baseline_table_rename(
@@ -776,7 +752,7 @@ def _ensure_account_month_balance_baseline_initial_balance(
 def _ensure_account_month_balance_baseline_open_equity_to_initial_equity(
     conn: sqlite3.Connection | PgConnectionWrapper,
 ) -> None:
-    """open_equity 列更名为 initial_equity。"""
+    """open_equity / 误拼 open_equlity 列更名为 initial_equity。"""
     if IS_POSTGRES:
         try:
             cur = conn.execute(
@@ -796,6 +772,11 @@ def _ensure_account_month_balance_baseline_open_equity_to_initial_equity(
                 conn.execute(
                     "ALTER TABLE account_month_balance_baseline "
                     "RENAME COLUMN open_equity TO initial_equity"
+                )
+            elif "open_equlity" in cols:
+                conn.execute(
+                    "ALTER TABLE account_month_balance_baseline "
+                    "RENAME COLUMN open_equlity TO initial_equity"
                 )
             else:
                 conn.execute(
@@ -823,11 +804,125 @@ def _ensure_account_month_balance_baseline_open_equity_to_initial_equity(
             "ALTER TABLE account_month_balance_baseline "
             "RENAME COLUMN open_equity TO initial_equity"
         )
+    elif "open_equlity" in cols:
+        conn.execute(
+            "ALTER TABLE account_month_balance_baseline "
+            "RENAME COLUMN open_equlity TO initial_equity"
+        )
     else:
         conn.execute(
             "ALTER TABLE account_month_balance_baseline "
             "ADD COLUMN initial_equity REAL NOT NULL DEFAULT 0"
         )
+
+
+def _ensure_account_season_equity_balance_column_names(
+    conn: sqlite3.Connection | PgConnectionWrapper,
+) -> None:
+    """account_season：权益列 → initial_equity/final_equity；USDT 余额（原 cash）→ initial_balance/final_balance。
+
+    旧表可能为 (initial_balance, final_balance 表示权益 + initial_cash/final_cash)，
+    或仅权益两列；迁移后与新库 CREATE 一致。
+    """
+    if IS_POSTGRES:
+        try:
+            cur = conn.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = %s
+                  AND table_name = 'account_season'
+                """,
+                (PG_SCHEMA,),
+            )
+            cols = {str(r[0]) for r in cur.fetchall()}
+            if not cols or "initial_equity" in cols:
+                return
+            if "initial_cash" in cols:
+                conn.execute(
+                    "ALTER TABLE account_season RENAME COLUMN initial_balance TO initial_equity"
+                )
+                conn.execute(
+                    "ALTER TABLE account_season RENAME COLUMN final_balance TO final_equity"
+                )
+                conn.execute(
+                    "ALTER TABLE account_season RENAME COLUMN initial_cash TO initial_balance"
+                )
+                conn.execute(
+                    "ALTER TABLE account_season RENAME COLUMN final_cash TO final_balance"
+                )
+            elif "initial_balance" in cols:
+                conn.execute(
+                    "ALTER TABLE account_season RENAME COLUMN initial_balance TO initial_equity"
+                )
+                conn.execute(
+                    "ALTER TABLE account_season RENAME COLUMN final_balance TO final_equity"
+                )
+                cur2 = conn.execute(
+                    """
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_schema = %s
+                      AND table_name = 'account_season'
+                    """,
+                    (PG_SCHEMA,),
+                )
+                cols2 = {str(r[0]) for r in cur2.fetchall()}
+                if "initial_balance" not in cols2:
+                    conn.execute(
+                        "ALTER TABLE account_season ADD COLUMN initial_balance DOUBLE PRECISION"
+                    )
+                if "final_balance" not in cols2:
+                    conn.execute(
+                        "ALTER TABLE account_season ADD COLUMN final_balance DOUBLE PRECISION"
+                    )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        return
+    if not isinstance(conn, sqlite3.Connection):
+        return
+    cur = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='account_season'"
+    )
+    if not cur.fetchone():
+        return
+    cur = conn.execute("PRAGMA table_info(account_season)")
+    cols = {str(r[1]) for r in cur.fetchall()}
+    if not cols or "initial_equity" in cols:
+        return
+    try:
+        if "initial_cash" in cols:
+            conn.execute(
+                "ALTER TABLE account_season RENAME COLUMN initial_balance TO initial_equity"
+            )
+            conn.execute(
+                "ALTER TABLE account_season RENAME COLUMN final_balance TO final_equity"
+            )
+            conn.execute(
+                "ALTER TABLE account_season RENAME COLUMN initial_cash TO initial_balance"
+            )
+            conn.execute(
+                "ALTER TABLE account_season RENAME COLUMN final_cash TO final_balance"
+            )
+        elif "initial_balance" in cols:
+            conn.execute(
+                "ALTER TABLE account_season RENAME COLUMN initial_balance TO initial_equity"
+            )
+            conn.execute(
+                "ALTER TABLE account_season RENAME COLUMN final_balance TO final_equity"
+            )
+            cur = conn.execute("PRAGMA table_info(account_season)")
+            cols2 = {str(r[1]) for r in cur.fetchall()}
+            if "initial_balance" not in cols2:
+                conn.execute(
+                    "ALTER TABLE account_season ADD COLUMN initial_balance REAL"
+                )
+            if "final_balance" not in cols2:
+                conn.execute(
+                    "ALTER TABLE account_season ADD COLUMN final_balance REAL"
+                )
+        conn.commit()
+    except Exception:
+        conn.rollback()
 
 
 def _drop_account_daily_performance_equity_base(
@@ -872,6 +967,7 @@ def _rename_account_daily_performance_legacy_columns(
         ("close_count", "close_pos_count"),
         ("equity_change", "equlity_changed"),
         ("cash_change", "balance_changed"),
+        ("cash_changed", "balance_changed"),
         ("benchmark_inst_id", "instrument_id"),
         ("market_tr", "market_truevolatility"),
     )
@@ -970,6 +1066,49 @@ def _ensure_account_daily_performance_v3(
         )
 
 
+def _ensure_account_daily_performance_balance_changed_pct(
+    conn: sqlite3.Connection | PgConnectionWrapper,
+) -> None:
+    """account_daily_performance.balance_changed_pct：相对当月月初资金%（与重建逻辑一致）。"""
+    if IS_POSTGRES:
+        try:
+            cur = conn.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = %s
+                  AND table_name = 'account_daily_performance'
+                """,
+                (PG_SCHEMA,),
+            )
+            cols = {str(r[0]) for r in cur.fetchall()}
+            if not cols:
+                return
+            if "balance_changed_pct" not in cols:
+                conn.execute(
+                    "ALTER TABLE account_daily_performance "
+                    "ADD COLUMN balance_changed_pct DOUBLE PRECISION"
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        return
+    if not isinstance(conn, sqlite3.Connection):
+        return
+    cur = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name='account_daily_performance'"
+    )
+    if not cur.fetchone():
+        return
+    cur = conn.execute("PRAGMA table_info(account_daily_performance)")
+    cols = {str(r[1]) for r in cur.fetchall()}
+    if "balance_changed_pct" not in cols:
+        conn.execute(
+            "ALTER TABLE account_daily_performance "
+            "ADD COLUMN balance_changed_pct REAL"
+        )
+
+
 def _seed_users_from_json(conn: sqlite3.Connection | PgConnectionWrapper) -> None:
     """仅当 users 表为空时从 baasapi/users.json 一次性导入；正式用户数据以 DB 为准。"""
     users_json = SERVER_DIR / "users.json"
@@ -1007,13 +1146,16 @@ def init_db() -> None:
             _ensure_account_open_positions_avg_columns(conn)
             _ensure_account_open_positions_liq_columns(conn)
             _ensure_account_balance_snapshots_margin_columns(conn)
-            _ensure_account_balance_snapshots_cash_profit_columns(conn)
             _ensure_account_balance_snapshots_equity_profit_column_rename(conn)
-            _ensure_account_daily_performance_chain_columns(conn)
+            _rename_account_balance_snapshots_cash_profit_to_balance_profit(conn)
+            _ensure_account_balance_snapshots_balance_profit_columns(conn)
+            _drop_account_daily_performance_realized_chain_columns(conn)
             _ensure_account_month_balance_baseline_initial_balance(conn)
             _ensure_account_month_balance_baseline_open_equity_to_initial_equity(conn)
+            _ensure_account_season_equity_balance_column_names(conn)
             _rename_account_daily_performance_legacy_columns(conn)
             _ensure_account_daily_performance_v3(conn)
+            _ensure_account_daily_performance_balance_changed_pct(conn)
             cur = conn.execute("SELECT COUNT(*) FROM users")
             row = cur.fetchone()
             if row is not None and int(row[0]) == 0:
@@ -1025,7 +1167,7 @@ def init_db() -> None:
         _migrate_account_daily_close_performance_to_account_daily_performance(conn)
         _migrate_account_season_spaced_name_and_bot_id(conn)
         _migrate_bot_seasons_to_account_season(conn)
-        _migrate_bot_profit_tables_to_tradingbot_profit_snapshots(conn)
+        _drop_legacy_bot_profit_tables(conn)
         conn.commit()
         try:
             conn.execute("DROP TABLE IF EXISTS config")
@@ -1050,19 +1192,6 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at);
             CREATE INDEX IF NOT EXISTS idx_logs_level ON logs(level);
-            CREATE TABLE IF NOT EXISTS tradingbot_profit_snapshots (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                bot_id TEXT NOT NULL,
-                snapshot_at TEXT NOT NULL,
-                initial_balance REAL NOT NULL DEFAULT 0,
-                current_balance REAL NOT NULL DEFAULT 0,
-                equity_usdt REAL NOT NULL DEFAULT 0,
-                profit_amount REAL NOT NULL DEFAULT 0,
-                profit_percent REAL NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );
-            CREATE INDEX IF NOT EXISTS idx_tradingbot_profit_snapshots_bot_id ON tradingbot_profit_snapshots(bot_id);
-            CREATE INDEX IF NOT EXISTS idx_tradingbot_profit_snapshots_snapshot_at ON tradingbot_profit_snapshots(snapshot_at);
             CREATE TABLE IF NOT EXISTS strategy_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 bot_id TEXT NOT NULL,
@@ -1078,10 +1207,10 @@ def init_db() -> None:
                 account_id TEXT NOT NULL,
                 started_at TEXT NOT NULL,
                 stopped_at TEXT,
-                initial_balance REAL NOT NULL DEFAULT 0,
-                initial_cash REAL,
+                initial_equity REAL NOT NULL DEFAULT 0,
+                initial_balance REAL,
+                final_equity REAL,
                 final_balance REAL,
-                final_cash REAL,
                 profit_amount REAL,
                 profit_percent REAL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -1119,8 +1248,8 @@ def init_db() -> None:
                 equity_usdt REAL NOT NULL DEFAULT 0,
                 equity_profit_amount REAL NOT NULL DEFAULT 0,
                 equity_profit_percent REAL NOT NULL DEFAULT 0,
-                cash_profit_amount REAL NOT NULL DEFAULT 0,
-                cash_profit_percent REAL NOT NULL DEFAULT 0,
+                balance_profit_amount REAL NOT NULL DEFAULT 0,
+                balance_profit_percent REAL NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT (datetime('now'))
             );
             CREATE INDEX IF NOT EXISTS idx_account_balance_snapshots_account ON account_balance_snapshots(account_id);
@@ -1179,6 +1308,7 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_aops_account_at ON account_open_positions_snapshots(account_id, snapshot_at);
             CREATE INDEX IF NOT EXISTS idx_aops_account_inst ON account_open_positions_snapshots(account_id, inst_id);
+            -- account_daily_performance：手工对照 migrations/add_account_daily_performance.sql；PG 见 *.postgresql.sql
             CREATE TABLE IF NOT EXISTS account_daily_performance (
                 account_id TEXT NOT NULL,
                 day TEXT NOT NULL,
@@ -1186,9 +1316,8 @@ def init_db() -> None:
                 close_pos_count INTEGER NOT NULL DEFAULT 0,
                 equlity_changed REAL,
                 balance_changed REAL,
+                balance_changed_pct REAL,
                 pnl_pct REAL,
-                equity_base_realized_chain REAL,
-                pnl_pct_realized_chain REAL,
                 instrument_id TEXT NOT NULL DEFAULT '',
                 market_truevolatility REAL,
                 efficiency_ratio REAL,
@@ -1217,13 +1346,17 @@ def init_db() -> None:
         _ensure_account_open_positions_avg_columns(conn)
         _ensure_account_open_positions_liq_columns(conn)
         _ensure_account_balance_snapshots_margin_columns(conn)
-        _ensure_account_balance_snapshots_cash_profit_columns(conn)
         _ensure_account_balance_snapshots_equity_profit_column_rename(conn)
-        _ensure_account_daily_performance_chain_columns(conn)
+        _rename_account_balance_snapshots_cash_profit_to_balance_profit(conn)
+        _ensure_account_balance_snapshots_balance_profit_columns(conn)
+        _drop_account_daily_performance_realized_chain_columns(conn)
         _ensure_account_month_balance_baseline_initial_balance(conn)
         _ensure_account_month_balance_baseline_open_equity_to_initial_equity(conn)
+        _ensure_account_season_equity_balance_column_names(conn)
         _rename_account_daily_performance_legacy_columns(conn)
         _ensure_account_daily_performance_v3(conn)
+        _ensure_account_daily_performance_balance_changed_pct(conn)
+        _drop_legacy_bot_profit_tables(conn)
         conn.commit()
         # 若用户表为空且存在 users.json，则导入
         cur = conn.execute("SELECT COUNT(*) FROM users")
@@ -1664,120 +1797,6 @@ def log_query(
         conn.close()
 
 
-# ---------- 机器人盈利快照（表 tradingbot_profit_snapshots；旧名 bot_profit_snapshots / tradingbot_profit） ----------
-def bot_profit_insert(
-    bot_id: str,
-    snapshot_at: str,
-    initial_balance: float = 0,
-    current_balance: float = 0,
-    equity_usdt: float = 0,
-    profit_amount: float = 0,
-    profit_percent: float = 0,
-) -> None:
-    """写入一条机器人盈利快照。snapshot_at 建议 ISO 格式。"""
-    conn = get_conn()
-    try:
-        conn.execute(
-            """INSERT INTO tradingbot_profit_snapshots
-               (bot_id, snapshot_at, initial_balance, current_balance, equity_usdt, profit_amount, profit_percent)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (bot_id, snapshot_at, initial_balance, current_balance, equity_usdt, profit_amount, profit_percent),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-def bot_profit_query_by_bot(bot_id: str, limit: int = 500) -> list[dict]:
-    """按 bot_id 查询盈利快照，按 snapshot_at 升序。"""
-    conn = get_conn()
-    try:
-        cur = conn.execute(
-            """SELECT id, bot_id, snapshot_at, initial_balance, current_balance, equity_usdt,
-                      profit_amount, profit_percent, created_at
-               FROM tradingbot_profit_snapshots WHERE bot_id = ? ORDER BY snapshot_at ASC LIMIT ?""",
-            (bot_id, limit),
-        )
-        return [
-            {
-                "id": r[0],
-                "bot_id": r[1],
-                "snapshot_at": r[2],
-                "initial_balance": r[3],
-                "current_balance": r[4],
-                "equity_usdt": r[5],
-                "profit_amount": r[6],
-                "profit_percent": r[7],
-                "created_at": r[8],
-            }
-            for r in cur.fetchall()
-        ]
-    finally:
-        conn.close()
-
-
-def bot_profit_latest_by_bot(bot_id: str) -> dict | None:
-    """取该 bot 最近一条盈利快照。"""
-    conn = get_conn()
-    try:
-        cur = conn.execute(
-            """SELECT id, bot_id, snapshot_at, initial_balance, current_balance, equity_usdt,
-                      profit_amount, profit_percent, created_at
-               FROM tradingbot_profit_snapshots WHERE bot_id = ? ORDER BY snapshot_at DESC LIMIT 1""",
-            (bot_id,),
-        )
-        r = cur.fetchone()
-        if not r:
-            return None
-        return {
-            "id": r[0],
-            "bot_id": r[1],
-            "snapshot_at": r[2],
-            "initial_balance": r[3],
-            "current_balance": r[4],
-            "equity_usdt": r[5],
-            "profit_amount": r[6],
-            "profit_percent": r[7],
-            "created_at": r[8],
-        }
-    finally:
-        conn.close()
-
-
-def bot_profit_query_by_bot_since(
-    bot_id: str, *, since_snapshot_at: str, max_rows: int = 40000
-) -> list[dict]:
-    """自 since_snapshot_at（含）起按 snapshot_at 升序，供策略能效与 account_balance_snapshots 口径对齐。"""
-    cap = max(100, min(100000, int(max_rows)))
-    conn = get_conn()
-    try:
-        cur = conn.execute(
-            """SELECT id, bot_id, snapshot_at, initial_balance, current_balance, equity_usdt,
-                      profit_amount, profit_percent, created_at
-               FROM tradingbot_profit_snapshots
-               WHERE bot_id = ? AND snapshot_at >= ?
-               ORDER BY snapshot_at ASC
-               LIMIT ?""",
-            ((bot_id or "").strip(), (since_snapshot_at or "").strip(), cap),
-        )
-        return [
-            {
-                "id": r[0],
-                "bot_id": r[1],
-                "snapshot_at": r[2],
-                "initial_balance": r[3],
-                "current_balance": r[4],
-                "equity_usdt": r[5],
-                "profit_amount": r[6],
-                "profit_percent": r[7],
-                "created_at": r[8],
-            }
-            for r in cur.fetchall()
-        ]
-    finally:
-        conn.close()
-
-
 # ---------- 策略启停区间（表 tradingbot_mgr：序号、账户、启动/结束/记录时间） ----------
 def tradingbot_mgr_session_start(account_id: str, started_at: str, recorded_at: str) -> int:
     """记录一次策略启动；返回行 id。"""
@@ -1878,26 +1897,26 @@ def strategy_event_query(bot_id: str | None = None, limit: int = 200) -> list[di
 def account_season_insert(
     account_id: str,
     started_at: str,
-    initial_balance: float = 0,
+    initial_equity: float = 0,
     *,
-    initial_cash: float | None = None,
+    initial_balance: float | None = None,
 ) -> int:
     """插入一条赛季记录（通常由 account_season_roll_forward 统一写入），返回 id。"""
     conn = get_conn()
     try:
         if IS_POSTGRES:
             cur = conn.execute(
-                """INSERT INTO account_season (account_id, started_at, initial_balance, initial_cash)
+                """INSERT INTO account_season (account_id, started_at, initial_equity, initial_balance)
                    VALUES (?, ?, ?, ?) RETURNING id""",
-                (account_id, started_at, initial_balance, initial_cash),
+                (account_id, started_at, initial_equity, initial_balance),
             )
             row = cur.fetchone()
             conn.commit()
             return int(row[0]) if row else 0
         cur = conn.execute(
-            """INSERT INTO account_season (account_id, started_at, initial_balance, initial_cash)
+            """INSERT INTO account_season (account_id, started_at, initial_equity, initial_balance)
                VALUES (?, ?, ?, ?)""",
-            (account_id, started_at, initial_balance, initial_cash),
+            (account_id, started_at, initial_equity, initial_balance),
         )
         conn.commit()
         return cur.lastrowid or 0
@@ -1908,14 +1927,14 @@ def account_season_insert(
 def account_season_update_on_stop(
     account_id: str,
     stopped_at: str,
-    final_balance: float,
-    final_cash: float | None = None,
+    final_equity: float,
+    final_balance: float | None = None,
 ) -> None:
-    """更新最近一条未结束赛季：写入停止时间与期末权益/现金（停止策略或赛季结束）。"""
+    """更新最近一条未结束赛季：写入停止时间与期末权益/USDT 余额（停止策略或赛季结束）。"""
     conn = get_conn()
     try:
         cur = conn.execute(
-            """SELECT id, initial_balance, initial_cash FROM account_season
+            """SELECT id, initial_equity, initial_balance FROM account_season
                WHERE account_id = ? AND stopped_at IS NULL
                ORDER BY started_at DESC LIMIT 1""",
             (account_id,),
@@ -1924,15 +1943,13 @@ def account_season_update_on_stop(
         if not row:
             return
         sid, initial = row[0], float(row[1])
-        init_cash_v = row[2]
-        init_cash = float(init_cash_v) if init_cash_v is not None else None
-        profit_amount = final_balance - initial
+        profit_amount = final_equity - initial
         profit_percent = (profit_amount / initial * 100.0) if initial else 0.0
         conn.execute(
-            """UPDATE account_season SET stopped_at = ?, final_balance = ?, final_cash = ?,
+            """UPDATE account_season SET stopped_at = ?, final_equity = ?, final_balance = ?,
                       profit_amount = ?, profit_percent = ?
                WHERE id = ?""",
-            (stopped_at, final_balance, final_cash, profit_amount, profit_percent, sid),
+            (stopped_at, final_equity, final_balance, profit_amount, profit_percent, sid),
         )
         conn.commit()
     finally:
@@ -1947,32 +1964,30 @@ def account_season_roll_forward(
 ) -> int:
     """
     启动新盈利赛季：将所有未结束赛季的 stopped_at 设为 ts（与新赛季 started_at 同一时刻，前后衔接），
-    再以同一快照写入新赛季的 initial_balance / initial_cash。
+    再以同一快照写入新赛季的 initial_equity / initial_balance（USDT 余额）。
     """
     bid = (account_id or "").strip()
     conn = get_conn()
     try:
         cur = conn.execute(
-            """SELECT id, initial_balance, initial_cash FROM account_season
+            """SELECT id, initial_equity, initial_balance FROM account_season
                WHERE account_id = ? AND stopped_at IS NULL
                ORDER BY started_at ASC""",
             (bid,),
         )
         for row in cur.fetchall():
             sid, initial = int(row[0]), float(row[1] or 0)
-            ic_raw = row[2]
-            init_cash = float(ic_raw) if ic_raw is not None else 0.0
             profit_amount = float(equity_usdt) - initial
             profit_percent = (profit_amount / initial * 100.0) if initial else 0.0
             conn.execute(
-                """UPDATE account_season SET stopped_at = ?, final_balance = ?, final_cash = ?,
+                """UPDATE account_season SET stopped_at = ?, final_equity = ?, final_balance = ?,
                           profit_amount = ?, profit_percent = ?
                    WHERE id = ?""",
                 (ts, equity_usdt, cash_usdt, profit_amount, profit_percent, sid),
             )
         if IS_POSTGRES:
             cur2 = conn.execute(
-                """INSERT INTO account_season (account_id, started_at, initial_balance, initial_cash)
+                """INSERT INTO account_season (account_id, started_at, initial_equity, initial_balance)
                    VALUES (?, ?, ?, ?) RETURNING id""",
                 (bid, ts, float(equity_usdt), float(cash_usdt)),
             )
@@ -1980,7 +1995,7 @@ def account_season_roll_forward(
             conn.commit()
             return int(row2[0]) if row2 else 0
         cur2 = conn.execute(
-            """INSERT INTO account_season (account_id, started_at, initial_balance, initial_cash)
+            """INSERT INTO account_season (account_id, started_at, initial_equity, initial_balance)
                VALUES (?, ?, ?, ?)""",
             (bid, ts, float(equity_usdt), float(cash_usdt)),
         )
@@ -1995,8 +2010,8 @@ def account_season_list_by_account(account_id: str, limit: int = 50) -> list[dic
     conn = get_conn()
     try:
         cur = conn.execute(
-            """SELECT id, account_id, started_at, stopped_at, initial_balance, initial_cash,
-                      final_balance, final_cash, profit_amount, profit_percent, created_at
+            """SELECT id, account_id, started_at, stopped_at, initial_equity, initial_balance,
+                      final_equity, final_balance, profit_amount, profit_percent, created_at
                FROM account_season WHERE account_id = ? ORDER BY started_at DESC LIMIT ?""",
             (account_id, limit),
         )
@@ -2006,10 +2021,10 @@ def account_season_list_by_account(account_id: str, limit: int = 50) -> list[dic
                 "account_id": r[1],
                 "started_at": r[2],
                 "stopped_at": r[3],
-                "initial_balance": r[4],
-                "initial_cash": float(r[5]) if r[5] is not None else None,
-                "final_balance": r[6],
-                "final_cash": float(r[7]) if r[7] is not None else None,
+                "initial_equity": r[4],
+                "initial_balance": float(r[5]) if r[5] is not None else None,
+                "final_equity": r[6],
+                "final_balance": float(r[7]) if r[7] is not None else None,
                 "profit_amount": r[8],
                 "profit_percent": r[9],
                 "created_at": r[10],
@@ -2032,8 +2047,8 @@ def account_season_get_by_id(account_id: str, season_id: int) -> dict | None:
     conn = get_conn()
     try:
         cur = conn.execute(
-            """SELECT id, account_id, started_at, stopped_at, initial_balance, initial_cash,
-                      final_balance, final_cash, profit_amount, profit_percent, created_at
+            """SELECT id, account_id, started_at, stopped_at, initial_equity, initial_balance,
+                      final_equity, final_balance, profit_amount, profit_percent, created_at
                FROM account_season WHERE account_id = ? AND id = ?""",
             (bid, sid),
         )
@@ -2045,10 +2060,10 @@ def account_season_get_by_id(account_id: str, season_id: int) -> dict | None:
             "account_id": r[1],
             "started_at": r[2],
             "stopped_at": r[3],
-            "initial_balance": r[4],
-            "initial_cash": float(r[5]) if r[5] is not None else None,
-            "final_balance": r[6],
-            "final_cash": float(r[7]) if r[7] is not None else None,
+            "initial_equity": r[4],
+            "initial_balance": float(r[5]) if r[5] is not None else None,
+            "final_equity": r[6],
+            "final_balance": float(r[7]) if r[7] is not None else None,
             "profit_amount": r[8],
             "profit_percent": r[9],
             "created_at": r[10],
@@ -2195,16 +2210,16 @@ def account_snapshot_insert(
     *,
     available_margin: float = 0.0,
     used_margin: float = 0.0,
-    cash_profit_amount: float = 0.0,
-    cash_profit_percent: float = 0.0,
+    balance_profit_amount: float = 0.0,
+    balance_profit_percent: float = 0.0,
 ) -> None:
-    """插入一条余额快照行（表：account_balance_snapshots）。cash_balance=USDT 资产余额；available_margin=可用保证金；equity_profit_* 为权益相对 initial_capital；cash_profit_* 为资产余额相对 initial_capital。"""
+    """插入一条余额快照行（表：account_balance_snapshots）。cash_balance=USDT 资产余额；available_margin=可用保证金；equity_profit_* 为权益相对 initial_capital；balance_profit_* 为资产余额相对 initial_capital。"""
     conn = get_conn()
     try:
         conn.execute(
             """INSERT INTO account_balance_snapshots
                (account_id, snapshot_at, cash_balance, available_margin, used_margin, equity_usdt,
-                equity_profit_amount, equity_profit_percent, cash_profit_amount, cash_profit_percent)
+                equity_profit_amount, equity_profit_percent, balance_profit_amount, balance_profit_percent)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 account_id.strip(),
@@ -2215,8 +2230,8 @@ def account_snapshot_insert(
                 equity_usdt,
                 equity_profit_amount,
                 equity_profit_percent,
-                cash_profit_amount,
-                cash_profit_percent,
+                balance_profit_amount,
+                balance_profit_percent,
             ),
         )
         conn.commit()
@@ -2225,7 +2240,7 @@ def account_snapshot_insert(
 
 
 def account_balance_snapshots_recompute_profit() -> int:
-    """按各行与当前 account_list.initial_capital 重算 equity_profit_*（权益）与 cash_profit_*（资产余额）。"""
+    """按各行与当前 account_list.initial_capital 重算 equity_profit_*（权益）与 balance_profit_*（资产余额）。"""
     conn = get_conn()
     total_updated = 0
     try:
@@ -2253,8 +2268,8 @@ def account_balance_snapshots_recompute_profit() -> int:
                    SET equity_profit_amount = equity_usdt - ?,
                        equity_profit_percent = CASE WHEN ABS(?) > 1e-18
                          THEN (equity_usdt - ?) / ? * 100.0 ELSE 0.0 END,
-                       cash_profit_amount = cash_balance - ?,
-                       cash_profit_percent = CASE WHEN ABS(?) > 1e-18
+                       balance_profit_amount = cash_balance - ?,
+                       balance_profit_percent = CASE WHEN ABS(?) > 1e-18
                          THEN (cash_balance - ?) / ? * 100.0 ELSE 0.0 END
                    WHERE account_id = ?""",
                 (
@@ -2284,7 +2299,7 @@ def account_snapshot_latest_by_account(account_id: str) -> dict | None:
     try:
         cur = conn.execute(
             """SELECT id, account_id, snapshot_at, cash_balance, available_margin, used_margin, equity_usdt,
-                      equity_profit_amount, equity_profit_percent, cash_profit_amount, cash_profit_percent, created_at
+                      equity_profit_amount, equity_profit_percent, balance_profit_amount, balance_profit_percent, created_at
                FROM account_balance_snapshots WHERE account_id = ? ORDER BY snapshot_at DESC LIMIT 1""",
             (account_id.strip(),),
         )
@@ -2301,8 +2316,8 @@ def account_snapshot_latest_by_account(account_id: str) -> dict | None:
             "equity_usdt": r[6],
             "equity_profit_amount": r[7],
             "equity_profit_percent": r[8],
-            "cash_profit_amount": r[9],
-            "cash_profit_percent": r[10],
+            "balance_profit_amount": r[9],
+            "balance_profit_percent": r[10],
             "created_at": r[11],
         }
     finally:
@@ -2318,7 +2333,7 @@ def account_snapshot_query_by_account(account_id: str, limit: int = 500) -> list
     try:
         cur = conn.execute(
             """SELECT id, account_id, snapshot_at, cash_balance, available_margin, used_margin, equity_usdt,
-                      equity_profit_amount, equity_profit_percent, cash_profit_amount, cash_profit_percent, created_at
+                      equity_profit_amount, equity_profit_percent, balance_profit_amount, balance_profit_percent, created_at
                FROM account_balance_snapshots WHERE account_id = ? ORDER BY snapshot_at ASC LIMIT ?""",
             (account_id.strip(), limit),
         )
@@ -2333,8 +2348,8 @@ def account_snapshot_query_by_account(account_id: str, limit: int = 500) -> list
                 "equity_usdt": r[6],
                 "equity_profit_amount": r[7],
                 "equity_profit_percent": r[8],
-                "cash_profit_amount": r[9],
-                "cash_profit_percent": r[10],
+                "balance_profit_amount": r[9],
+                "balance_profit_percent": r[10],
                 "created_at": r[11],
             }
             for r in cur.fetchall()
@@ -2352,7 +2367,7 @@ def account_snapshot_query_by_account_since(
     try:
         cur = conn.execute(
             """SELECT id, account_id, snapshot_at, cash_balance, available_margin, used_margin, equity_usdt,
-                      equity_profit_amount, equity_profit_percent, cash_profit_amount, cash_profit_percent, created_at
+                      equity_profit_amount, equity_profit_percent, balance_profit_amount, balance_profit_percent, created_at
                FROM account_balance_snapshots
                WHERE account_id = ? AND snapshot_at >= ?
                ORDER BY snapshot_at ASC
@@ -2370,8 +2385,8 @@ def account_snapshot_query_by_account_since(
                 "equity_usdt": r[6],
                 "equity_profit_amount": r[7],
                 "equity_profit_percent": r[8],
-                "cash_profit_amount": r[9],
-                "cash_profit_percent": r[10],
+                "balance_profit_amount": r[9],
+                "balance_profit_percent": r[10],
                 "created_at": r[11],
             }
             for r in cur.fetchall()
@@ -2458,7 +2473,7 @@ def account_snapshot_last_before_instant(
     try:
         cur = conn.execute(
             """SELECT id, account_id, snapshot_at, cash_balance, available_margin, used_margin, equity_usdt,
-                      equity_profit_amount, equity_profit_percent, cash_profit_amount, cash_profit_percent, created_at
+                      equity_profit_amount, equity_profit_percent, balance_profit_amount, balance_profit_percent, created_at
                FROM account_balance_snapshots
                WHERE account_id = ? AND snapshot_at < ?
                ORDER BY snapshot_at DESC
@@ -2478,8 +2493,8 @@ def account_snapshot_last_before_instant(
             "equity_usdt": r[6],
             "equity_profit_amount": r[7],
             "equity_profit_percent": r[8],
-            "cash_profit_amount": r[9],
-            "cash_profit_percent": r[10],
+            "balance_profit_amount": r[9],
+            "balance_profit_percent": r[10],
             "created_at": r[11],
         }
     finally:
@@ -3096,6 +3111,11 @@ def _snapshot_iso_to_beijing_day(sa: str) -> str | None:
     return f"{bj.year:04d}-{bj.month:02d}-{bj.day:02d}"
 
 
+def utc_bar_day_for_beijing_ledger_day(day: str) -> str:
+    """北京日历日 → 策略效能 / market_daily_bars 使用的 UTC 日键（与 `_tr_lookup_day_from_beijing_ledger_day` 相同）。"""
+    return _tr_lookup_day_from_beijing_ledger_day(day)
+
+
 def _tr_lookup_day_from_beijing_ledger_day(day: str) -> str:
     """日绩效 `day` 为北京日历时，映射到 market_daily_bars.day（当前库为 K 线 UTC 日历日）的近似键。"""
     from datetime import datetime, timezone
@@ -3186,8 +3206,7 @@ def account_daily_performance_query_month(
     try:
         cur = conn.execute(
             """
-            SELECT day, net_realized_pnl, close_pos_count, equlity_changed, balance_changed, pnl_pct,
-                   equity_base_realized_chain, pnl_pct_realized_chain,
+            SELECT day, net_realized_pnl, close_pos_count, equlity_changed, balance_changed, balance_changed_pct, pnl_pct,
                    instrument_id, market_truevolatility, efficiency_ratio, updated_at
             FROM account_daily_performance
             WHERE account_id = ? AND day >= ? AND day < ?
@@ -3202,17 +3221,53 @@ def account_daily_performance_query_month(
                 "close_pos_count": int(r[2] or 0),
                 "equlity_changed": float(r[3]) if r[3] is not None else None,
                 "balance_changed": float(r[4]) if r[4] is not None else None,
-                "pnl_pct": float(r[5]) if r[5] is not None else None,
-                "equity_base_realized_chain": (
-                    float(r[6]) if r[6] is not None else None
-                ),
-                "pnl_pct_realized_chain": (
-                    float(r[7]) if r[7] is not None else None
-                ),
-                "instrument_id": str(r[8] or ""),
-                "market_truevolatility": float(r[9]) if r[9] is not None else None,
-                "efficiency_ratio": float(r[10]) if r[10] is not None else None,
-                "updated_at": str(r[11] or ""),
+                "balance_changed_pct": float(r[5]) if r[5] is not None else None,
+                "pnl_pct": float(r[6]) if r[6] is not None else None,
+                "instrument_id": str(r[7] or ""),
+                "market_truevolatility": float(r[8]) if r[8] is not None else None,
+                "efficiency_ratio": float(r[9]) if r[9] is not None else None,
+                "updated_at": str(r[10] or ""),
+            }
+            for r in cur.fetchall()
+        ]
+    finally:
+        conn.close()
+
+
+def account_daily_performance_query_day_range(
+    account_id: str, day_lo: str, day_hi: str
+) -> list[dict[str, Any]]:
+    """读 account_daily_performance（day 为北京日历日 YYYY-MM-DD），闭区间 [day_lo, day_hi]。"""
+    aid = (account_id or "").strip()
+    lo = (day_lo or "").strip()
+    hi = (day_hi or "").strip()
+    if not aid or not lo or not hi:
+        return []
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """
+            SELECT day, net_realized_pnl, close_pos_count, equlity_changed, balance_changed, balance_changed_pct, pnl_pct,
+                   instrument_id, market_truevolatility, efficiency_ratio, updated_at
+            FROM account_daily_performance
+            WHERE account_id = ? AND day >= ? AND day <= ?
+            ORDER BY day
+            """,
+            (aid, lo, hi),
+        )
+        return [
+            {
+                "day": str(r[0]),
+                "net_pnl": float(r[1] or 0),
+                "close_pos_count": int(r[2] or 0),
+                "equlity_changed": float(r[3]) if r[3] is not None else None,
+                "balance_changed": float(r[4]) if r[4] is not None else None,
+                "balance_changed_pct": float(r[5]) if r[5] is not None else None,
+                "pnl_pct": float(r[6]) if r[6] is not None else None,
+                "instrument_id": str(r[7] or ""),
+                "market_truevolatility": float(r[8]) if r[8] is not None else None,
+                "efficiency_ratio": float(r[9]) if r[9] is not None else None,
+                "updated_at": str(r[10] or ""),
             }
             for r in cur.fetchall()
         ]
@@ -3233,8 +3288,7 @@ def account_daily_performance_rebuild_for_accounts(
     Asia/Shanghai 当日，非 cTime；金额优先 realized_pnl（OKX realizedPnl）。
     pnl_pct 分母为当月月初基准表口径（_month_realized_denom_from_open）；
     equlity_changed、balance_changed 为北京日 00:00–次日 00:00（上海时区）内快照的 signed 差分；
-    market_truevolatility：日绩效北京日映射到 market_daily_bars 当前使用的 UTC 日键作近似查询；
-    链式已实现：每月首行起点同上述分母，月内按上一日链末权益滚动。
+    market_truevolatility：日绩效北京日映射到 market_daily_bars 当前使用的 UTC 日键作近似查询。
     """
     from datetime import datetime, timezone
 
@@ -3344,17 +3398,12 @@ def account_daily_performance_rebuild_for_accounts(
                     tr_map[str(r[0])] = float(r[1] or 0.0)
 
             mo_cache: dict[str, dict | None] = {}
-            prev_ym: str | None = None
-            chain_eq_after: float | None = None
 
             for day in day_list:
                 net_pnl, close_pos_count = pnl_by_day.get(day, (0.0, 0))
                 eq_ch, cash_ch = _signed_equity_cash_delta_beijing_day(snaps_dt, day)
 
                 ym = day[:7]
-                if ym != prev_ym:
-                    chain_eq_after = None
-                    prev_ym = ym
                 month_denom = _month_realized_denom_from_open(
                     aid, ym, initial, mo_cache
                 )
@@ -3363,60 +3412,45 @@ def account_daily_performance_rebuild_for_accounts(
                 if month_denom is not None and float(month_denom) > 0:
                     pnl_pct = float(net_pnl) / float(month_denom) * 100.0
 
-                if chain_eq_after is not None:
-                    chain_start = chain_eq_after
-                elif month_denom is not None and float(month_denom) > 0:
-                    chain_start = float(month_denom)
-                elif initial > 0:
-                    chain_start = float(initial)
-                else:
-                    chain_start = None
-
-                equity_base_realized_chain: float | None = (
-                    float(chain_start) if chain_start is not None else None
-                )
-                pnl_pct_realized_chain: float | None = None
-                if chain_start is not None and float(chain_start) > 0:
-                    pnl_pct_realized_chain = (
-                        float(net_pnl) / float(chain_start) * 100.0
+                balance_changed_pct_v: float | None = None
+                if (
+                    month_denom is not None
+                    and float(month_denom) > 0
+                    and cash_ch is not None
+                ):
+                    balance_changed_pct_v = (
+                        float(cash_ch) / float(month_denom) * 100.0
                     )
-                chain_eq_after = (
-                    float(chain_start) + float(net_pnl)
-                    if chain_start is not None
-                    else None
-                )
 
                 tr_k = _tr_lookup_day_from_beijing_ledger_day(day)
                 mtr = tr_map.get(tr_k)
                 if mtr is None:
                     mtr = tr_map.get(day)
-                market_tr_v = float(mtr) if mtr is not None else None
+                market_truevolatility_v = float(mtr) if mtr is not None else None
                 eff = (
-                    close_pnl_efficiency_ratio(net_pnl, market_tr_v)
-                    if market_tr_v is not None
+                    close_pnl_efficiency_ratio(net_pnl, market_truevolatility_v)
+                    if market_truevolatility_v is not None
                     else None
                 )
 
                 conn.execute(
                     """
                     INSERT INTO account_daily_performance
-                    (account_id, day, net_realized_pnl, close_count, equity_change, cash_change, pnl_pct,
-                     equity_base_realized_chain, pnl_pct_realized_chain,
-                     benchmark_inst_id, market_tr, efficiency_ratio, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (account_id, day, net_realized_pnl, close_pos_count, equlity_changed, balance_changed, balance_changed_pct, pnl_pct,
+                     instrument_id, market_truevolatility, efficiency_ratio, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         aid,
                         day,
                         net_pnl,
-                        close_count,
+                        close_pos_count,
                         eq_ch,
                         cash_ch,
+                        balance_changed_pct_v,
                         pnl_pct,
-                        equity_base_realized_chain,
-                        pnl_pct_realized_chain,
                         bench,
-                        market_tr_v,
+                        market_truevolatility_v,
                         eff,
                         now_s,
                     ),

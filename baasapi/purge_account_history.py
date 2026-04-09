@@ -93,11 +93,6 @@ def purge_account_fully(conn, account_id: str, bot_id: str | None = None) -> dic
         "DELETE FROM tradingbot_mgr WHERE account_id = ?",
         (account_id,),
     )
-    counts["tradingbot_profit_snapshots"] = _exec_count(
-        conn,
-        "DELETE FROM tradingbot_profit_snapshots WHERE bot_id = ?",
-        (bid,),
-    )
     counts["strategy_events"] = _exec_count(
         conn,
         "DELETE FROM strategy_events WHERE bot_id = ?",
@@ -160,11 +155,6 @@ def purge_account_before(
         conn,
         "DELETE FROM tradingbot_mgr WHERE account_id = ? AND started_at < ?",
         (account_id, day_iso),
-    )
-    counts["tradingbot_profit_snapshots"] = _exec_count(
-        conn,
-        "DELETE FROM tradingbot_profit_snapshots WHERE bot_id = ? AND snapshot_at < ?",
-        (bid, day_iso),
     )
     counts["strategy_events"] = _exec_count(
         conn,

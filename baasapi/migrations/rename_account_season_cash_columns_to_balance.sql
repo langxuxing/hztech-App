@@ -1,0 +1,15 @@
+-- account_season：权益列 initial_balance/final_balance → initial_equity/final_equity；
+-- 现金列 initial_cash/final_cash → initial_balance/final_balance（USDT cashBal）。
+-- 新库由 db.init_db() 中 _ensure_account_season_equity_balance_column_names 自动迁移；本文件供手工在已上线库执行时参考（SQLite 3.25+ / PostgreSQL）。
+--
+-- 含现金列的旧表（依次执行）：
+-- ALTER TABLE account_season RENAME COLUMN initial_balance TO initial_equity;
+-- ALTER TABLE account_season RENAME COLUMN final_balance TO final_equity;
+-- ALTER TABLE account_season RENAME COLUMN initial_cash TO initial_balance;
+-- ALTER TABLE account_season RENAME COLUMN final_cash TO final_balance;
+--
+-- 仅权益两列的旧表：
+-- ALTER TABLE account_season RENAME COLUMN initial_balance TO initial_equity;
+-- ALTER TABLE account_season RENAME COLUMN final_balance TO final_equity;
+-- ALTER TABLE account_season ADD COLUMN initial_balance REAL;
+-- ALTER TABLE account_season ADD COLUMN final_balance REAL;

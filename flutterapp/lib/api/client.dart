@@ -406,7 +406,9 @@ class ApiClient {
     return StrategyDailyEfficiencyResponse.fromJson(map);
   }
 
-  /// 赛季时间区间内历史平仓笔数与净盈亏（`close_count`, `net_realized_pnl_usdt`）；时刻边界为 OKX uTime。
+  /// 赛季时间区间内历史平仓笔数与净盈亏（`close_count`, `net_realized_pnl_usdt`）。
+  /// 响应来自 positions-history 区间汇总，非 account_daily_performance；字段名仍为 `close_count`。
+  /// 时刻边界为 OKX uTime。
   Future<Map<String, dynamic>> getSeasonPositionsSummary(
     String botId,
     int seasonId,

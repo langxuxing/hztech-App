@@ -515,10 +515,10 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
           const SizedBox(width: 10),
         ]),
         _wrapRow([
-          _metricChip(context, '开始资金：', formatUiInteger(s.initialBalance)),
+          _metricChip(context, '开始资金：', formatUiInteger(s.initialEquity)),
           const SizedBox(width: 10),
-          if (s.finalBalance != null)
-            _metricChip(context, '结束资金：', formatUiInteger(s.finalBalance!)),
+          if (s.finalEquity != null)
+            _metricChip(context, '结束资金：', formatUiInteger(s.finalEquity!)),
           const SizedBox(width: 10),
           if (s.profitAmount != null)
             _metricChip(
@@ -653,9 +653,9 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
           _metricChip(context, '市场', _marketLabel ?? '—'),
         ]),
         _wrapRow([
-          _metricChip(context, '初期', formatUiInteger(s.initialBalance)),
-          if (s.finalBalance != null)
-            _metricChip(context, '期末', formatUiInteger(s.finalBalance!)),
+          _metricChip(context, '初期', formatUiInteger(s.initialEquity)),
+          if (s.finalEquity != null)
+            _metricChip(context, '期末', formatUiInteger(s.finalEquity!)),
           if (s.profitAmount != null)
             _metricChip(
               context,

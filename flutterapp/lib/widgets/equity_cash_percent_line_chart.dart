@@ -77,7 +77,7 @@ class SnapshotPercentLineChart extends StatelessWidget {
     this.compact = false,
     /// 非空时仅展示该自然月内的快照点（与月度日历/柱图对齐）。
     this.focusedMonth,
-    /// 与 [focusedMonth] 同月时优先使用：`累计(equity_change|cash_change) / 月初分母 * 100`（与 account_daily_performance 一致）。
+    /// 与 [focusedMonth] 同月时优先使用：`累计(equlity_changed|balance_changed) / 月初分母 * 100`（与 account_daily_performance 一致）。
     this.dailyPerfDays,
     /// 权益用月初权益；现金用 `month_initial_balance`（USDT 余额）。
     this.monthPerformanceDenom,
@@ -94,8 +94,8 @@ class SnapshotPercentLineChart extends StatelessWidget {
   Widget build(BuildContext context) {
     final fullSorted = _sortedByTime(snapshots);
     final pickCh0 = series == SnapshotReturnSeries.equity
-        ? (DailyRealizedPnlDayRow r) => r.equityChange
-        : (DailyRealizedPnlDayRow r) => r.cashChange;
+        ? (DailyRealizedPnlDayRow r) => r.equlityChanged
+        : (DailyRealizedPnlDayRow r) => r.balanceChanged;
     final perfEarly = focusedMonth != null &&
             dailyPerfDays != null &&
             monthPerformanceDenom != null &&
@@ -169,8 +169,8 @@ class SnapshotPercentLineChart extends StatelessWidget {
       final daysInMonth = DateTime(y, m + 1, 0).day;
       lastDayInMonth = daysInMonth;
       final pickCh = series == SnapshotReturnSeries.equity
-          ? (DailyRealizedPnlDayRow r) => r.equityChange
-          : (DailyRealizedPnlDayRow r) => r.cashChange;
+          ? (DailyRealizedPnlDayRow r) => r.equlityChanged
+          : (DailyRealizedPnlDayRow r) => r.balanceChanged;
       final perfMap = dailyPerfDays != null &&
               monthPerformanceDenom != null &&
               monthPerformanceDenom! > 0

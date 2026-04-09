@@ -8,10 +8,9 @@
 也**不是** ATR。经典 ATR(14) 由 ``compute_atr14_wilder_by_day`` 单独从 OHLC 递推（Wilder），供阈值参考。
 
 Account_List 账户的「UTC 自然月月初」资金/权益分母优先用库表 account_month_balance_baseline（与定时任务一致），无表行时仍可从快照序列推导。
-现金日明细优先来自 account_balance_snapshots 的 available_margin（可用保证金；旧行仅误存于 cash_balance）；
-旧版 tradingbots.json 机器人用 tradingbot_profit_snapshots（权益 equity_usdt
-经 normalize_bot_profit_snapshots_for_efficiency 映射为 cash_balance）。对 K 线有、但当日无快照的日期，
-由 fill_cash_by_day_for_market_bars 补齐为「当日无增量」（sod=eod=上一日末现金）；若全程无快照则占位为 0，
+策略效能接口（``/strategy-daily-efficiency``）对账户优先用 ``account_daily_performance`` 的 ``balance_changed`` / ``balance_changed_pct``（北京日映射到 K 线 UTC 日），
+缺省再用 ``account_balance_snapshots.cash_balance`` 的 UTC 日末环比；现金序列用 ``available_margin`` 汇总（旧行仅误存于 cash_balance）。
+对 K 线有、但当日无快照的日期，由 fill_cash_by_day_for_market_bars 补齐为「当日无增量」（sod=eod=上一日末现金）；若全程无快照则占位为 0，
 以便仍返回结构化行并由 merge 计算现金收益率%与策略能效（增量为 0 时能效为 0）。
 """
 from __future__ import annotations
@@ -32,32 +31,6 @@ def _snapshot_available_margin_cash_basis(r: dict[str, Any]) -> float:
         return max(0.0, float(r.get("cash_balance") or 0.0))
     except (TypeError, ValueError):
         return 0.0
-
-
-def normalize_bot_profit_snapshots_for_efficiency(
-    bot_profit_rows: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """
-    将 tradingbot_profit_snapshots 行转为与 account_balance_snapshots 相同的「按日现金」汇总输入：
-    仅保留 snapshot_at + cash_balance（取 equity_usdt，缺省用 current_balance），非负。
-    """
-    out: list[dict[str, Any]] = []
-    for r in bot_profit_rows:
-        ts = str(r.get("snapshot_at") or "").strip()
-        if not ts:
-            continue
-        try:
-            eq = r.get("equity_usdt")
-            if eq is None:
-                eq = r.get("current_balance")
-            cash = float(eq if eq is not None else 0.0)
-        except (TypeError, ValueError):
-            cash = 0.0
-        cash_v = max(0.0, cash)
-        out.append(
-            {"snapshot_at": ts, "cash_balance": cash_v, "equity_usdt": cash_v}
-        )
-    return out
 
 
 def _parse_snapshot_ts(raw: str) -> datetime | None:
@@ -335,6 +308,102 @@ def fill_cash_by_day_for_market_bars(
     return out
 
 
+def daily_cash_balance_eod_delta_by_utc_day(
+    snapshots: list[dict[str, Any]],
+) -> dict[str, dict[str, float]]:
+    """
+    按 UTC 自然日汇总 ``cash_balance``（USDT 资产余额）：
+    日增量 = 当日最后一笔 − 上一 UTC 日最后一笔（首日：当日末 − 当日开始前最后一笔）。
+    与 ``daily_cash_delta_by_utc_day`` 不同：此处用 cash_balance、允许负增量。
+    """
+    points: list[tuple[datetime, float]] = []
+    for r in snapshots:
+        ts = _parse_snapshot_ts(str(r.get("snapshot_at") or ""))
+        if ts is None:
+            continue
+        try:
+            cash = float(r.get("cash_balance") or 0.0)
+        except (TypeError, ValueError):
+            cash = 0.0
+        points.append((ts, cash))
+    if not points:
+        return {}
+    points.sort(key=lambda x: x[0])
+
+    day_to_last: dict[str, float] = {}
+    for ts, cash in points:
+        day_to_last[ts.strftime("%Y-%m-%d")] = cash
+
+    sorted_days = sorted(day_to_last.keys())
+    out: dict[str, dict[str, float]] = {}
+    prev_eod: float | None = None
+    for d in sorted_days:
+        eod = float(day_to_last[d])
+        y, m, dd = (int(x) for x in d.split("-"))
+        day_start = datetime(y, m, dd, tzinfo=timezone.utc)
+        if prev_eod is not None:
+            sod_before = prev_eod
+        else:
+            sod_before = None
+            for ts, cash in points:
+                if ts < day_start:
+                    sod_before = float(cash)
+            if sod_before is None:
+                for ts, cash in points:
+                    if ts >= day_start:
+                        sod_before = float(cash)
+                        break
+                else:
+                    sod_before = eod
+        delta = eod - float(sod_before)
+        out[d] = {
+            "sod_cash": float(sod_before),
+            "eod_cash": eod,
+            "cash_delta_usdt": delta,
+        }
+        prev_eod = eod
+    return out
+
+
+def month_start_cash_by_month_from_snapshots_cash_balance(
+    snapshots: list[dict[str, Any]],
+) -> dict[str, float]:
+    """
+    每个 UTC 自然月 YYYY-MM 的「月初资金」：该月 1 日 00:00 UTC 前最后一笔 ``cash_balance``；
+    无则取该月内最早一条（新户首月）。用于策略效能账户口径与 account_month_balance_baseline 缺省回退。
+    """
+    points: list[tuple[datetime, float]] = []
+    for r in snapshots:
+        ts = _parse_snapshot_ts(str(r.get("snapshot_at") or ""))
+        if ts is None:
+            continue
+        try:
+            cash = float(r.get("cash_balance") or 0.0)
+        except (TypeError, ValueError):
+            cash = 0.0
+        points.append((ts, cash))
+    if not points:
+        return {}
+    points.sort(key=lambda x: x[0])
+    ym_set = {(ts.year, ts.month) for ts, _ in points}
+    out: dict[str, float] = {}
+    for y, m in sorted(ym_set):
+        boundary = datetime(y, m, 1, tzinfo=timezone.utc)
+        last_before: float | None = None
+        for ts, val in points:
+            if ts < boundary:
+                last_before = val
+        key = f"{y:04d}-{m:02d}"
+        if last_before is not None:
+            out[key] = float(last_before)
+        else:
+            for ts, val in points:
+                if ts.year == y and ts.month == m:
+                    out[key] = float(val)
+                    break
+    return out
+
+
 def month_start_cash_by_month_from_snapshots(
     snapshots: list[dict[str, Any]],
 ) -> dict[str, float]:
@@ -436,8 +505,11 @@ def merge_daily_efficiency_rows(
     equity_by_day: dict[str, dict[str, float]] | None = None,
     month_equity_base_by_month: dict[str, float] | None = None,
     atr14_by_day: dict[str, float | None] | None = None,
+    cash_delta_pct_override_by_day: dict[str, float] | None = None,
 ) -> list[dict[str, Any]]:
-    """合并日线波动（|高−低|，非负）与现金日增量（非负），并计算 tr_pct、现金收益率%、策略能效；可选权益与 ATR(14)。"""
+    """合并日线波动（|高−低|，非负）与现金日增量，并计算 tr_pct、现金收益率%、策略能效；可选权益与 ATR(14)。
+    ``cash_delta_pct_override_by_day``：按 UTC 日键直接采用 ``account_daily_performance.balance_changed_pct`` 等（不再用增量÷月初重算）。
+    """
     rows: list[dict[str, Any]] = []
     for bar in market_bars:
         day = str(bar.get("day") or "")
@@ -461,7 +533,14 @@ def merge_daily_efficiency_rows(
             month_base = float(sod_cash)
         cash_delta_pct = None
         month_start_cash_out: float | None = None
-        if cash_delta is not None and month_base is not None and month_base > 0:
+        ov_pct = None
+        if cash_delta_pct_override_by_day and day in cash_delta_pct_override_by_day:
+            ov_pct = cash_delta_pct_override_by_day[day]
+        if ov_pct is not None and ov_pct == ov_pct:
+            cash_delta_pct = float(ov_pct)
+            if yield_from_month_start:
+                month_start_cash_out = month_base
+        elif cash_delta is not None and month_base is not None and month_base > 0:
             cash_delta_pct = float(cash_delta) / month_base * 100.0
             if yield_from_month_start:
                 month_start_cash_out = month_base

@@ -28,11 +28,11 @@ App 所需 API（与 QtraderApi.kt 一致）：
   GET  /api/status                同步状态与周期说明（需登录）
   GET  /api/tradingbots/{id}/position-history  历史仓位分页（入库数据，需登录）
   POST /api/tradingbots/{id}/position-history/sync  手动拉取该账户 OKX 历史仓位（仅管理员）
-  POST /api/tradingbots/{id}/balance-snapshot/sync  立即拉取 OKX 余额写入库（account_balance_snapshots / tradingbot_profit_snapshots；仅管理员）
+  POST /api/tradingbots/{id}/balance-snapshot/sync  立即拉取 OKX 余额写入 account_balance_snapshots（仅管理员；须为 Account_List 账户）
   GET  /api/tradingbots/{id}/open-positions-snapshots  已入库的当前持仓聚合快照（含多/空预估强平价；按时间倒序；需登录）
   POST /api/tradingbots/{id}/open-positions-snapshot/sync  立即拉取 OKX 当前持仓写入 account_open_positions_snapshots（仅管理员）
   POST /api/admin/balance-snapshots/sync  全量余额快照同步（与定时任务相同；仅管理员）
-  POST /api/admin/balance-snapshots/recompute-profit  按 initial_capital 重算全表 equity_profit_*（权益）与 cash_profit_*（资产余额）（仅管理员）
+  POST /api/admin/balance-snapshots/recompute-profit  按 initial_capital 重算全表 equity_profit_*（权益）与 balance_profit_*（资产余额）（仅管理员）
   POST /api/admin/balance-snapshots/backfill-bills  按 OKX bills-archive 为各启用账户补全缺日 account_balance_snapshots，并在有插入时重算 account_daily_performance（仅管理员）
   GET|POST|PUT|DELETE /api/admin/accounts  Account_List.json + account_list 库表同步（仅管理员）
   POST /api/admin/accounts/{id}/test-connection  测连 OKX + 检查 SWAP/双向持仓/50x 杠杆（仅管理员）；Body 可选 {"auto_configure": true} 在测连成功后调用 OKX 设双向持仓/全仓/多空杠杆后复测
@@ -618,7 +618,7 @@ def _resolve_okx_config_path(bot_or_account_id: str) -> Path | None:
 
 
 def _live_equity_cash_for_bot(bot_id: str) -> tuple[float, float]:
-    """当前 OKX 权益与 USDT 资产余额 cashBal（赛季起止写 final_cash / initial_cash）。"""
+    """当前 OKX 权益与 USDT 资产余额 cashBal（赛季起止写 final_balance / initial_balance）。"""
     if _account_mgr.okx_account_disabled_exchange_reason(bot_id):
         return 0.0, 0.0
     path = _resolve_okx_config_path(bot_id)
@@ -1118,7 +1118,7 @@ def _collect_accounts_profit() -> list[dict]:
 @app.route("/api/account-profit", methods=["GET"])
 @require_auth
 def api_account_profit():
-    """账户盈亏：OKX 拉取权益、USDT 资产余额(cashBal→balance_usdt)、可用保证金与占用；浮亏 upl；equity_profit_* 为权益相对期初；cash_profit_* 为资产余额相对期初；快照供曲线。"""
+    """账户盈亏：OKX 拉取权益、USDT 资产余额(cashBal→balance_usdt)、可用保证金与占用；浮亏 upl；equity_profit_* 为权益相对期初；balance_profit_* 为资产余额相对期初；快照供曲线。"""
     accounts = _filter_accounts_for_user(_collect_accounts_profit())
     return jsonify(
         {
@@ -1373,9 +1373,9 @@ def api_bot_season_stop(bot_id):
 @app.route("/api/tradingbots/<bot_id>/profit-history", methods=["GET"])
 @require_auth
 def api_bot_profit_history(bot_id):
-    """机器人盈利历史（用于收益曲线图），按 snapshot_at 升序。
+    """机器人盈利历史（用于收益曲线图），按 snapshot_at 升序；仅 Account_List 账户。
 
-    Account_List 账户读 account_balance_snapshots；默认仅返回自 ``since``（含）起的快照，
+    数据来自 account_balance_snapshots；默认仅返回自 ``since``（含）起的快照，
     避免 ORDER BY ASC LIMIT 取到最旧一段导致近月曲线为空。未传 ``since`` 时默认为 UTC 此刻起往前 45 天 00:00:00。
     Query: ``limit`` 最大返回条数（默认 15000，上限 50000）；``since`` ISO8601，如 ``2026-01-01T00:00:00.000Z``。
     """
@@ -1397,38 +1397,48 @@ def api_bot_profit_history(bot_id):
     account_ids = {
         x["account_id"] for x in _account_mgr.list_account_basics(enabled_only=False)
     }
-    if bot_id in account_ids:
-        raw = _db.account_snapshot_query_by_account_since(
-            bot_id, since_snapshot_at=since, max_rows=limit
+    if bot_id not in account_ids:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "bot_id": bot_id,
+                    "message": "非 Account_List 账户，无收益快照",
+                }
+            ),
+            400,
         )
-        initial_bal = 0.0
-        meta = _db.account_list_get(bot_id)
-        if meta:
-            initial_bal = float(meta["initial_capital"])
-        snapshots = [
-            {
-                "id": r["id"],
-                "bot_id": bot_id,
-                "snapshot_at": r["snapshot_at"],
-                "initial_balance": initial_bal,
-                "current_balance": r["cash_balance"],
-                "cash_balance": r["cash_balance"],
-                "available_margin": r["available_margin"],
-                "used_margin": r["used_margin"],
-                "equity_usdt": r["equity_usdt"],
-                "equity_profit_amount": r["equity_profit_amount"],
-                "equity_profit_percent": r["equity_profit_percent"],
-                "cash_profit_amount": r.get("cash_profit_amount", 0),
-                "cash_profit_percent": r.get("cash_profit_percent", 0),
-                "created_at": r["created_at"],
-            }
-            for r in raw
-        ]
-        return jsonify({"success": True, "bot_id": bot_id, "snapshots": snapshots})
-    rows = _db.bot_profit_query_by_bot_since(
+    raw = _db.account_snapshot_query_by_account_since(
         bot_id, since_snapshot_at=since, max_rows=limit
     )
-    return jsonify({"success": True, "bot_id": bot_id, "snapshots": rows})
+    initial_bal = 0.0
+    meta = _db.account_list_get(bot_id)
+    if meta:
+        initial_bal = float(meta["initial_capital"])
+    snapshots = [
+        {
+            "id": r["id"],
+            "bot_id": bot_id,
+            "snapshot_at": r["snapshot_at"],
+            "initial_balance": initial_bal,
+            "current_balance": r["cash_balance"],
+            "cash_balance": r["cash_balance"],
+            "available_margin": r["available_margin"],
+            "used_margin": r["used_margin"],
+            "equity_usdt": r["equity_usdt"],
+            "equity_profit_amount": r["equity_profit_amount"],
+            "equity_profit_percent": r["equity_profit_percent"],
+            "balance_profit_amount": r.get(
+                "balance_profit_amount", r.get("cash_profit_amount", 0)
+            ),
+            "balance_profit_percent": r.get(
+                "balance_profit_percent", r.get("cash_profit_percent", 0)
+            ),
+            "created_at": r["created_at"],
+        }
+        for r in raw
+    ]
+    return jsonify({"success": True, "bot_id": bot_id, "snapshots": snapshots})
 
 
 @app.route("/api/tradingbots/<bot_id>/strategy-daily-efficiency", methods=["GET"])
@@ -1439,14 +1449,29 @@ def api_strategy_daily_efficiency(bot_id):
     策略能效（日增量 USDT÷(波幅×1e9)）；并返回权益日增量、权益收益率%（÷月初权益）、权益能效、
     Wilder ATR(14) 及 0.1/0.6/1.2×ATR 价格阈值（经典 TR，与库字段 tr=|H−L| 不同）。
     日线 OHLC/TR 来自 market_daily_bars 全站缓存。
-    现金：Account_List 账户读 account_balance_snapshots（cash_basis 仍为 account_snapshots_cash）；
-    其余 bot 读 tradingbot_profit_snapshots 的 equity_usdt 作日权益变动（cash_basis=bot_profit_equity）；
+    现金：Account_List 账户优先 account_daily_performance.balance_changed / balance_changed_pct（北京日映射到 K 线 UTC 日），
+    缺省再用 account_balance_snapshots.cash_balance 的 UTC 日末环比；月初资金优先 account_month_balance_baseline.initial_balance，
+    否则用快照 cash_balance 的 UTC 月初（与回退一致）。仅支持 Account_List 账户（cash_basis=account_snapshots_cash 或有快照时）。
     无任何快照时按 K 线日期补 sod=eod=0、增量 0（cash_basis=none），仍合并计算能效（增量为 0 则能效为 0）。
     Query: inst_id=PEPE-USDT-SWAP&days=31（默认约最近一个月，按 UTC 日）
     """
     denied = _customer_bot_forbidden(bot_id)
     if denied:
         return denied
+    account_ids = {
+        x["account_id"] for x in _account_mgr.list_account_basics(enabled_only=False)
+    }
+    if bot_id not in account_ids:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "bot_id": bot_id,
+                    "message": "非 Account_List 账户，无策略效能数据",
+                }
+            ),
+            400,
+        )
     inst_id = (request.args.get("inst_id") or "PEPE-USDT-SWAP").strip()
     try:
         days = int(request.args.get("days", 31))
@@ -1468,9 +1493,6 @@ def api_strategy_daily_efficiency(bot_id):
             502,
         )
 
-    account_ids = {
-        x["account_id"] for x in _account_mgr.list_account_basics(enabled_only=False)
-    }
     since_dt = datetime.now(timezone.utc) - timedelta(days=days + 3)
     if bars:
         try:
@@ -1486,40 +1508,69 @@ def api_strategy_daily_efficiency(bot_id):
             pass
     since = since_dt.strftime("%Y-%m-%dT00:00:00.000Z")
 
-    snaps: list = []
-    cash_basis = "none"
-    if bot_id in account_ids:
-        snaps = _db.account_snapshot_query_by_account_since(
-            bot_id, since_snapshot_at=since, max_rows=50000
-        )
-        cash_basis = "account_snapshots_cash"
-    else:
-        raw_bot = _db.bot_profit_query_by_bot_since(
-            bot_id, since_snapshot_at=since, max_rows=50000
-        )
-        snaps = _strategy_efficiency.normalize_bot_profit_snapshots_for_efficiency(
-            raw_bot
-        )
-        if snaps:
-            cash_basis = "bot_profit_equity"
-
-    cash_by_day = _strategy_efficiency.daily_cash_delta_by_utc_day(snaps)
-    cash_by_day = _strategy_efficiency.fill_cash_by_day_for_market_bars(
-        bars, cash_by_day
+    snaps: list = _db.account_snapshot_query_by_account_since(
+        bot_id, since_snapshot_at=since, max_rows=50000
     )
+    cash_basis = "account_snapshots_cash" if snaps else "none"
 
-    month_bases = _strategy_efficiency.month_start_cash_by_month_from_snapshots(snaps)
+    cash_delta_pct_override: dict[str, float] | None = None
+    snap_cash_open: dict[str, float] = {}
+    cash_by_day_raw = _strategy_efficiency.daily_cash_balance_eod_delta_by_utc_day(
+        snaps
+    )
+    cash_by_day = _strategy_efficiency.fill_cash_by_day_for_market_bars(
+        bars, cash_by_day_raw
+    )
+    month_bases = (
+        _strategy_efficiency.month_start_cash_by_month_from_snapshots_cash_balance(
+            snaps
+        )
+    )
+    snap_cash_open = dict(month_bases)
+    ud_list = sorted({str(b.get("day") or "") for b in bars if b.get("day")})
+    pct_ov: dict[str, float] = {}
+    if ud_list:
+        dmin = datetime.strptime(ud_list[0], "%Y-%m-%d").replace(
+            tzinfo=timezone.utc
+        )
+        dmax = datetime.strptime(ud_list[-1], "%Y-%m-%d").replace(
+            tzinfo=timezone.utc
+        )
+        bj_lo = (dmin - timedelta(days=5)).strftime("%Y-%m-%d")
+        bj_hi = (dmax + timedelta(days=5)).strftime("%Y-%m-%d")
+        adp_rows = _db.account_daily_performance_query_day_range(
+            bot_id, bj_lo, bj_hi
+        )
+        adp_by_utc: dict[str, dict] = {}
+        for row in adp_rows:
+            bj = str(row.get("day") or "").strip()
+            if not bj:
+                continue
+            ud_key = _db.utc_bar_day_for_beijing_ledger_day(bj)
+            adp_by_utc[ud_key] = row
+        for ud in ud_list:
+            pr = adp_by_utc.get(ud)
+            if not pr:
+                continue
+            bc = pr.get("balance_changed")
+            if bc is None:
+                continue
+            delta = float(bc)
+            base = dict(cash_by_day.get(ud) or {})
+            sod = float(base.get("sod_cash") or 0.0)
+            base["cash_delta_usdt"] = delta
+            base["sod_cash"] = sod
+            base["eod_cash"] = sod + delta
+            cash_by_day[ud] = base
+            bcp = pr.get("balance_changed_pct")
+            if bcp is not None:
+                pct_ov[ud] = float(bcp)
+    cash_delta_pct_override = pct_ov if pct_ov else None
 
     equity_snaps: list[dict] = []
     for r in snaps:
         ts = str(r.get("snapshot_at") or "")
-        if bot_id in account_ids:
-            eq = float(r.get("equity_usdt") or 0.0)
-        else:
-            if r.get("equity_usdt") is not None:
-                eq = float(r["equity_usdt"])
-            else:
-                eq = float(r.get("cash_balance") or 0.0)
+        eq = float(r.get("equity_usdt") or 0.0)
         equity_snaps.append({"snapshot_at": ts, "equity_usdt": eq})
 
     equity_by_day = _strategy_efficiency.daily_equity_delta_by_utc_day(equity_snaps)
@@ -1530,20 +1581,29 @@ def api_strategy_daily_efficiency(bot_id):
         equity_snaps
     )
 
-    if bot_id in account_ids:
-        try:
-            day_strs_e = [str(b.get("day") or "") for b in bars if b.get("day")]
-            min_ym = min(d[:7] for d in day_strs_e) if day_strs_e else since[:7]
-        except (ValueError, TypeError, IndexError):
-            min_ym = since[:7]
-        mo_map = _db.account_month_balance_baseline_list_since(bot_id, min_ym)
-        for ym, row in mo_map.items():
-            ib = row.get("initial_balance")
-            if ib is not None and float(ib) > 0:
-                month_bases[ym] = float(ib)
-            oe = row.get("initial_equity")
-            if oe is not None and float(oe) > 0:
-                month_equity_bases[ym] = float(oe)
+    try:
+        day_strs_e = [str(b.get("day") or "") for b in bars if b.get("day")]
+        min_ym = min(d[:7] for d in day_strs_e) if day_strs_e else since[:7]
+    except (ValueError, TypeError, IndexError):
+        min_ym = since[:7]
+    mo_map = _db.account_month_balance_baseline_list_since(bot_id, min_ym)
+    for ym, row in mo_map.items():
+        ib = row.get("initial_balance")
+        if ib is not None and float(ib) > 0:
+            month_bases[ym] = float(ib)
+        oe = row.get("initial_equity")
+        if oe is not None and float(oe) > 0:
+            month_equity_bases[ym] = float(oe)
+    for b in bars:
+        ym = str(b.get("day") or "")[:7]
+        if len(ym) < 7:
+            continue
+        cur_mb = month_bases.get(ym)
+        if cur_mb is not None and float(cur_mb) > 0:
+            continue
+        v = snap_cash_open.get(ym)
+        if v is not None and float(v) > 0:
+            month_bases[ym] = float(v)
 
     bars_asc = sorted(bars, key=lambda x: str(x.get("day") or ""))
     atr14_by_day = _strategy_efficiency.compute_atr14_wilder_by_day(bars_asc)
@@ -1555,6 +1615,7 @@ def api_strategy_daily_efficiency(bot_id):
         equity_by_day=equity_by_day,
         month_equity_base_by_month=month_equity_bases or None,
         atr14_by_day=atr14_by_day,
+        cash_delta_pct_override_by_day=cash_delta_pct_override,
     )
     # merge 会覆盖 span=days+12 的 K 线，行数可能多于请求天数；仅返回最近 days 个 UTC 自然日（merge 已按日倒序；K 线与日内差分仍为 UTC 口径）
     if len(rows) > days:
@@ -1576,8 +1637,8 @@ def api_strategy_daily_efficiency(bot_id):
 def api_bot_daily_realized_pnl(bot_id):
     """
     历史平仓按北京时间自然日汇总（u_time_ms=OKX uTime 平仓时刻 → Asia/Shanghai 日历日），并与 account_daily_performance 合并。
-    额外含 equity_change、cash_change、pnl_pct（相对当月 account_month_balance_baseline.initial_balance%）、
-    equity_base_realized_chain、pnl_pct_realized_chain、benchmark_inst_id、market_tr、efficiency_ratio。
+    额外含 equlity_changed、balance_changed、balance_changed_pct、pnl_pct（相对当月 account_month_balance_baseline.initial_balance%）、
+    instrument_id、market_truevolatility、efficiency_ratio。
     Query: year=2026&month=4
     """
     denied = _customer_bot_forbidden(bot_id)
@@ -1602,16 +1663,16 @@ def api_bot_daily_realized_pnl(bot_id):
         if pr is not None:
             r = dict(pr)
         else:
-            r = {"day": d, "net_pnl": 0.0, "close_count": 0}
+            r = {"day": d, "net_pnl": 0.0, "close_pos_count": 0}
         p = perf_by_day.get(d)
         if p:
-            r["equity_change"] = p.get("equity_change")
-            r["cash_change"] = p.get("cash_change")
+            r["close_pos_count"] = int(p.get("close_pos_count") or 0)
+            r["equlity_changed"] = p.get("equlity_changed")
+            r["balance_changed"] = p.get("balance_changed")
+            r["balance_changed_pct"] = p.get("balance_changed_pct")
             r["pnl_pct"] = p.get("pnl_pct")
-            r["equity_base_realized_chain"] = p.get("equity_base_realized_chain")
-            r["pnl_pct_realized_chain"] = p.get("pnl_pct_realized_chain")
-            r["benchmark_inst_id"] = p.get("benchmark_inst_id")
-            r["market_tr"] = p.get("market_tr")
+            r["instrument_id"] = p.get("instrument_id")
+            r["market_truevolatility"] = p.get("market_truevolatility")
             r["efficiency_ratio"] = p.get("efficiency_ratio")
             r["performance_updated_at"] = p.get("updated_at")
         rows.append(r)
@@ -1898,7 +1959,7 @@ def api_admin_balance_snapshots_sync():
 @app.route("/api/admin/balance-snapshots/recompute-profit", methods=["POST"])
 @require_auth
 def api_admin_balance_snapshots_recompute_profit():
-    """仅管理员：按当前 account_list.initial_capital 重算 equity_profit_*（权益）与 cash_profit_*（资产余额）。"""
+    """仅管理员：按当前 account_list.initial_capital 重算 equity_profit_*（权益）与 balance_profit_*（资产余额）。"""
     denied = _require_admin()
     if denied:
         return denied

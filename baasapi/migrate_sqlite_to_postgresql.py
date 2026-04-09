@@ -1,10 +1,19 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-将 SQLite（默认 baasapi/sqlite/tradingbots.db）数据迁移到 PostgreSQL。
+将 SQLite（默认 baasapi/sqlite/tradingbots.db）数据导入到 PostgreSQL。
 
-在项目根执行：
-  export DATABASE_URL=postgresql://hztech:Alpha@127.0.0.1:5432/hztech
+推荐步骤（在项目根 hztechApp 下）：
+  1) 确认 PostgreSQL 可连（与日常 HZTECH_DB_BACKEND=postgresql 相同配置即可）
+  2) 先 dry-run 看各表行数：
+       python3 baasapi/migrate_sqlite_to_postgresql.py --dry-run
+  3) 正式导入（必要时先对旧库做结构整理）：
+       python3 baasapi/migrate_sqlite_to_postgresql.py
+     或源库较旧时加：  --prepare-sqlite
+     若目标库已有数据需整表覆盖：  --truncate-target（危险，会清空业务表）
+
+也可：
+  export DATABASE_URL=postgresql://user:pass@127.0.0.1:5432/dbname
   python3 baasapi/migrate_sqlite_to_postgresql.py
 
 或使用分项环境变量（与 db_backend 一致）：POSTGRES_HOST、POSTGRES_PORT、POSTGRES_DB、POSTGRES_USER、POSTGRES_PASSWORD
@@ -84,7 +93,6 @@ _CONFLICT_SPECS: list[tuple[str, str | None]] = [
     ("users", "ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash, created_at = EXCLUDED.created_at, role = EXCLUDED.role, linked_account_ids = EXCLUDED.linked_account_ids, full_name = EXCLUDED.full_name, phone = EXCLUDED.phone"),
     ("account_list", "ON CONFLICT (account_id) DO UPDATE SET account_name = EXCLUDED.account_name, exchange_account = EXCLUDED.exchange_account, symbol = EXCLUDED.symbol, initial_capital = EXCLUDED.initial_capital, trading_strategy = EXCLUDED.trading_strategy, account_key_file = EXCLUDED.account_key_file, script_file = EXCLUDED.script_file, enabled = EXCLUDED.enabled, updated_at = EXCLUDED.updated_at"),
     ("logs", None),
-    ("tradingbot_profit_snapshots", None),
     ("strategy_events", None),
     ("account_season", None),
     ("tradingbot_mgr", None),
@@ -92,7 +100,7 @@ _CONFLICT_SPECS: list[tuple[str, str | None]] = [
     ("account_month_balance_baseline", "ON CONFLICT (account_id, year_month) DO UPDATE SET initial_equity = EXCLUDED.initial_equity, initial_balance = EXCLUDED.initial_balance, recorded_at = EXCLUDED.recorded_at"),
     ("account_positions_history", "ON CONFLICT (account_id, okx_pos_id, u_time_ms) DO NOTHING"),
     ("account_open_positions_snapshots", None),
-    ("account_daily_performance", "ON CONFLICT (account_id, day) DO UPDATE SET net_realized_pnl = EXCLUDED.net_realized_pnl, close_count = EXCLUDED.close_count, equity_change = EXCLUDED.equity_change, cash_change = EXCLUDED.cash_change, pnl_pct = EXCLUDED.pnl_pct, equity_base_realized_chain = EXCLUDED.equity_base_realized_chain, pnl_pct_realized_chain = EXCLUDED.pnl_pct_realized_chain, benchmark_inst_id = EXCLUDED.benchmark_inst_id, market_tr = EXCLUDED.market_tr, efficiency_ratio = EXCLUDED.efficiency_ratio, updated_at = EXCLUDED.updated_at"),
+    ("account_daily_performance", "ON CONFLICT (account_id, day) DO UPDATE SET net_realized_pnl = EXCLUDED.net_realized_pnl, close_pos_count = EXCLUDED.close_pos_count, equlity_changed = EXCLUDED.equlity_changed, balance_changed = EXCLUDED.balance_changed, pnl_pct = EXCLUDED.pnl_pct, instrument_id = EXCLUDED.instrument_id, market_truevolatility = EXCLUDED.market_truevolatility, efficiency_ratio = EXCLUDED.efficiency_ratio, updated_at = EXCLUDED.updated_at"),
     ("market_daily_bars", 'ON CONFLICT (inst_id, day) DO UPDATE SET "open" = EXCLUDED."open", "high" = EXCLUDED."high", "low" = EXCLUDED."low", "close" = EXCLUDED."close", tr = EXCLUDED.tr, updated_at = EXCLUDED.updated_at'),
 ]
 
@@ -168,7 +176,6 @@ def _sync_serial_sequences(pg: Any) -> None:
     serial_tables = [
         "users",
         "logs",
-        "tradingbot_profit_snapshots",
         "strategy_events",
         "account_season",
         "tradingbot_mgr",
@@ -313,28 +320,41 @@ def main() -> int:
                 if "open_cash" in common and "initial_balance" in common:
                     common = [c for c in common if c != "open_cash"]
                 elif "open_cash" in sq_cols and "initial_balance" not in sq_cols:
-                    common = [
-                        c
-                        for c in [
-                            "account_id",
-                            "year_month",
-                            "initial_equity",
-                            "initial_balance",
-                            "recorded_at",
-                        ]
-                        if c in pg_cols
-                    ]
-                    sel_sql = (
-                        "SELECT account_id, year_month, open_equity AS initial_equity, "
-                        "open_cash AS initial_balance, recorded_at "
-                        f'FROM "{sqlite_src}"'
+                    eq_src = (
+                        "open_equity"
+                        if "open_equity" in sq_cols
+                        else ("open_equlity" if "open_equlity" in sq_cols else None)
                     )
+                    if eq_src:
+                        common = [
+                            c
+                            for c in [
+                                "account_id",
+                                "year_month",
+                                "initial_equity",
+                                "initial_balance",
+                                "recorded_at",
+                            ]
+                            if c in pg_cols
+                        ]
+                        sel_sql = (
+                            f"SELECT account_id, year_month, {eq_src} AS initial_equity, "
+                            "open_cash AS initial_balance, recorded_at "
+                            f'FROM "{sqlite_src}"'
+                        )
                 elif (
                     sel_sql is None
-                    and "open_equity" in sq_cols
+                    and (
+                        "open_equity" in sq_cols or "open_equlity" in sq_cols
+                    )
                     and "initial_equity" not in sq_cols
                     and "initial_equity" in pg_cols
                 ):
+                    eq_src = (
+                        "open_equity"
+                        if "open_equity" in sq_cols
+                        else "open_equlity"
+                    )
                     common = [
                         c
                         for c in [
@@ -347,7 +367,7 @@ def main() -> int:
                         if c in pg_cols
                     ]
                     sel_sql = (
-                        "SELECT account_id, year_month, open_equity AS initial_equity, "
+                        f"SELECT account_id, year_month, {eq_src} AS initial_equity, "
                         "initial_balance, recorded_at "
                         f'FROM "{sqlite_src}"'
                     )

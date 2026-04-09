@@ -115,7 +115,7 @@ def seed_one_account(
         conn.execute(
             """INSERT INTO account_balance_snapshots
                (account_id, snapshot_at, cash_balance, available_margin, used_margin, equity_usdt,
-                equity_profit_amount, equity_profit_percent, cash_profit_amount, cash_profit_percent)
+                equity_profit_amount, equity_profit_percent, balance_profit_amount, balance_profit_percent)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 account_id,
