@@ -867,6 +867,11 @@ class StrategyEvent {
   final String? triggerType;
   final String? username;
   final String createdAt;
+  /// 是否成功（接口可能为 bool 或 0/1）
+  final bool? success;
+  final String? detail;
+  /// 与后台 logs 一致的 emoji 标识
+  final String? actionIcon;
 
   StrategyEvent({
     required this.id,
@@ -875,9 +880,21 @@ class StrategyEvent {
     this.triggerType,
     this.username,
     required this.createdAt,
+    this.success,
+    this.detail,
+    this.actionIcon,
   });
 
   factory StrategyEvent.fromJson(Map<String, dynamic> json) {
+    bool? suc;
+    final sraw = json['success'];
+    if (sraw == null) {
+      suc = null;
+    } else if (sraw is bool) {
+      suc = sraw;
+    } else if (sraw is num) {
+      suc = sraw != 0;
+    }
     return StrategyEvent(
       id: json['id'] as int? ?? 0,
       botId: json['bot_id'] as String? ?? '',
@@ -885,6 +902,9 @@ class StrategyEvent {
       triggerType: json['trigger_type'] as String?,
       username: json['username'] as String?,
       createdAt: json['created_at'] as String? ?? '',
+      success: suc,
+      detail: json['detail'] as String?,
+      actionIcon: json['action_icon'] as String?,
     );
   }
 }

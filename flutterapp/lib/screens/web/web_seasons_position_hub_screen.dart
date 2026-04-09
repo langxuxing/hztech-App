@@ -70,7 +70,7 @@ class _WebSeasonsPositionHubScreenState extends State<WebSeasonsPositionHubScree
 
   @override
   Widget build(BuildContext context) {
-    // 布局：账户选择置顶 → 其下为「赛季 | 历史仓位」Tab（子页不再重复账户下拉）。
+    // 布局：卡片首行左侧标题/说明，右上角账户下拉 → 其下为「赛季 | 历史仓位」Tab（子页不再重复账户下拉）。
     // 与 [WebAccountProfileScreen] / [WebStrategyPerformanceScreen] 相同底图；子 Tab 内不再重复叠 WaterBackground。
     return ColoredBox(
       color: AppFinanceStyle.backgroundDark,
@@ -94,86 +94,97 @@ class _WebSeasonsPositionHubScreenState extends State<WebSeasonsPositionHubScree
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Text(
-                          '赛季与历史仓位',
-                          style:
-                              (Theme.of(context).textTheme.titleLarge ??
-                                      const TextStyle())
-                                  .copyWith(
-                            color: AppFinanceStyle.labelColor,
-                            fontSize:
-                                (Theme.of(context).textTheme.titleLarge?.fontSize ??
-                                        22) +
-                                    2,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                        const SizedBox(height: 6),
-                        Text(
-                          '选择账户后在赛季与平仓记录之间切换',
-                          style: AppFinanceStyle.labelTextStyle(context).copyWith(
-                            fontSize: 13,
-                            color: AppFinanceStyle.textDefault
-                                .withValues(alpha: 0.55),
-                            fontWeight: FontWeight.w400,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: ConstrainedBox(
-                            constraints: BoxConstraints(
-                              maxWidth: (MediaQuery.sizeOf(context).width * 0.5)
-                                  .clamp(200.0, 360.0),
-                              minHeight: kMinInteractiveDimension,
-                            ),
-                            child: DropdownButtonFormField<String>(
-                              isExpanded: true,
-                              value: _accountId != null &&
-                                      widget.sharedBots.any(
-                                        (b) => b.tradingbotId == _accountId,
-                                      )
-                                  ? _accountId
-                                  : null,
-                              decoration: InputDecoration(
-                                labelText: '账户',
-                                labelStyle:
-                                    AppFinanceStyle.labelTextStyle(context),
-                                border: InputBorder.none,
-                                filled: false,
-                                isDense: true,
-                                contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 4,
-                                  vertical: 6,
-                                ),
-                              ),
-                              dropdownColor: AppFinanceStyle.cardBackground
-                                  .withValues(alpha: 0.98),
-                              style: const TextStyle(
-                                color: AppFinanceStyle.valueColor,
-                                fontSize: AppFinanceStyle
-                                    .webAccountProfitBotDropdownFontSize,
-                                fontWeight: FontWeight.w500,
-                              ),
-                              items: widget.sharedBots
-                                  .map(
-                                    (b) => DropdownMenuItem(
-                                      value: b.tradingbotId,
-                                      child: Text(
-                                        (b.tradingbotName != null &&
-                                                b.tradingbotName!.isNotEmpty)
-                                            ? b.tradingbotName!
-                                            : b.tradingbotId,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    '赛季与历史仓位',
+                                    style: (Theme.of(context)
+                                                .textTheme.titleLarge ??
+                                            const TextStyle())
+                                        .copyWith(
+                                      color: AppFinanceStyle.labelColor,
+                                      fontSize: (Theme.of(context)
+                                                  .textTheme.titleLarge
+                                                  ?.fontSize ??
+                                              22) +
+                                          2,
+                                      fontWeight: FontWeight.w600,
                                     ),
-                                  )
-                                  .toList(),
-                              onChanged: widget.sharedBots.isEmpty
-                                  ? null
-                                  : (v) => setState(() => _accountId = v),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    '选择账户后在赛季与平仓记录之间切换',
+                                    style: AppFinanceStyle.labelTextStyle(context)
+                                        .copyWith(
+                                      fontSize: 13,
+                                      color: AppFinanceStyle.textDefault
+                                          .withValues(alpha: 0.55),
+                                      fontWeight: FontWeight.w400,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
-                          ),
+                            const SizedBox(width: 16),
+                            ConstrainedBox(
+                              constraints: BoxConstraints(
+                                maxWidth: (MediaQuery.sizeOf(context).width * 0.42)
+                                    .clamp(200.0, 320.0),
+                                minHeight: kMinInteractiveDimension,
+                              ),
+                              child: DropdownButtonFormField<String>(
+                                isExpanded: true,
+                                value: _accountId != null &&
+                                        widget.sharedBots.any(
+                                          (b) => b.tradingbotId == _accountId,
+                                        )
+                                    ? _accountId
+                                    : null,
+                                decoration: InputDecoration(
+                                  labelText: '账户',
+                                  labelStyle:
+                                      AppFinanceStyle.labelTextStyle(context),
+                                  border: InputBorder.none,
+                                  filled: false,
+                                  isDense: true,
+                                  contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 4,
+                                    vertical: 6,
+                                  ),
+                                ),
+                                dropdownColor: AppFinanceStyle.cardBackground
+                                    .withValues(alpha: 0.98),
+                                style: const TextStyle(
+                                  color: AppFinanceStyle.valueColor,
+                                  fontSize: AppFinanceStyle
+                                      .webAccountProfitBotDropdownFontSize,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                                items: widget.sharedBots
+                                    .map(
+                                      (b) => DropdownMenuItem(
+                                        value: b.tradingbotId,
+                                        child: Text(
+                                          (b.tradingbotName != null &&
+                                                  b.tradingbotName!.isNotEmpty)
+                                              ? b.tradingbotName!
+                                              : b.tradingbotId,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    )
+                                    .toList(),
+                                onChanged: widget.sharedBots.isEmpty
+                                    ? null
+                                    : (v) => setState(() => _accountId = v),
+                              ),
+                            ),
+                          ],
                         ),
                         const SizedBox(height: 14),
                         Material(

@@ -367,7 +367,10 @@ PG_INIT_STATEMENTS: list[str] = [
     event_type TEXT NOT NULL,
     trigger_type TEXT NOT NULL,
     username TEXT,
-    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
+    created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+    success INTEGER,
+    detail TEXT,
+    action_icon TEXT
 )""",
     "CREATE INDEX IF NOT EXISTS idx_strategy_events_bot_id ON strategy_events(bot_id)",
     "CREATE INDEX IF NOT EXISTS idx_strategy_events_created ON strategy_events(created_at)",

@@ -12,7 +12,7 @@ import 'web_download_app_page.dart';
 import 'web_tradingbot_control_screen.dart';
 import 'web_dashboard_screen.dart';
 import 'web_home_screen.dart';
-import 'web_account_profit_screen.dart';
+import 'web_account_profile_screen.dart';
 import 'web_strategy_performance_screen.dart';
 import 'web_account_horseracing_screen.dart';
 import 'web_seasons_position_hub_screen.dart';

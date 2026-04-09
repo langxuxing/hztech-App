@@ -1109,6 +1109,63 @@ def _ensure_account_daily_performance_balance_changed_pct(
         )
 
 
+def _ensure_strategy_events_audit_columns(
+    conn: sqlite3.Connection | PgConnectionWrapper,
+) -> None:
+    """strategy_events：补 success/detail/action_icon，供启停与赛季审计。"""
+    if IS_POSTGRES:
+        try:
+            cur = conn.execute(
+                """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_schema = %s
+                  AND table_name = 'strategy_events'
+                """,
+                (PG_SCHEMA,),
+            )
+            cols = {str(r[0]) for r in cur.fetchall()}
+            if not cols:
+                return
+            if "success" not in cols:
+                conn.execute(
+                    "ALTER TABLE strategy_events ADD COLUMN success INTEGER"
+                )
+            if "detail" not in cols:
+                conn.execute("ALTER TABLE strategy_events ADD COLUMN detail TEXT")
+            if "action_icon" not in cols:
+                conn.execute(
+                    "ALTER TABLE strategy_events ADD COLUMN action_icon TEXT"
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        return
+    if not isinstance(conn, sqlite3.Connection):
+        return
+    cur = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name='strategy_events'"
+    )
+    if not cur.fetchone():
+        return
+    cur = conn.execute("PRAGMA table_info(strategy_events)")
+    cols = {str(r[1]) for r in cur.fetchall()}
+    try:
+        if "success" not in cols:
+            conn.execute(
+                "ALTER TABLE strategy_events ADD COLUMN success INTEGER"
+            )
+        if "detail" not in cols:
+            conn.execute("ALTER TABLE strategy_events ADD COLUMN detail TEXT")
+        if "action_icon" not in cols:
+            conn.execute(
+                "ALTER TABLE strategy_events ADD COLUMN action_icon TEXT"
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+
+
 def _seed_users_from_json(conn: sqlite3.Connection | PgConnectionWrapper) -> None:
     """仅当 users 表为空时从 baasapi/users.json 一次性导入；正式用户数据以 DB 为准。"""
     users_json = SERVER_DIR / "users.json"
@@ -1156,6 +1213,7 @@ def init_db() -> None:
             _rename_account_daily_performance_legacy_columns(conn)
             _ensure_account_daily_performance_v3(conn)
             _ensure_account_daily_performance_balance_changed_pct(conn)
+            _ensure_strategy_events_audit_columns(conn)
             cur = conn.execute("SELECT COUNT(*) FROM users")
             row = cur.fetchone()
             if row is not None and int(row[0]) == 0:
@@ -1198,7 +1256,10 @@ def init_db() -> None:
                 event_type TEXT NOT NULL,
                 trigger_type TEXT NOT NULL,
                 username TEXT,
-                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                success INTEGER,
+                detail TEXT,
+                action_icon TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_strategy_events_bot_id ON strategy_events(bot_id);
             CREATE INDEX IF NOT EXISTS idx_strategy_events_created ON strategy_events(created_at);
@@ -1356,6 +1417,7 @@ def init_db() -> None:
         _rename_account_daily_performance_legacy_columns(conn)
         _ensure_account_daily_performance_v3(conn)
         _ensure_account_daily_performance_balance_changed_pct(conn)
+        _ensure_strategy_events_audit_columns(conn)
         _drop_legacy_bot_profit_tables(conn)
         conn.commit()
         # 若用户表为空且存在 users.json，则导入
@@ -1848,15 +1910,40 @@ def strategy_event_insert(
     event_type: str,
     trigger_type: str,
     username: str | None = None,
+    *,
+    success: bool | None = None,
+    detail: str | None = None,
+    action_icon: str | None = None,
 ) -> None:
-    """记录策略/赛季事件。event_type: start|stop|restart|season_start|season_stop；trigger_type: manual|auto|script。"""
+    """记录策略/赛季事件。event_type: start|stop|restart|season_start|season_stop；trigger_type: manual|auto|script。
+
+    success/detail/action_icon 为审计扩展字段（旧库列缺省时按 NULL 写入，须已跑 _ensure_strategy_events_audit_columns）。
+    """
     conn = get_conn()
     try:
-        conn.execute(
-            """INSERT INTO strategy_events (bot_id, event_type, trigger_type, username)
-               VALUES (?, ?, ?, ?)""",
-            (bot_id, event_type, trigger_type, username or None),
-        )
+        if success is None and detail is None and action_icon is None:
+            conn.execute(
+                """INSERT INTO strategy_events (bot_id, event_type, trigger_type, username)
+                   VALUES (?, ?, ?, ?)""",
+                (bot_id, event_type, trigger_type, username or None),
+            )
+        else:
+            suc = 1 if success is True else (0 if success is False else None)
+            conn.execute(
+                """INSERT INTO strategy_events (
+                       bot_id, event_type, trigger_type, username,
+                       success, detail, action_icon)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    bot_id,
+                    event_type,
+                    trigger_type,
+                    username or None,
+                    suc,
+                    detail,
+                    action_icon,
+                ),
+            )
         conn.commit()
     finally:
         conn.close()
@@ -1868,27 +1955,42 @@ def strategy_event_query(bot_id: str | None = None, limit: int = 200) -> list[di
     try:
         if bot_id:
             cur = conn.execute(
-                """SELECT id, bot_id, event_type, trigger_type, username, created_at
+                """SELECT id, bot_id, event_type, trigger_type, username, created_at,
+                          success, detail, action_icon
                    FROM strategy_events WHERE bot_id = ? ORDER BY created_at DESC LIMIT ?""",
                 (bot_id, limit),
             )
         else:
             cur = conn.execute(
-                """SELECT id, bot_id, event_type, trigger_type, username, created_at
+                """SELECT id, bot_id, event_type, trigger_type, username, created_at,
+                          success, detail, action_icon
                    FROM strategy_events ORDER BY created_at DESC LIMIT ?""",
                 (limit,),
             )
-        return [
-            {
-                "id": r[0],
-                "bot_id": r[1],
-                "event_type": r[2],
-                "trigger_type": r[3],
-                "username": r[4],
-                "created_at": r[5],
-            }
-            for r in cur.fetchall()
-        ]
+        out: list[dict] = []
+        for r in cur.fetchall():
+            suc_raw = r[6]
+            suc: bool | None
+            if suc_raw is None:
+                suc = None
+            elif suc_raw in (1, True):
+                suc = True
+            else:
+                suc = False
+            out.append(
+                {
+                    "id": r[0],
+                    "bot_id": r[1],
+                    "event_type": r[2],
+                    "trigger_type": r[3],
+                    "username": r[4],
+                    "created_at": r[5],
+                    "success": suc,
+                    "detail": r[7],
+                    "action_icon": r[8],
+                }
+            )
+        return out
     finally:
         conn.close()
 

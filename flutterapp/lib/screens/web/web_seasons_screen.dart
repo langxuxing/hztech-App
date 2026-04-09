@@ -422,8 +422,15 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
     _SeasonAgg agg,
   ) {
     return Theme(
-      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      data: Theme.of(context).copyWith(
+        dividerColor: Colors.transparent,
+        listTileTheme: const ListTileThemeData(
+          minLeadingWidth: 0,
+          horizontalTitleGap: 0,
+        ),
+      ),
       child: ExpansionTile(
+        controlAffinity: ListTileControlAffinity.trailing,
         tilePadding: EdgeInsets.zero,
         childrenPadding: const EdgeInsets.only(bottom: 8),
         initiallyExpanded: false,
@@ -553,86 +560,89 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
       agg,
     );
 
-    return FinanceCard(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              if (active)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppFinanceStyle.profitGreenEnd.withValues(
-                      alpha: 0.2,
+    return SizedBox(
+      width: double.infinity,
+      child: FinanceCard(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                if (active)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
                     ),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(
-                    '进行中',
-                    style: TextStyle(
-                      color: AppFinanceStyle.profitGreenEnd,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+                    decoration: BoxDecoration(
+                      color: AppFinanceStyle.profitGreenEnd.withValues(
+                        alpha: 0.2,
+                      ),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      '进行中',
+                      style: TextStyle(
+                        color: AppFinanceStyle.profitGreenEnd,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  )
+                else
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white12,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      '最近赛季',
+                      style: TextStyle(
+                        color: AppFinanceStyle.labelColor,
+                        fontSize: 12,
+                      ),
                     ),
                   ),
-                )
-              else
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white12,
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(
-                    '最近赛季',
-                    style: TextStyle(
-                      color: AppFinanceStyle.labelColor,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-              const Spacer(),
-              Text('#${s.id}', style: _label(context, fs: 12)),
-            ],
-          ),
-          const SizedBox(height: 12),
-          LayoutBuilder(
-            builder: (ctx, bc) {
-              final wide = bc.maxWidth >= 520;
-              if (!wide) {
-                return Column(
+                const Spacer(),
+                Text('#${s.id}', style: _label(context, fs: 12)),
+              ],
+            ),
+            const SizedBox(height: 12),
+            LayoutBuilder(
+              builder: (ctx, bc) {
+                final wide = bc.maxWidth >= 520;
+                if (!wide) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      metricsColumn,
+                      historyExpansion,
+                    ],
+                  );
+                }
+                return Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    metricsColumn,
-                    historyExpansion,
+                    Expanded(
+                      flex: 5,
+                      child: metricsColumn,
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      flex: 5,
+                      child: historyExpansion,
+                    ),
                   ],
                 );
-              }
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    flex: 5,
-                    child: metricsColumn,
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    flex: 5,
-                    child: historyExpansion,
-                  ),
-                ],
-              );
-            },
-          ),
-        ],
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -688,86 +698,89 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
       agg,
     );
 
-    return FinanceCard(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              if (active)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppFinanceStyle.profitGreenEnd.withValues(
-                      alpha: 0.2,
+    return SizedBox(
+      width: double.infinity,
+      child: FinanceCard(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                if (active)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
                     ),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(
-                    '进行中',
-                    style: TextStyle(
-                      color: AppFinanceStyle.profitGreenEnd,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+                    decoration: BoxDecoration(
+                      color: AppFinanceStyle.profitGreenEnd.withValues(
+                        alpha: 0.2,
+                      ),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      '进行中',
+                      style: TextStyle(
+                        color: AppFinanceStyle.profitGreenEnd,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  )
+                else
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white12,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      '已结束',
+                      style: TextStyle(
+                        color: AppFinanceStyle.labelColor,
+                        fontSize: 12,
+                      ),
                     ),
                   ),
-                )
-              else
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white12,
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(
-                    '已结束',
-                    style: TextStyle(
-                      color: AppFinanceStyle.labelColor,
-                      fontSize: 12,
-                    ),
-                  ),
-                ),
-              const Spacer(),
-              Text('#${s.id}', style: _label(context, fs: 12)),
-            ],
-          ),
-          const SizedBox(height: 10),
-          LayoutBuilder(
-            builder: (ctx, bc) {
-              final wide = bc.maxWidth >= 520;
-              if (!wide) {
-                return Column(
+                const Spacer(),
+                Text('#${s.id}', style: _label(context, fs: 12)),
+              ],
+            ),
+            const SizedBox(height: 10),
+            LayoutBuilder(
+              builder: (ctx, bc) {
+                final wide = bc.maxWidth >= 520;
+                if (!wide) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      metricsColumn,
+                      historyExpansion,
+                    ],
+                  );
+                }
+                return Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    metricsColumn,
-                    historyExpansion,
+                    Expanded(
+                      flex: 5,
+                      child: metricsColumn,
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      flex: 5,
+                      child: historyExpansion,
+                    ),
                   ],
                 );
-              }
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    flex: 5,
-                    child: metricsColumn,
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    flex: 5,
-                    child: historyExpansion,
-                  ),
-                ],
-              );
-            },
-          ),
-        ],
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -807,113 +820,118 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
       agg,
     );
 
-    return FinanceCard(
-      padding: const EdgeInsets.all(20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              if (highlight && currentWeek)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: AppFinanceStyle.profitGreenEnd.withValues(
-                      alpha: 0.2,
+    return SizedBox(
+      width: double.infinity,
+      child: FinanceCard(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                if (highlight && currentWeek)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
                     ),
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(
-                    '当前周',
-                    style: TextStyle(
-                      color: AppFinanceStyle.profitGreenEnd,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+                    decoration: BoxDecoration(
+                      color: AppFinanceStyle.profitGreenEnd.withValues(
+                        alpha: 0.2,
+                      ),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      '当前周',
+                      style: TextStyle(
+                        color: AppFinanceStyle.profitGreenEnd,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  )
+                else if (highlight)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white12,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      '最近一周',
+                      style: TextStyle(
+                        color: AppFinanceStyle.labelColor,
+                        fontSize: 12,
+                      ),
+                    ),
+                  )
+                else
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white12,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      '自然周',
+                      style: TextStyle(
+                        color: AppFinanceStyle.labelColor,
+                        fontSize: 12,
+                      ),
                     ),
                   ),
-                )
-              else if (highlight)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white12,
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(
-                    '最近一周',
-                    style: TextStyle(
-                      color: AppFinanceStyle.labelColor,
-                      fontSize: 12,
-                    ),
-                  ),
-                )
-              else
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white12,
-                    borderRadius: BorderRadius.circular(6),
-                  ),
-                  child: Text(
-                    '自然周',
-                    style: TextStyle(
-                      color: AppFinanceStyle.labelColor,
-                      fontSize: 12,
-                    ),
-                  ),
+                const Spacer(),
+                Text(
+                  mondayCalUtc.toIso8601String().split('T').first,
+                  style: _label(context, fs: 12),
                 ),
-              const Spacer(),
-              Text(
-                mondayCalUtc.toIso8601String().split('T').first,
-                style: _label(context, fs: 12),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          LayoutBuilder(
-            builder: (ctx, bc) {
-              final wide = bc.maxWidth >= 520;
-              if (!wide) {
-                return Column(
+              ],
+            ),
+            const SizedBox(height: 8),
+            LayoutBuilder(
+              builder: (ctx, bc) {
+                final wide = bc.maxWidth >= 520;
+                if (!wide) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      metricsColumn,
+                      historyExpansion,
+                    ],
+                  );
+                }
+                return Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    metricsColumn,
-                    historyExpansion,
+                    Expanded(
+                      flex: 5,
+                      child: metricsColumn,
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      flex: 5,
+                      child: historyExpansion,
+                    ),
                   ],
                 );
-              }
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    flex: 5,
-                    child: metricsColumn,
-                  ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    flex: 5,
-                    child: historyExpansion,
-                  ),
-                ],
-              );
-            },
-          ),
-        ],
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    // Hub 内：与顶部「赛季与历史仓位」FinanceCard 左缘对齐（外层 Padding 24，非标题文字 24+20）。
+    final horizontalInset = 24.0;
     final column = Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -988,7 +1006,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
             const SizedBox(height: 8),
           if (_activeCount != null && _activeCount! > 0)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 4),
+              padding: EdgeInsets.symmetric(horizontal: horizontalInset, vertical: 4),
               child: Text(
                 '进行中赛季数：$_activeCount（请在「策略启停」使用赛季开始/停止）',
                 style: AppFinanceStyle.labelTextStyle(
@@ -998,7 +1016,7 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
             ),
           if (_error != null)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
+              padding: EdgeInsets.symmetric(horizontal: horizontalInset),
               child: Text(
                 _error!,
                 style: TextStyle(color: AppFinanceStyle.textLoss, fontSize: 13),
@@ -1029,7 +1047,12 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
                             hi != null &&
                             _isCurrentBeijingWeekMonday(hi);
                         return ListView(
-                          padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+                          padding: EdgeInsets.fromLTRB(
+                            horizontalInset,
+                            8,
+                            horizontalInset,
+                            24,
+                          ),
                           children: [
                             Padding(
                               padding: const EdgeInsets.only(bottom: 14),
@@ -1108,7 +1131,12 @@ class _WebSeasonsScreenState extends State<WebSeasonsScreen> {
                       final hi = _highlightSeason();
                       final others = _otherSeasons(hi);
                       return ListView(
-                        padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+                        padding: EdgeInsets.fromLTRB(
+                          horizontalInset,
+                          8,
+                          horizontalInset,
+                          24,
+                        ),
                         children: [
                           if (_seasons.isEmpty)
                             Padding(

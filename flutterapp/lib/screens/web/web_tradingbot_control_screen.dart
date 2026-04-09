@@ -5,7 +5,7 @@ import '../../api/models.dart';
 import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
 import '../../widgets/water_background.dart';
-import 'web_account_profit_screen.dart';
+import 'web_account_profile_screen.dart';
 
 /// Web「策略启停」：与侧栏 [WebMainShell] 一致；多列玻璃卡网格，赛季 + 机器人会话时长 + 启停/重启。
 /// 账户级资金曲线与汇总见侧栏「账户总览」[WebDashboardScreen]。
@@ -25,11 +25,42 @@ class _WebTradingBotControlScreenState
   List<AccountProfit> _accounts = [];
   Map<String, List<BotSeason>> _seasonsByBot = {};
   Map<String, List<StrategyEvent>> _eventsByBot = {};
+  /// 与 `/api/tradingbots` 同步，用于角标「运行中/已停止」；避免仅用 shell 下放的 sharedBots 导致启停后状态不刷新。
+  List<UnifiedTradingBot> _botsSnapshot = [];
   bool _loading = true;
   String? _error;
   String? _loadingBotId;
   String? _seasonLoadingBotId;
   bool _bulkBusy = false;
+
+  static void _logControl(String icon, String action, UnifiedTradingBot bot, {
+    required bool success,
+    String? detail,
+  }) {
+    final tail = detail != null && detail.isNotEmpty ? ' $detail' : '';
+    debugPrint(
+      '🛡 $icon [$action] bot=${bot.tradingbotId} '
+      '(${bot.tradingbotName ?? bot.tradingbotId}) success=$success$tail',
+    );
+  }
+
+  void _patchBotRuntimeStatus(String botId, String apiStatus) {
+    final running = apiStatus == 'running';
+    final idx = _botsSnapshot.indexWhere((b) => b.tradingbotId == botId);
+    if (idx < 0) return;
+    final b = _botsSnapshot[idx];
+    _botsSnapshot[idx] = UnifiedTradingBot(
+      tradingbotId: b.tradingbotId,
+      tradingbotName: b.tradingbotName,
+      exchangeAccount: b.exchangeAccount,
+      symbol: b.symbol,
+      strategyName: b.strategyName,
+      status: apiStatus,
+      isRunning: running,
+      canControl: b.canControl,
+      isTest: b.isTest,
+    );
+  }
 
   static bool _hasOpenSeason(List<BotSeason> seasons) {
     for (final s in seasons) {
@@ -206,6 +237,11 @@ class _WebTradingBotControlScreenState
       final api = ApiClient(baseUrl, token: token);
       final profitResp = await api.getAccountProfit();
       final accounts = profitResp.accounts ?? [];
+      List<UnifiedTradingBot> freshBots = [];
+      try {
+        final botsResp = await api.getTradingBots();
+        freshBots = botsResp.botList;
+      } catch (_) {}
       final Map<String, List<BotSeason>> seasonsMap = {};
       final Map<String, List<StrategyEvent>> eventsMap = {};
       try {
@@ -241,6 +277,9 @@ class _WebTradingBotControlScreenState
         _accounts = accounts;
         _seasonsByBot = seasonsMap;
         _eventsByBot = eventsMap;
+        if (freshBots.isNotEmpty) {
+          _botsSnapshot = freshBots;
+        }
         _loading = false;
       });
     } catch (e) {
@@ -253,6 +292,9 @@ class _WebTradingBotControlScreenState
   }
 
   UnifiedTradingBot? _botFor(AccountProfit a) {
+    for (final b in _botsSnapshot) {
+      if (b.tradingbotId == a.botId) return b;
+    }
     for (final b in widget.sharedBots) {
       if (b.tradingbotId == a.botId) return b;
     }
@@ -267,7 +309,14 @@ class _WebTradingBotControlScreenState
       final api = ApiClient(baseUrl, token: token);
       final resp = await api.startBot(bot.tradingbotId);
       if (!mounted) return;
-      setState(() => _loadingBotId = null);
+      final st = resp.status;
+      setState(() {
+        _loadingBotId = null;
+        if (resp.success && st != null && st.isNotEmpty) {
+          _patchBotRuntimeStatus(bot.tradingbotId, st);
+        }
+      });
+      _logControl('▶️', '策略启动', bot, success: resp.success, detail: resp.message);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(resp.success ? '启动成功' : (resp.message ?? '启动失败')),
@@ -291,7 +340,14 @@ class _WebTradingBotControlScreenState
       final api = ApiClient(baseUrl, token: token);
       final resp = await api.stopBot(bot.tradingbotId);
       if (!mounted) return;
-      setState(() => _loadingBotId = null);
+      final st = resp.status;
+      setState(() {
+        _loadingBotId = null;
+        if (resp.success && st != null && st.isNotEmpty) {
+          _patchBotRuntimeStatus(bot.tradingbotId, st);
+        }
+      });
+      _logControl('⏹️', '策略停止', bot, success: resp.success, detail: resp.message);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(resp.success ? '停止成功' : (resp.message ?? '停止失败')),
@@ -315,7 +371,14 @@ class _WebTradingBotControlScreenState
       final api = ApiClient(baseUrl, token: token);
       final resp = await api.restartBot(bot.tradingbotId);
       if (!mounted) return;
-      setState(() => _loadingBotId = null);
+      final st = resp.status;
+      setState(() {
+        _loadingBotId = null;
+        if (resp.success && st != null && st.isNotEmpty) {
+          _patchBotRuntimeStatus(bot.tradingbotId, st);
+        }
+      });
+      _logControl('🔄', '策略重启', bot, success: resp.success, detail: resp.message);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(resp.success ? '重启已执行' : (resp.message ?? '重启失败')),
@@ -331,13 +394,93 @@ class _WebTradingBotControlScreenState
     }
   }
 
+  void _onTapStrategyStart(UnifiedTradingBot bot) {
+    final running = bot.status == 'running' || bot.isRunning == true;
+    if (running) return;
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.play_arrow_rounded, color: AppFinanceStyle.textProfit),
+            const SizedBox(width: 8),
+            const Expanded(child: Text('确认启动策略')),
+          ],
+        ),
+        content: const Text(
+          '确定要启动该账户的交易策略进程吗？启动后将按脚本连接交易所并运行策略逻辑。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: AppFinanceStyle.textProfit,
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              _doStart(bot);
+            },
+            child: const Text('确定启动'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _onTapStrategyRestart(UnifiedTradingBot bot) {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.refresh_rounded, color: const Color(0xFFB9B5D9)),
+            const SizedBox(width: 8),
+            const Expanded(child: Text('确认重启策略')),
+          ],
+        ),
+        content: const Text(
+          '重启会先停止再启动策略进程，期间持仓与订单状态取决于脚本实现。确定继续吗？',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF4A4868),
+              foregroundColor: const Color(0xFFE8E6FF),
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              _doRestart(bot);
+            },
+            child: const Text('确定重启'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _onTapStop(UnifiedTradingBot bot) {
     final running = bot.status == 'running' || bot.isRunning == true;
     if (!running) return;
     showDialog<void>(
       context: context,
+      barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        title: const Text('确认停止'),
+        title: Row(
+          children: [
+            Icon(Icons.stop_rounded, color: AppFinanceStyle.textLoss),
+            const SizedBox(width: 8),
+            const Expanded(child: Text('确认停止策略')),
+          ],
+        ),
         content: const Text('确定要停止该账户策略吗？此操作将终止当前运行，请确认以防误操作。'),
         actions: [
           TextButton(
@@ -367,7 +510,14 @@ class _WebTradingBotControlScreenState
       final api = ApiClient(baseUrl, token: token);
       final resp = await api.seasonStartBot(bot.tradingbotId);
       if (!mounted) return;
-      setState(() => _seasonLoadingBotId = null);
+      final st = resp.status;
+      setState(() {
+        _seasonLoadingBotId = null;
+        if (resp.success && st != null && st.isNotEmpty) {
+          _patchBotRuntimeStatus(bot.tradingbotId, st);
+        }
+      });
+      _logControl('📈', '赛季启动', bot, success: resp.success, detail: resp.message);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(resp.success ? '赛季已启动' : (resp.message ?? '赛季启动失败')),
@@ -391,7 +541,14 @@ class _WebTradingBotControlScreenState
       final api = ApiClient(baseUrl, token: token);
       final resp = await api.seasonStopBot(bot.tradingbotId);
       if (!mounted) return;
-      setState(() => _seasonLoadingBotId = null);
+      final st = resp.status;
+      setState(() {
+        _seasonLoadingBotId = null;
+        if (resp.success && st != null && st.isNotEmpty) {
+          _patchBotRuntimeStatus(bot.tradingbotId, st);
+        }
+      });
+      _logControl('📉', '赛季结束', bot, success: resp.success, detail: resp.message);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(resp.success ? '赛季已停止' : (resp.message ?? '赛季停止失败')),
@@ -407,11 +564,53 @@ class _WebTradingBotControlScreenState
     }
   }
 
+  void _onTapSeasonStart(UnifiedTradingBot bot) {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.trending_up_rounded, color: AppFinanceStyle.textProfit),
+            const SizedBox(width: 8),
+            const Expanded(child: Text('确认开启赛季')),
+          ],
+        ),
+        content: const Text(
+          '将新开一季并可能按需拉起策略进程；请确认账户与风控已就绪。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: AppFinanceStyle.textProfit,
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              _doSeasonStart(bot);
+            },
+            child: const Text('确定开启'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _onTapSeasonStop(UnifiedTradingBot bot) {
     showDialog<void>(
       context: context,
+      barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        title: const Text('确认结束赛季'),
+        title: Row(
+          children: [
+            Icon(Icons.flag_rounded, color: Colors.deepOrange),
+            const SizedBox(width: 8),
+            const Expanded(child: Text('确认结束赛季')),
+          ],
+        ),
         content: const Text('确定要结束当前盈利赛季吗？将按当前权益结算本赛季。'),
         actions: [
           TextButton(
@@ -482,8 +681,18 @@ class _WebTradingBotControlScreenState
     final go =
         await showDialog<bool>(
           context: context,
+          barrierDismissible: false,
           builder: (ctx) => AlertDialog(
-            title: const Text('全部启动'),
+            title: Row(
+              children: [
+                Icon(
+                  Icons.play_arrow_rounded,
+                  color: AppFinanceStyle.textProfit,
+                ),
+                const SizedBox(width: 8),
+                const Expanded(child: Text('确认全部启动')),
+              ],
+            ),
             content: Text('将依次启动 ${targets.length} 个机器人进程，是否继续？'),
             actions: [
               TextButton(
@@ -491,8 +700,11 @@ class _WebTradingBotControlScreenState
                 child: const Text('取消'),
               ),
               FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppFinanceStyle.textProfit,
+                ),
                 onPressed: () => Navigator.pop(ctx, true),
-                child: const Text('确定'),
+                child: const Text('确定启动'),
               ),
             ],
           ),
@@ -532,8 +744,15 @@ class _WebTradingBotControlScreenState
     final go =
         await showDialog<bool>(
           context: context,
+          barrierDismissible: false,
           builder: (ctx) => AlertDialog(
-            title: const Text('全部停止'),
+            title: Row(
+              children: [
+                Icon(Icons.stop_rounded, color: AppFinanceStyle.textLoss),
+                const SizedBox(width: 8),
+                const Expanded(child: Text('确认全部停止')),
+              ],
+            ),
             content: Text('将依次停止 ${targets.length} 个机器人进程，是否继续？'),
             actions: [
               TextButton(
@@ -574,6 +793,7 @@ class _WebTradingBotControlScreenState
   @override
   void initState() {
     super.initState();
+    _botsSnapshot = List<UnifiedTradingBot>.from(widget.sharedBots);
     _load();
   }
 
@@ -582,7 +802,8 @@ class _WebTradingBotControlScreenState
     Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (ctx) => WebAccountProfitScreen(
-          sharedBots: widget.sharedBots,
+          sharedBots:
+              _botsSnapshot.isNotEmpty ? _botsSnapshot : widget.sharedBots,
           initialBotId: id,
         ),
       ),
@@ -675,8 +896,8 @@ class _WebTradingBotControlScreenState
                                         mainAxisSpacing: 28,
                                         crossAxisSpacing: 28,
                                         childAspectRatio: cross >= 3
-                                            ? 0.68
-                                            : 0.58,
+                                            ? 0.91
+                                            : 0.78,
                                       ),
                                   delegate: SliverChildBuilderDelegate((
                                     context,
@@ -701,34 +922,37 @@ class _WebTradingBotControlScreenState
                                       running,
                                     );
                                     final openSeason = _hasOpenSeason(seasons);
-                                    return _AccountGlassCard(
-                                      account: a,
-                                      bot: bot,
-                                      seasonStart: season.seasonStart,
-                                      seasonDuration: season.seasonDuration,
-                                      robotStart: robot.robotStart,
-                                      robotDuration: robot.robotDuration,
-                                      hasOpenSeason: openSeason,
-                                      robotLoadingBotId: _loadingBotId,
-                                      seasonLoadingBotId: _seasonLoadingBotId,
-                                      onStart: bot != null && bot.canControl
-                                          ? () => _doStart(bot)
-                                          : null,
-                                      onStop: bot != null && bot.canControl
-                                          ? () => _onTapStop(bot)
-                                          : null,
-                                      onRestart: bot != null && bot.canControl
-                                          ? () => _doRestart(bot)
-                                          : null,
-                                      onSeasonStart:
-                                          bot != null && bot.canControl
-                                          ? () => _doSeasonStart(bot)
-                                          : null,
-                                      onSeasonStop:
-                                          bot != null && bot.canControl
-                                          ? () => _onTapSeasonStop(bot)
-                                          : null,
-                                      onOpenDetail: () => _openAccount(a),
+                                    return Align(
+                                      alignment: Alignment.topCenter,
+                                      child: _AccountGlassCard(
+                                        account: a,
+                                        bot: bot,
+                                        seasonStart: season.seasonStart,
+                                        seasonDuration: season.seasonDuration,
+                                        robotStart: robot.robotStart,
+                                        robotDuration: robot.robotDuration,
+                                        hasOpenSeason: openSeason,
+                                        robotLoadingBotId: _loadingBotId,
+                                        seasonLoadingBotId: _seasonLoadingBotId,
+                                        onStart: bot != null && bot.canControl
+                                            ? () => _onTapStrategyStart(bot)
+                                            : null,
+                                        onStop: bot != null && bot.canControl
+                                            ? () => _onTapStop(bot)
+                                            : null,
+                                        onRestart: bot != null && bot.canControl
+                                            ? () => _onTapStrategyRestart(bot)
+                                            : null,
+                                        onSeasonStart:
+                                            bot != null && bot.canControl
+                                            ? () => _onTapSeasonStart(bot)
+                                            : null,
+                                        onSeasonStop:
+                                            bot != null && bot.canControl
+                                            ? () => _onTapSeasonStop(bot)
+                                            : null,
+                                        onOpenDetail: () => _openAccount(a),
+                                      ),
                                     );
                                   }, childCount: _accounts.length),
                                 );
@@ -1028,14 +1252,9 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
     color: AppFinanceStyle.textLoss.withValues(alpha: 0.12),
   );
 
-  /// 控制区相对原先尺寸：宽约 80%、纵向由内边距与间距折算约 80%。
-  static const double _controlBoxScale = 0.8;
-  static const EdgeInsets _controlBoxPadding = EdgeInsets.fromLTRB(
-    10,
-    6,
-    10,
-    13,
-  );
+  /// 控制区相对原先尺寸：宽约 80%；内边距较上一版收紧约 25% 以降低卡片高度。
+  static const double _controlBoxScale = 0.75;
+  static const EdgeInsets _controlBoxPadding = EdgeInsets.fromLTRB(8, 5, 8, 8);
 
   /// 赛季/策略控制圆钮：与概览区「全部启动/停止」同款——深色实底 + 亮色图标
   static const _ctrlStartFill = Color(0xFF16352A);
@@ -1185,10 +1404,10 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
       animation: _pulse,
       builder: (context, _) {
         return FinanceCard(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.max,
+            mainAxisSize: MainAxisSize.min,
             children: [
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1322,9 +1541,9 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                   ),
                 ],
               ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 13),
               Text('赛季控制', style: labelStyle), //赛季控制
-              const SizedBox(height: 12),
+              const SizedBox(height: 9),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.baseline,
                 textBaseline: TextBaseline.alphabetic,
@@ -1348,7 +1567,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                   Text(seasonDurationShown, style: durationStyle),
                 ],
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
 
               Align(
                 alignment: Alignment.center,
@@ -1361,7 +1580,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          SizedBox(height: 12 * _controlBoxScale),
+                          SizedBox(height: 6 * _controlBoxScale),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                             children: [
@@ -1401,15 +1620,15 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                 ),
               ),
 
-              const SizedBox(height: 24),
+              const SizedBox(height: 16),
               Divider(
                 height: 1,
                 thickness: 1,
                 color: Colors.white.withValues(alpha: 0.08),
               ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 13),
               Text('策略控制', style: labelStyle),
-              const SizedBox(height: 12),
+              const SizedBox(height: 9),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.baseline,
                 textBaseline: TextBaseline.alphabetic,
@@ -1434,7 +1653,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                 ],
               ),
 
-              const SizedBox(height: 12),
+              const SizedBox(height: 8),
               Align(
                 alignment: Alignment.center,
                 child: FractionallySizedBox(
@@ -1446,9 +1665,9 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          SizedBox(height: 12 * _controlBoxScale),
+                          SizedBox(height: 6 * _controlBoxScale),
                           if (robotBusy) ...[
-                            SizedBox(height: 8 * _controlBoxScale),
+                            SizedBox(height: 5 * _controlBoxScale),
                             ClipRRect(
                               borderRadius: BorderRadius.circular(999),
                               child: const LinearProgressIndicator(
@@ -1456,7 +1675,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                               ),
                             ),
                           ] else if (_running) ...[
-                            SizedBox(height: 8 * _controlBoxScale),
+                            SizedBox(height: 5 * _controlBoxScale),
                             ClipRRect(
                               borderRadius: BorderRadius.circular(999),
                               child: LinearProgressIndicator(
@@ -1470,7 +1689,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                               ),
                             ),
                           ],
-                          SizedBox(height: 14 * _controlBoxScale),
+                          SizedBox(height: 8 * _controlBoxScale),
                           if (canCtl)
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -1515,7 +1734,6 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                   ),
                 ),
               ),
-              const Spacer(),
             ],
           ),
         );

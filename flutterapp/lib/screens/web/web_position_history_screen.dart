@@ -237,6 +237,8 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Hub 内：与顶部大卡片左缘对齐（外层 24）；独立页同样 24。
+    final horizontalInset = 24.0;
     final column = Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -338,7 +340,7 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
             const SizedBox(height: 8),
           if (_error != null)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
+              padding: EdgeInsets.symmetric(horizontal: horizontalInset),
               child: Text(
                 _error!,
                 style: TextStyle(color: AppFinanceStyle.textLoss, fontSize: 13),
@@ -359,7 +361,12 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
                     ),
                   )
                 : Padding(
-                    padding: const EdgeInsets.fromLTRB(24, 4, 24, 12),
+                    padding: EdgeInsets.fromLTRB(
+                      horizontalInset,
+                      4,
+                      horizontalInset,
+                      12,
+                    ),
                     child: LayoutBuilder(
                       builder: (context, constraints) {
                         final w = constraints.maxWidth;
@@ -480,7 +487,12 @@ class _WebPositionHistoryScreenState extends State<WebPositionHistoryScreen> {
           ),
           if (_nextBefore != null && _rows.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
+              padding: EdgeInsets.fromLTRB(
+                horizontalInset,
+                8,
+                horizontalInset,
+                20,
+              ),
               child: Align(
                 alignment: Alignment.center,
                 child: OutlinedButton(

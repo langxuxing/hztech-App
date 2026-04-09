@@ -218,8 +218,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     return _defaultBotId;
   }
 
-  /// 保持当前选中账户，拉取最新收益、曲线、持仓与赛季（用于定时刷新与下拉切换后的全量刷新）
-  Future<void> _refreshLatestData() async {
+  /// 定时轮询：只更新账户汇总（含浮动盈亏）与当前持仓，避免反复拉取历史快照/日绩效导致下方图表闪烁。
+  Future<void> _refreshLiveAccountSlice() async {
     if (!mounted || _loading || _detailLoading) {
       if (kDebugMode) {
         _profileLog('refresh_skip', {
@@ -239,32 +239,22 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
-      if (!_profileGuardSwitch(g, 'refresh_after_prefs')) return;
+      if (!_profileGuardSwitch(g, 'refresh_slice_after_prefs')) return;
       final api = ApiClient(baseUrl, token: token);
       final batch = await Future.wait([
         api.getAccountProfit(),
-        api.getBotProfitHistory(botId),
         api.getTradingbotPositions(botId),
-        api.getTradingbotSeasons(botId, limit: 50),
       ]);
-      if (!_profileGuardSwitch(g, 'refresh_after_batch')) return;
+      if (!_profileGuardSwitch(g, 'refresh_slice_after_batch')) return;
       final profitResp = batch[0] as AccountProfitResponse;
-      final historyResp = batch[1] as BotProfitHistoryResponse;
-      final positionsResp = batch[2] as OkxPositionsResponse;
-      final seasonsResp = batch[3] as TradingbotSeasonsResponse;
+      final positionsResp = batch[1] as OkxPositionsResponse;
+      if (!mounted || g != _accountSwitchGeneration) return;
       setState(() {
         _accounts = profitResp.accounts ?? [];
-        _snapshots = historyResp.snapshots;
         _positions = positionsResp.positions;
         _positionsLoadError = positionsResp.positionsError;
         _positionsOkxDebug = positionsResp.okxDebug;
-        _seasons = seasonsResp.seasons;
-        _equityMetricsMonth = null;
-        _cashMetricsMonth = null;
-        _equityPerfDays = const [];
-        _cashPerfDays = const [];
       });
-      unawaited(_syncDailyPerformanceForCharts());
       _syncOkxTickerSubscription();
     } catch (_) {
       // 后台轮询失败不打扰主流程
@@ -540,8 +530,8 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     _autoRefreshTimer = null;
     if (!widget.periodicRefreshActive) return;
     _autoRefreshTimer = Timer.periodic(
-      const Duration(seconds: 30),
-      (_) => _refreshLatestData(),
+      const Duration(seconds: 5),
+      (_) => _refreshLiveAccountSlice(),
     );
   }
 
@@ -742,15 +732,6 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     return i < _accounts.length ? _accounts[i] : _accounts.first;
   }
 
-  UnifiedTradingBot? get _currentUnifiedBot {
-    final id = _selectedBotId;
-    if (id == null || id.isEmpty) return null;
-    for (final b in _effectiveBots) {
-      if (b.tradingbotId == id) return b;
-    }
-    return null;
-  }
-
   DateTime _equityMonthFor(List<BotProfitSnapshot> snap) {
     final seed = _equityMetricsMonth ?? focusedMonthFromProfitSnapshots(snap);
     return clampMonthToSnapshots(snap, seed);
@@ -949,7 +930,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     if (list.isEmpty) return const SizedBox.shrink();
     // 无论 1 个或多个交易账户都使用 DropdownButton，交互一致
     return Align(
-      alignment: Alignment.centerLeft,
+      alignment: Alignment.topRight,
       child: ConstrainedBox(
         constraints: BoxConstraints(
           maxWidth: (MediaQuery.of(context).size.width * 0.45).clamp(
@@ -965,29 +946,33 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
               builder: (context) {
                 final heading =
                     AppFinanceStyle.accountProfitOverviewHeadingStyle(context);
+                final dropdownTextStyle = heading.copyWith(
+                  fontSize: AppFinanceStyle.webAccountProfitBotDropdownFontSize,
+                  fontWeight: FontWeight.w500,
+                );
                 return DropdownButton<String>(
                   value: _selectedBotId ?? list.first.tradingbotId,
                   isExpanded: true,
                   padding: EdgeInsets.zero,
-                  iconSize: 30,
-                  itemHeight: 54,
+                  iconSize: 24,
+                  itemHeight: 48,
                   underline: const SizedBox.shrink(),
                   icon: Icon(
                     Icons.arrow_drop_down,
                     color: heading.color,
-                    size: 30,
+                    size: 24,
                   ),
                   dropdownColor: AppFinanceStyle.cardBackground.withValues(
                     alpha: 0.98,
                   ),
-                  style: heading,
+                  style: dropdownTextStyle,
                   items: list
                       .map(
                         (b) => DropdownMenuItem<String>(
                           value: b.tradingbotId,
                           child: Text(
                             b.tradingbotName ?? b.tradingbotId,
-                            style: heading,
+                            style: dropdownTextStyle,
                             overflow: TextOverflow.ellipsis,
                           ),
                         ),
@@ -1216,7 +1201,6 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   Widget _buildAccountDetails() {
     final a = _selectedAccount;
     if (a == null) return const SizedBox.shrink();
-    final bot = _currentUnifiedBot;
     final equity = a.equityUsdt;
     final assetBal = a.cashBalance ?? a.balanceUsdt;
     // 与「当前持仓」价格轴上「总浮动盈亏」一致：单合约时用 WS 最新价 + [_totalDynUpl] 动态刷新。
@@ -1242,20 +1226,6 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
       Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            '账户：${bot?.tradingbotName ?? bot?.tradingbotId ?? a.botId}',
-            style:
-                (Theme.of(context).textTheme.labelMedium ?? const TextStyle())
-                    .copyWith(
-                      color: AppFinanceStyle.labelColor,
-                      fontSize:
-                          (Theme.of(context).textTheme.titleLarge?.fontSize ??
-                              22) +
-                          4,
-                    ),
-          ),
-          const SizedBox(height: 4),
-
           const SizedBox(height: 16),
           LayoutBuilder(
             builder: (context, c) {
@@ -1298,27 +1268,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                   valueStyle: v(),
                   trailingLabel: !narrow,
                 ),
-                _AccountDetailMetricCell(
-                  label: '权益',
-                  value: _fmt(equity),
-                  valueStyle: v(),
-                  trailingLabel: !narrow,
-                ),
-                _AccountDetailMetricCell(
-                  label: '浮动盈亏',
-                  value: _fmt(floating),
-                  valueStyle: v().copyWith(color: floating >= 0 ? green : red),
-                  trailingLabel: !narrow,
-                ),
-                _AccountDetailMetricCell(
-                  label: '期初',
-                  value: _fmt(a.initialBalance),
-                  valueStyle: v(),
-                  trailingLabel: !narrow,
-                ),
-              ];
-              final rowReturns = [
-                _AccountDetailMetricCell(
+                 _AccountDetailMetricCell(
                   label: '现金收益',
                   value: _fmt(cashAmt),
                   valueStyle: v().copyWith(color: cashAmt >= 0 ? green : red),
@@ -1328,6 +1278,20 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                   label: '现金收益率',
                   value: _fmtPct(cashRate),
                   valueStyle: v().copyWith(color: cashRate >= 0 ? green : red),
+                  trailingLabel: !narrow,
+                ),
+                 _AccountDetailMetricCell(
+                  label: '浮动盈亏',
+                  value: _fmt(floating),
+                  valueStyle: v().copyWith(color: floating >= 0 ? green : red),
+                  trailingLabel: !narrow,
+                ),
+              ];
+              final rowEqutity = [
+                _AccountDetailMetricCell(
+                  label: '权益',
+                  value: _fmt(equity),
+                  valueStyle: v(),
                   trailingLabel: !narrow,
                 ),
                 _AccountDetailMetricCell(
@@ -1342,7 +1306,14 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                   valueStyle: v().copyWith(color: eqRate >= 0 ? green : red),
                   trailingLabel: !narrow,
                 ),
+                 _AccountDetailMetricCell(
+                  label: '期初',
+                  value: _fmt(a.initialBalance),
+                  valueStyle: v(),
+                  trailingLabel: !narrow,
+                ),
               ];
+              
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -1352,7 +1323,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
                         ? AppFinanceStyle.webSummaryNarrowGap
                         : AppFinanceStyle.webSummaryWideGap,
                   ),
-                  metricRow(rowReturns),
+                  metricRow(rowEqutity),
                 ],
               );
             },
@@ -2290,15 +2261,35 @@ class _PriceAxisBar extends StatelessWidget {
 
     double norm(double p) => ((p - axisLo) / safeSpan).clamp(0.0, 1.0);
 
-    // 现价与账户详情主数值同档；浮动盈亏白色同档（与持仓区多/空仓盈亏一致）。
+    // 现价与账户详情主数值同档；浮动亏损金额单独红色强调。
     final curPxStyle = AppFinanceStyle.valueTextStyle(
       context,
       fontSize: 20,
-    ).copyWith(color: Colors.lightBlueAccent, fontWeight: FontWeight.w700);
+    ).copyWith(
+      // 与多/空红绿区分，使用更高亮的价格蓝。
+      color: const Color(0xFF33C7FF),
+      fontWeight: FontWeight.w700,
+    );
     final floatPlStyle = AppFinanceStyle.valueTextStyle(
       context,
       fontSize: 20,
-    ).copyWith(color: Colors.white);
+    ).copyWith(
+      // 浮动亏损改橙色，避免与多空颜色混淆。
+      color: const Color(0xFFFFA940),
+      fontWeight: FontWeight.w700,
+    );
+    final floatPrefix = totalDynUpl >= 0 ? '总浮动盈利：' : '总浮动亏损：';
+    final floatValueText = formatUiSignedInteger(totalDynUpl);
+    final latestPxText = '最新价格： ${_fmtOkxContractPxForUi(liveLastPx)}';
+
+    double measureSingleLineTextWidth(String text, TextStyle style) {
+      final painter = TextPainter(
+        text: TextSpan(text: text, style: style),
+        textDirection: Directionality.of(context),
+        maxLines: 1,
+      )..layout();
+      return painter.width;
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2308,8 +2299,38 @@ class _PriceAxisBar extends StatelessWidget {
           child: LayoutBuilder(
             builder: (context, constraints) {
               final w = constraints.maxWidth;
-              final topColW = math.min(320.0, math.max(200.0, w * 0.42));
+              final floatLineW =
+                  measureSingleLineTextWidth(
+                    floatPrefix,
+                    floatPlStyle.copyWith(fontSize: 16),
+                  ) +
+                  measureSingleLineTextWidth(
+                    floatValueText,
+                    floatPlStyle.copyWith(
+                      fontSize: 16,
+                      color: AppFinanceStyle.chartLoss,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  );
+              final latestLineW = measureSingleLineTextWidth(
+                latestPxText,
+                curPxStyle.copyWith(
+                  fontSize: 16,
+                  color: Colors.lightBlueAccent,
+                ),
+              );
+              // 标签宽度按文本实时测量；价格位数变化时，跟随现价锚点动态调整位置。
+              final desiredTopColW = math.max(floatLineW, latestLineW) + 20;
+              final topColW = desiredTopColW.clamp(160.0, math.min(w, 360.0))
+                  .toDouble();
               final xCur = norm(liveLastPx) * w;
+              final bubbleCenterX = xCur.clamp(
+                topColW / 2,
+                math.max(topColW / 2, w - (topColW / 2)),
+              );
+              final topColLeft = (bubbleCenterX - (topColW / 2))
+                  .clamp(0.0, math.max(0.0, w - topColW))
+                  .toDouble();
               final xShort = shortCost != null && shortCost! > 0
                   ? norm(shortCost!) * w
                   : null;
@@ -2374,33 +2395,60 @@ class _PriceAxisBar extends StatelessWidget {
                       ),
                     ),
                   ),
-                  Positioned(
-                    left: xCur,
-                    top: 18, // 将top值下移，让"最新价格"在下方，"总浮动亏损"在上方
-                    child: Transform.translate(
-                      offset: Offset(-topColW / 2, 0),
-                      child: SizedBox(
-                        width: topColW,
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          children: [
-                            Text(
-                              '总浮动亏损：${formatUiSignedInteger(totalDynUpl)}',
-                              textAlign: TextAlign.center,
-                              maxLines: 2,
+                  AnimatedPositioned(
+                    duration: const Duration(milliseconds: 220),
+                    curve: Curves.easeOutCubic,
+                    left: xCur - 1,
+                    top: 34,
+                    width: 2,
+                    height: 8,
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: Colors.lightBlueAccent.withValues(alpha: 0.9),
+                        borderRadius: BorderRadius.circular(1),
+                      ),
+                    ),
+                  ),
+                  AnimatedPositioned(
+                    duration: const Duration(milliseconds: 220),
+                    curve: Curves.easeOutCubic,
+                    left: topColLeft,
+                    top: 0, // 标签在价格轴上方，随现价变动平滑横向跟随
+                    child: SizedBox(
+                      width: topColW,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          RichText(
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            text: TextSpan(
                               style: floatPlStyle.copyWith(fontSize: 16),
+                              children: [
+                                TextSpan(text: floatPrefix),
+                                TextSpan(
+                                  text: floatValueText,
+                                  style: floatPlStyle.copyWith(
+                                    fontSize: 16,
+                                    color: AppFinanceStyle.chartLoss,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
                             ),
-                            const SizedBox(height: 12),
-
-                            Text(
-                              '最新价格： ${_fmtOkxContractPxForUi(liveLastPx)}',
-                              textAlign: TextAlign.center,
-                              maxLines: 2,
-                              style: curPxStyle.copyWith(fontSize: 16),
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            latestPxText,
+                            textAlign: TextAlign.center,
+                            maxLines: 2,
+                            style: curPxStyle.copyWith(
+                              fontSize: 16,
+                              color: Colors.lightBlueAccent,
                             ),
-                          ],
-                        ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -2450,6 +2498,34 @@ class _PriceAxisBar extends StatelessWidget {
           ],
         ),
       ],
+    );
+  }
+}
+
+/// Web「账户详情」独立路由入口；实现已整合至 [WebAccountProfileScreen]。
+///
+/// 缺省 [embedInShell] 为 false（带返回栏的 AppBar），供独立 push；仪表盘在壳内由 Tab 切换嵌入。
+class WebAccountProfitScreen extends StatelessWidget {
+  const WebAccountProfitScreen({
+    super.key,
+    this.sharedBots = const [],
+    this.initialBotId,
+    this.embedInShell = false,
+    this.periodicRefreshActive = true,
+  });
+
+  final List<UnifiedTradingBot> sharedBots;
+  final String? initialBotId;
+  final bool embedInShell;
+  final bool periodicRefreshActive;
+
+  @override
+  Widget build(BuildContext context) {
+    return WebAccountProfileScreen(
+      sharedBots: sharedBots,
+      initialBotId: initialBotId,
+      embedInShell: embedInShell,
+      periodicRefreshActive: periodicRefreshActive,
     );
   }
 }

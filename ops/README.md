@@ -40,4 +40,4 @@ python3 ops/read_deploy_config.py --json --role flutterapp
 
 - **停进程**：按 **TCP 端口** `fuser -k`，勿在单行 SSH 里用 `pkill -f baasapi/main.py`（可能匹配到 `bash -c` 自身，SSH 255）。
 - **代码同步 / 远端 pip**：仍用 `python3 baasapi/server_mgr.py deploy` 或 `restart`。
-- **`test_account_key.py`**：rsync 默认排除；若 `/api/strategy/status` 500，需在 API 机单独放置该文件。
+- **账户列表解析**：运行时依赖 `baasapi/accounts/account_key_util.py`（会随 `deploy` 同步）；`test_account_key.py` 仅为本机/服务器上手测 OKX 连接的 CLI，可按需部署。

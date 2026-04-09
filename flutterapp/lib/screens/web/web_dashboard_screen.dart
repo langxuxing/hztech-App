@@ -7,7 +7,7 @@ import '../../theme/finance_style.dart';
 import '../../utils/number_display_format.dart';
 import '../../widgets/equity_cash_percent_line_chart.dart';
 import '../../widgets/water_background.dart';
-import 'web_account_profit_screen.dart';
+import 'web_account_profile_screen.dart';
 
 /// 总览页金额口径：默认权益；可切换为 USDT 现金余额及相关盈亏。
 enum _DashboardBasis { equity, cash }

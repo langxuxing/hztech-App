@@ -3,11 +3,8 @@
 """
 测试 OKX 账户密钥 JSON：连接、账户信息、当前持仓（仅依赖 api 段）。
 
-密钥文件路径由 Account_List.json 的 account_key_file 决定，相对目录 OKX_Api_Key/
-（若该路径不存在则回退尝试 accounts 根目录，兼容旧布局）。
-默认仅测试 exchange_account 为 OKX 且 enbaled 为 true 的条目；可用命令行覆盖。
-
-沙盒（模拟盘）账户需在请求头中加 x-simulated-trading: 1，base_url 均为 https://www.okx.com。
+列表与路径解析见 account_key_util；本文件仅 CLI 与 HTTP 测连。
+沙盒账户需在请求头中加 x-simulated-trading: 1，base_url 均为 https://www.okx.com。
 """
 from __future__ import annotations
 
@@ -15,76 +12,45 @@ import argparse
 import base64
 import hashlib
 import hmac
-import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
 
-OKXAPI_DIR = Path(__file__).resolve().parent
-ACCOUNT_LIST_FILE = OKXAPI_DIR / "Account_List.json"
-OKX_API_KEY_DIR = OKXAPI_DIR / "OKX_Api_Key"
+try:
+    from .account_key_util import (
+        ACCOUNT_LIST_FILE,
+        OKXAPI_DIR,
+        OKX_API_KEY_DIR,
+        account_row_is_enabled,
+        load_account_list,
+        load_config,
+        resolve_key_file_path,
+    )
+except ImportError:  # 直接 python test_account_key.py 时无包上下文
+    from account_key_util import (
+        ACCOUNT_LIST_FILE,
+        OKXAPI_DIR,
+        OKX_API_KEY_DIR,
+        account_row_is_enabled,
+        load_account_list,
+        load_config,
+        resolve_key_file_path,
+    )
 
-
-def _parse_enabled(value: object) -> bool:
-    """解析 enbaled：与 sandbox 类似，缺省视为 True（便于列表未写该字段时仍跑测试）。"""
-    if value is True or value == 1:
-        return True
-    if value is False or value == 0:
-        return False
-    if isinstance(value, str):
-        s = value.strip().lower()
-        if s in ("false", "0", "no", ""):
-            return False
-        return s in ("true", "1", "yes")
-    if value is None:
-        return True
-    return bool(value)
-
-
-def account_row_is_enabled(row: dict) -> bool:
-    """
-    Account_List 单行是否视为启用。
-    优先读 enbaled（历史拼写），其次 enabled，再次 enable；均未出现时视为 True（兼容老数据）。
-    """
-    if "enbaled" in row:
-        return _parse_enabled(row.get("enbaled"))
-    if "enabled" in row:
-        return _parse_enabled(row.get("enabled"))
-    if "enable" in row:
-        return _parse_enabled(row.get("enable"))
-    return True
-
-
-def load_account_list() -> list[dict]:
-    """读取 Account_List.json，返回列表；文件缺失或格式错误返回空列表。"""
-    if not ACCOUNT_LIST_FILE.is_file():
-        return []
-    try:
-        with open(ACCOUNT_LIST_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return []
-    if not isinstance(data, list):
-        return []
-    return [x for x in data if isinstance(x, dict)]
-
-
-def resolve_key_file_path(account_key_file: str) -> Path:
-    """
-    account_key_file 通常为 OKX_xxx.json：优先 OKX_Api_Key/，否则 accounts/ 根目录。
-    """
-    name = (account_key_file or "").strip()
-    if not name or "/" in name or "\\" in name:
-        return OKX_API_KEY_DIR / name
-    primary = OKX_API_KEY_DIR / name
-    if primary.is_file():
-        return primary
-    fallback = OKXAPI_DIR / name
-    if fallback.is_file():
-        return fallback
-    return primary
+# 兼容旧 import：与 account_key_util 一致
+__all__ = [
+    "ACCOUNT_LIST_FILE",
+    "OKXAPI_DIR",
+    "OKX_API_KEY_DIR",
+    "account_row_is_enabled",
+    "load_account_list",
+    "load_config",
+    "resolve_key_file_path",
+    "iter_okx_test_jobs",
+    "test_one_account",
+]
 
 
 def iter_okx_test_jobs(
@@ -124,45 +90,6 @@ def iter_okx_test_jobs(
         jobs.append((display, aid or path.stem, path))
 
     return jobs
-
-
-def _parse_sandbox(value: object) -> bool:
-    """解析 sandbox：仅 True/\"true\"/1/\"1\" 为沙盒，避免 \"false\" 被 bool() 误判为 True。"""
-    if value is True or value == 1:
-        return True
-    if value is False or value is None or value == 0:
-        return False
-    if isinstance(value, str):
-        return value.strip().lower() in ("true", "1", "yes")
-    return False
-
-
-def load_config(path: Path) -> dict | None:
-    """从 JSON 加载 api 配置：name, key, secret, passphrase, base_url, sandbox。
-    沙盒与实盘同域名，仅通过请求头 x-simulated-trading: 1 区分；sandbox=true 时 base_url 固定为 https://www.okx.com。
-    """
-    if not path.exists():
-        return None
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return None
-    api = data.get("api") if isinstance(data, dict) else None
-    if not api or not isinstance(api, dict):
-        return None
-    sandbox = _parse_sandbox(api.get("sandbox"))
-    base_url = (api.get("base_url") or "https://www.okx.com").rstrip("/")
-    if sandbox:
-        base_url = "https://www.okx.com"
-    return {
-        "name": api.get("name") or path.stem,
-        "key": (api.get("key") or "").strip(),
-        "secret": (api.get("secret") or "").strip(),
-        "passphrase": (api.get("passphrase") or "").strip(),
-        "base_url": base_url,
-        "sandbox": sandbox,
-    }
 
 
 def _sign(secret: str, timestamp: str, method: str, request_path: str, body: str = "") -> str:

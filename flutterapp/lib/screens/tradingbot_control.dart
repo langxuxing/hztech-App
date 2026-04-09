@@ -188,6 +188,7 @@ class _TradingBotControlState extends State<TradingBotControl> {
     if (!running) return;
     showDialog<void>(
       context: context,
+      barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         title: const Text('确认停止'),
         content: const Text('确定要停止该账户策略吗？此操作将终止当前运行，请确认以防误操作。'),
@@ -214,7 +215,32 @@ class _TradingBotControlState extends State<TradingBotControl> {
   void _onTapStart(UnifiedTradingBot bot) {
     final running = bot.status == 'running' || bot.isRunning == true;
     if (running) return;
-    _doStart(bot);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('确认启动策略'),
+        content: const Text(
+          '确定要启动该账户的交易策略进程吗？启动后将按脚本连接交易所并运行策略逻辑。',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: AppFinanceStyle.textProfit,
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              _doStart(bot);
+            },
+            child: const Text('确定启动'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _doStart(UnifiedTradingBot bot) async {

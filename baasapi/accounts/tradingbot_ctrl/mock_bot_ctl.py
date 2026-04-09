@@ -139,7 +139,7 @@ def cmd_start() -> None:
     label = _script_label()
     db.log_insert(
         "INFO",
-        f"mock_bot start (worker entering loop) account={aid}",
+        f"▶️ mock_bot start (worker entering loop) account={aid}",
         "mock_bot",
         extra={
             "account_id": aid,
@@ -173,7 +173,7 @@ def cmd_start() -> None:
             db2 = _import_db()
             db2.log_insert(
                 "INFO",
-                f"mock_bot worker signal exit account={aid} signum={signum}",
+                f"⏹️ mock_bot worker signal exit account={aid} signum={signum}",
                 "mock_bot",
                 extra={"account_id": aid, "script": label, "action": "worker_signal"},
             )
@@ -218,7 +218,7 @@ def cmd_stop() -> int:
 
     db.log_insert(
         "INFO",
-        f"mock_bot stop account={aid} killed={killed}",
+        f"⏹️ mock_bot stop account={aid} killed={killed}",
         "mock_bot",
         extra={
             "account_id": aid,
@@ -273,7 +273,7 @@ def cmd_checkhealth() -> int:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     db.log_insert(
         "INFO",
-        f"mock_bot checkhealth account={aid} running={running}",
+        f"🩺 mock_bot checkhealth account={aid} running={running}",
         "mock_bot",
         extra={
             "account_id": aid,
@@ -296,7 +296,7 @@ def cmd_season_start() -> int:
     cash = _cash_for_season(db, aid)
     db.log_insert(
         "INFO",
-        f"mock_bot season_start account={aid} initial_equity={eq} (db by API)",
+        f"📈 mock_bot season_start account={aid} initial_equity={eq} (db by API)",
         "mock_bot",
         extra={
             "account_id": aid,
@@ -331,7 +331,7 @@ def cmd_season_stop() -> int:
     cash = _cash_for_season(db, aid)
     db.log_insert(
         "INFO",
-        f"mock_bot season_stop account={aid} final_equity={eq} (db by API)",
+        f"📉 mock_bot season_stop account={aid} final_equity={eq} (db by API)",
         "mock_bot",
         extra={
             "account_id": aid,

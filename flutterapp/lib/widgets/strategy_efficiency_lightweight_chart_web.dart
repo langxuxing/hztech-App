@@ -34,6 +34,37 @@ class _StrategyEfficiencyLightweightChartState
   late final String _viewType = 'strategy_eff_lwc_${++_seq}';
   HTMLIFrameElement? _iframe;
 
+  /// Lightweight Charts 的 [time] 仅接受严格 `YYYY-MM-DD` 或 UTC 秒时间戳。
+  /// 服务端偶发 `2026-3-1`、`2026-03-1 9` 等会导致整图不渲染；对比图用序号映射故不受影响。
+  static int? _utcSecondsForChartTime(String rawDay) {
+    final raw = rawDay.trim();
+    if (raw.isEmpty) return null;
+    final tokens = raw.split(RegExp(r'\s+'));
+    var datePart = tokens.first;
+    if (datePart.contains('T')) {
+      datePart = datePart.split('T').first;
+    }
+    var hour = 0;
+    var minute = 0;
+    if (tokens.length >= 2) {
+      hour = int.tryParse(tokens[1]) ?? 0;
+      if (hour < 0 || hour > 23) hour = 0;
+    }
+    if (tokens.length >= 3) {
+      minute = int.tryParse(tokens[2]) ?? 0;
+      if (minute < 0 || minute > 59) minute = 0;
+    }
+    final m = RegExp(r'^(\d{4})-(\d{1,2})-(\d{1,2})').firstMatch(datePart);
+    if (m == null) return null;
+    final y = int.tryParse(m.group(1)!);
+    final mo = int.tryParse(m.group(2)!);
+    final d = int.tryParse(m.group(3)!);
+    if (y == null || mo == null || d == null) return null;
+    if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    return DateTime.utc(y, mo, d, hour, minute).millisecondsSinceEpoch ~/
+        1000;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -58,18 +89,19 @@ class _StrategyEfficiencyLightweightChartState
   }
 
   String _buildSrcDoc() {
-    final sorted = List<StrategyDailyEfficiencyRow>.from(widget.rows)
-      ..sort((a, b) => a.day.compareTo(b.day));
-    final payload = sorted
-        .map(
-          (e) => <String, dynamic>{
-            'day': e.day,
-            'cashPct': e.cashDeltaPct,
-            'trPct': e.trPct,
-            'ratio': e.efficiencyRatio,
-          },
-        )
-        .toList();
+    final byUtcSec = <int, Map<String, dynamic>>{};
+    for (final e in widget.rows) {
+      final t = _utcSecondsForChartTime(e.day);
+      if (t == null) continue;
+      byUtcSec[t] = {
+        't': t,
+        'cashPct': e.cashDeltaPct,
+        'trPct': e.trPct,
+        'ratio': e.efficiencyRatio,
+      };
+    }
+    final keys = byUtcSec.keys.toList()..sort();
+    final payload = keys.map((k) => byUtcSec[k]!).toList();
     final b64 = base64Encode(utf8.encode(jsonEncode(payload)));
 
     return '''
@@ -108,7 +140,7 @@ html,body{margin:0;padding:0;height:100%;background:#141419;overflow:hidden;}
       return;
     }
     if (!DATA || !DATA.length) {
-      setMsg('暂无日线数据。');
+      setMsg('暂无可绘制的数据（或日期格式无法解析，需 YYYY-MM-DD 或 带可选小时的日历键）。');
       return;
     }
     var chart = LightweightCharts.createChart(el, {
@@ -215,18 +247,18 @@ html,body{margin:0;padding:0;height:100%;background:#141419;overflow:hidden;}
     var trArr = [];
     for (var i = 0; i < DATA.length; i++) {
       var d = DATA[i];
-      if (!d || !d.day) continue;
+      if (!d || d.t == null || d.t !== d.t) continue;
       var cp = n(d.cashPct);
       var tp = n(d.trPct);
       var cashBase = cashYieldBarColor(cp);
       var trBase = trBarColor(tp);
       cashArr.push({
-        time: d.day,
+        time: d.t,
         value: cp == null ? 0 : Math.round(cp * 100) / 100,
         color: barPattern('grid', cashBase),
       });
       trArr.push({
-        time: d.day,
+        time: d.t,
         value: tp == null ? 0 : Math.round(tp * 100) / 100,
         color: barPattern('diag', trBase),
       });
@@ -236,9 +268,9 @@ html,body{margin:0;padding:0;height:100%;background:#141419;overflow:hidden;}
     var linePts = [];
     for (var j = 0; j < DATA.length; j++) {
       var row = DATA[j];
-      if (!row || !row.day) continue;
+      if (!row || row.t == null || row.t !== row.t) continue;
       var rv = n(row.ratio);
-      if (rv != null) linePts.push({ time: row.day, value: rv });
+      if (rv != null) linePts.push({ time: row.t, value: rv });
     }
     if (linePts.length) {
       var serE = chart.addLineSeries({

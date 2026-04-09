@@ -4,7 +4,7 @@
     "account_name": "阿郎测试",
     "exchange_account": "OKX",
     "symbol": "PEPE-USDT-SWAP",
-    "Initial_capital": 5000,  
+    "Initial_capital": 4000,
     "trading_strategy": "Moneyflow-V2.1",
     "account_key_file": "OKX_Alang_Sandbox.json",
     "script_file": "moneyflow_test_mainrepo.sh",
@@ -29,7 +29,7 @@
     "Initial_capital": 1000,
     "trading_strategy": "Moneyflow-V2.1",
     "account_key_file": "OKX_Cheng_Live.json",
-    "script_file": "moneyflow_test_live.sh",
+    "script_file": "moneyflow_test_mainrepo.sh",
     "enbaled": true
   },
   {

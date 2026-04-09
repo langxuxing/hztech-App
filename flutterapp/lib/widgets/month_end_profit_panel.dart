@@ -5,6 +5,14 @@ import '../api/models.dart';
 import '../theme/finance_style.dart';
 import '../utils/number_display_format.dart';
 
+const _kBarTouchTooltipBg = Color(0xFF1E1E28);
+
+const _kBarTouchTooltipTextStyle = TextStyle(
+  color: AppFinanceStyle.textDefault,
+  fontWeight: FontWeight.w600,
+  fontSize: 11,
+);
+
 DateTime? _parseSnapshotAt(String raw) {
   if (raw.isEmpty) return null;
   final s = raw.length >= 19 ? raw.substring(0, 19) : raw;
@@ -500,16 +508,16 @@ class _MonthEndValueBarPanelState extends State<MonthEndValueBarPanel> {
             barTouchData: BarTouchData(
               enabled: true,
               touchTooltipData: BarTouchTooltipData(
+                getTooltipColor: (_) => _kBarTouchTooltipBg,
+                tooltipRoundedRadius: 8,
+                tooltipPadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
                 getTooltipItem: (group, groupIndex, rod, rodIndex) {
                   return BarTooltipItem(
                     formatUiSignedInteger(rod.toY),
-                    TextStyle(
-                      color: rod.toY >= 0
-                          ? AppFinanceStyle.chartProfit
-                          : AppFinanceStyle.chartLoss,
-                      fontWeight: FontWeight.w600,
-                      fontSize: 11,
-                    ),
+                    _kBarTouchTooltipTextStyle,
                   );
                 },
               ),
@@ -626,16 +634,16 @@ class _MonthEndValueBarPanelState extends State<MonthEndValueBarPanel> {
                 barTouchData: BarTouchData(
                   enabled: true,
                   touchTooltipData: BarTouchTooltipData(
+                    getTooltipColor: (_) => _kBarTouchTooltipBg,
+                    tooltipRoundedRadius: 8,
+                    tooltipPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
                     getTooltipItem: (group, groupIndex, rod, rodIndex) {
                       return BarTooltipItem(
                         formatUiSignedInteger(rod.toY),
-                        TextStyle(
-                          color: rod.toY >= 0
-                              ? AppFinanceStyle.chartProfit
-                              : AppFinanceStyle.chartLoss,
-                          fontWeight: FontWeight.w600,
-                          fontSize: 11,
-                        ),
+                        _kBarTouchTooltipTextStyle,
                       );
                     },
                   ),

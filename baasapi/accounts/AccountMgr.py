@@ -19,13 +19,20 @@ positions / profit-history / ticker / pending-orders 等通过本模块解析密
 """
 from __future__ import annotations
 
-import importlib.util
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+from .account_key_util import (
+    account_row_is_enabled as _account_row_is_enabled_util,
+    load_account_list as _load_account_list_util,
+    load_config as _load_config_util,
+    parse_enabled as _parse_enabled_util,
+    resolve_key_file_path as _resolve_key_file_path_util,
+)
 
 ACCOUNTS_DIR = Path(__file__).resolve().parent
 
@@ -47,28 +54,12 @@ def _fmt_log_account_id(account_id: str, width: int = _LOG_ACCOUNT_COL_WIDTH) ->
     return s.ljust(width)
 
 
-_test_account_key_mod: Any = None
-
-
-def _test_account_key():
-    global _test_account_key_mod
-    if _test_account_key_mod is None:
-        p = ACCOUNTS_DIR / "test_account_key.py"
-        spec = importlib.util.spec_from_file_location("test_account_key", p)
-        if spec is None or spec.loader is None:
-            raise RuntimeError("无法加载 test_account_key")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        _test_account_key_mod = mod
-    return _test_account_key_mod
-
-
 def load_account_list() -> list[dict]:
-    return _test_account_key().load_account_list()
+    return _load_account_list_util()
 
 
 def resolve_key_file_path(account_key_file: str) -> Path:
-    return _test_account_key().resolve_key_file_path(account_key_file)
+    return _resolve_key_file_path_util(account_key_file)
 
 
 def okx_sandbox_from_key_file(account_key_file: str) -> bool:
@@ -77,19 +68,19 @@ def okx_sandbox_from_key_file(account_key_file: str) -> bool:
     if not key_name:
         return False
     path = resolve_key_file_path(key_name)
-    cfg = _test_account_key().load_config(path)
+    cfg = _load_config_util(path)
     if not cfg:
         return False
     return bool(cfg.get("sandbox"))
 
 
 def _parse_enabled(value: object) -> bool:
-    return _test_account_key()._parse_enabled(value)
+    return _parse_enabled_util(value)
 
 
 def _account_row_enabled(row: dict) -> bool:
-    """与 test_account_key.account_row_is_enabled 一致：优先 enbaled，其次 enabled。"""
-    return _test_account_key().account_row_is_enabled(row)
+    """与 account_key_util.account_row_is_enabled 一致：优先 enbaled，其次 enabled。"""
+    return _account_row_is_enabled_util(row)
 
 
 def okx_account_disabled_exchange_reason(account_id: str) -> str | None:

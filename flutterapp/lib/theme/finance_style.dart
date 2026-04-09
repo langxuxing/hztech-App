@@ -196,6 +196,7 @@ class AppFinanceStyle {
   /// Web 部分页面次级下拉（赛季/历史等）用略小字号，避免喧宾夺主。
   static const double webAccountProfitBotDropdownFontSize = 16;
 
+
   /// 与「账户概览」列表标题、账户收益/画像章节 [_sectionTitle] 同级：**App** `titleLarge`+2，**Web** +4。
   /// 用于账户选择 [DropdownButton]，避免因单独写死 14–16px 而比卡片标题明显更小（并非控件高度限制）。
   static TextStyle accountProfitOverviewHeadingStyle(BuildContext context) {

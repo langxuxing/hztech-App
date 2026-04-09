@@ -3,6 +3,7 @@
 """
 AWS API 服务测试程序：对远程 API（或本地）发真实 HTTP 请求，校验各接口。
 用法：
+  ./ops/test_aws_alpha_baasapi.sh          # aws-alpha（与 deploy-aws.json 中 baasapi 段一致）
   python test/test_aws_api.py
   BASE_URL=http://54.66.108.150:9001 python test/test_aws_api.py
   python test/test_aws_api.py -v
@@ -99,6 +100,31 @@ def main() -> int:
     print(f"=== AWS API 测试 @ {base}\n")
 
     failed = 0
+
+    # 0a) GET /api/health（与 ops/aws_ops.sh status api 一致，无需登录）
+    code, body = request("GET", f"{base}/api/health")
+    ok = (
+        code == 200
+        and isinstance(body, dict)
+        and body.get("ok") is True
+        and body.get("service") == "hztech-api"
+    )
+    if not ok:
+        failed += 1
+    run_test("GET /api/health", ok, f"code={code}" if verbose else "", verbose)
+
+    # 0b) GET /api/app-version（无需登录）
+    code, body = request("GET", f"{base}/api/app-version")
+    ok = (
+        code == 200
+        and isinstance(body, dict)
+        and body.get("success") is True
+        and "android" in body
+        and "ios" in body
+    )
+    if not ok:
+        failed += 1
+    run_test("GET /api/app-version", ok, f"code={code}" if verbose else "", verbose)
 
     # 1) GET /
     code, body = request("GET", f"{base}/")

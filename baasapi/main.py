@@ -1178,6 +1178,52 @@ def _bot_op_response(resp: dict, bot_id: str) -> dict:
     }
 
 
+_BOT_CTRL_ICONS = {
+    "start": "▶️",
+    "stop": "⏹️",
+    "restart": "🔄",
+    "season_start": "📈",
+    "season_stop": "📉",
+}
+_BOT_CTRL_LOGGER = logging.getLogger("baasapi.bot_control")
+
+
+def _audit_bot_control_action(
+    icon: str,
+    title_cn: str,
+    action_key: str,
+    bot_id: str,
+    *,
+    ok: bool,
+    username: str | None,
+    detail: str | None = None,
+    **extra: object,
+) -> None:
+    """策略/赛季管控：控制台与 logs 表双写，消息带统一 icon 便于检索与人工核对。"""
+    tail = f" detail={detail}" if detail else ""
+    line = f"{icon} [{title_cn}] bot_id={bot_id} ok={ok}{tail}"
+    if ok:
+        _BOT_CTRL_LOGGER.info(line)
+    else:
+        _BOT_CTRL_LOGGER.warning(line)
+    payload = {
+        "icon": icon,
+        "action_key": action_key,
+        "title_cn": title_cn,
+        "bot_id": bot_id,
+        "ok": ok,
+        "username": username,
+        "detail": detail,
+        **{k: v for k, v in extra.items()},
+    }
+    _db.log_insert(
+        "WARN" if not ok else "INFO",
+        f"{icon} {title_cn}",
+        "bot_control",
+        extra=payload,
+    )
+
+
 @app.route("/api/tradingbots/<bot_id>/start", methods=["POST"])
 @require_auth
 def api_bot_start(bot_id):
@@ -1187,18 +1233,27 @@ def api_bot_start(bot_id):
     if not _bot_is_controllable(bot_id):
         return jsonify({"success": False, "message": "未知 bot_id"}), 404
     resp = strategy_start(bot_id)
-    _db.log_insert(
-        "INFO",
+    user = getattr(g, "current_username", None)
+    dr = resp.get("message") or resp.get("error") or ""
+    detail = str(dr) if dr else None
+    _audit_bot_control_action(
+        _BOT_CTRL_ICONS["start"],
+        "策略启动",
         "strategy_start",
-        source="api",
-        extra={
-            "bot_id": bot_id,
-            "username": getattr(g, "current_username", None),
-            "ok": resp.get("ok"),
-        },
+        bot_id,
+        ok=bool(resp.get("ok")),
+        username=user,
+        detail=detail,
+        pids=resp.get("pids"),
     )
     _db.strategy_event_insert(
-        bot_id, "start", "manual", getattr(g, "current_username", None)
+        bot_id,
+        "start",
+        "manual",
+        user,
+        success=bool(resp.get("ok")),
+        detail=detail,
+        action_icon=_BOT_CTRL_ICONS["start"],
     )
     if resp.get("ok"):
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -1215,18 +1270,27 @@ def api_bot_stop(bot_id):
     if not _bot_is_controllable(bot_id):
         return jsonify({"success": False, "message": "未知 bot_id"}), 404
     resp = strategy_stop(bot_id)
-    _db.log_insert(
-        "INFO",
+    user = getattr(g, "current_username", None)
+    detail_raw = resp.get("message") or resp.get("error") or ""
+    detail = str(detail_raw) if detail_raw else None
+    _audit_bot_control_action(
+        _BOT_CTRL_ICONS["stop"],
+        "策略停止",
         "strategy_stop",
-        source="api",
-        extra={
-            "bot_id": bot_id,
-            "username": getattr(g, "current_username", None),
-            "ok": resp.get("ok"),
-        },
+        bot_id,
+        ok=bool(resp.get("ok")),
+        username=user,
+        detail=detail,
+        killed=resp.get("killed"),
     )
     _db.strategy_event_insert(
-        bot_id, "stop", "manual", getattr(g, "current_username", None)
+        bot_id,
+        "stop",
+        "manual",
+        user,
+        success=bool(resp.get("ok")),
+        detail=detail,
+        action_icon=_BOT_CTRL_ICONS["stop"],
     )
     if resp.get("ok"):
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
@@ -1245,18 +1309,27 @@ def api_bot_restart(bot_id):
     if not _bot_is_controllable(bot_id):
         return jsonify({"success": False, "message": "未知 bot_id"}), 404
     resp = strategy_restart(bot_id)
-    _db.log_insert(
-        "INFO",
+    user = getattr(g, "current_username", None)
+    detail_raw = resp.get("message") or resp.get("error") or ""
+    detail = str(detail_raw) if detail_raw else None
+    _audit_bot_control_action(
+        _BOT_CTRL_ICONS["restart"],
+        "策略重启",
         "strategy_restart",
-        source="api",
-        extra={
-            "bot_id": bot_id,
-            "username": getattr(g, "current_username", None),
-            "ok": resp.get("ok"),
-        },
+        bot_id,
+        ok=bool(resp.get("ok")),
+        username=user,
+        detail=detail,
+        pids=resp.get("pids"),
     )
     _db.strategy_event_insert(
-        bot_id, "restart", "manual", getattr(g, "current_username", None)
+        bot_id,
+        "restart",
+        "manual",
+        user,
+        success=bool(resp.get("ok")),
+        detail=detail,
+        action_icon=_BOT_CTRL_ICONS["restart"],
     )
     return jsonify(_bot_op_response(resp, bot_id))
 
@@ -1272,65 +1345,101 @@ def api_bot_season_start(bot_id):
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     eq, cash = _live_equity_cash_for_bot(bot_id)
     _db.account_season_roll_forward(bot_id, ts, eq, cash)
+    user = getattr(g, "current_username", None)
 
     start_resp = None
     if not strategy_is_running(bot_id):
         start_resp = strategy_start(bot_id)
-        _db.log_insert(
-            "INFO",
-            "season_start_auto_start_bot",
-            source="api",
-            extra={
-                "bot_id": bot_id,
-                "username": getattr(g, "current_username", None),
-                "ok": start_resp.get("ok"),
-            },
-        )
-
-    shell_resp = strategy_season_start(bot_id)
-    _db.log_insert(
-        "INFO",
-        "season_start_api",
-        source="api",
-        extra={
-            "bot_id": bot_id,
-            "username": getattr(g, "current_username", None),
-            "shell_ok": shell_resp.get("ok"),
-            "start_attempted": start_resp is not None,
-            "start_ok": start_resp.get("ok") if start_resp else None,
-        },
-    )
-    if not shell_resp.get("ok"):
-        _db.log_insert(
-            "WARN",
-            "season_start_shell_failed",
-            source="api",
-            extra={"bot_id": bot_id, "error": shell_resp.get("error")},
+        dr = start_resp.get("message") or start_resp.get("error") or ""
+        _audit_bot_control_action(
+            _BOT_CTRL_ICONS["start"],
+            "赛季流程·顺带拉起策略",
+            "season_start_auto_bot",
+            bot_id,
+            ok=bool(start_resp.get("ok")),
+            username=user,
+            detail=str(dr) if dr else None,
+            pids=start_resp.get("pids"),
         )
 
     if start_resp is not None and not start_resp.get("ok"):
+        fail_msg = (
+            start_resp.get("error")
+            or start_resp.get("message")
+            or "策略启动失败"
+        )
+        _audit_bot_control_action(
+            _BOT_CTRL_ICONS["season_start"],
+            "赛季启动（已中止）",
+            "season_start_aborted_bot",
+            bot_id,
+            ok=False,
+            username=user,
+            detail=str(fail_msg),
+        )
+        _db.strategy_event_insert(
+            bot_id,
+            "season_start",
+            "manual",
+            user,
+            success=False,
+            detail=str(fail_msg),
+            action_icon=_BOT_CTRL_ICONS["season_start"],
+        )
         return jsonify(
             {
                 "success": False,
-                "message": start_resp.get("error")
-                or start_resp.get("message")
-                or "策略启动失败",
+                "message": fail_msg,
                 "tradingbot_id": bot_id,
                 "status": "stopped",
             }
         )
 
+    shell_resp = strategy_season_start(bot_id)
+    sh_err = shell_resp.get("error") or ""
+    sh_msg = shell_resp.get("message") or ""
+    sh_detail = str(sh_err or sh_msg) if (sh_err or sh_msg) else None
+    _audit_bot_control_action(
+        _BOT_CTRL_ICONS["season_start"],
+        "赛季启动（shell）",
+        "season_start_shell",
+        bot_id,
+        ok=bool(shell_resp.get("ok")),
+        username=user,
+        detail=sh_detail,
+        start_attempted=start_resp is not None,
+        start_ok=start_resp.get("ok") if start_resp else None,
+    )
+    ev_detail_parts: list[str] = []
+    if start_resp is not None:
+        ev_detail_parts.append(
+            "auto_start="
+            + ("ok" if start_resp.get("ok") else "fail")
+        )
+    ev_detail_parts.append(
+        "shell=" + ("ok" if shell_resp.get("ok") else "fail")
+    )
+    if sh_detail:
+        ev_detail_parts.append(sh_detail)
     _db.strategy_event_insert(
         bot_id,
         "season_start",
         "manual",
-        getattr(g, "current_username", None),
+        user,
+        success=bool(shell_resp.get("ok")),
+        detail="; ".join(ev_detail_parts),
+        action_icon=_BOT_CTRL_ICONS["season_start"],
     )
     running = strategy_is_running(bot_id)
     return jsonify(
         {
-            "success": True,
-            "message": shell_resp.get("message") or "赛季已启动",
+            "success": bool(shell_resp.get("ok")),
+            "message": shell_resp.get("message")
+            or (
+                shell_resp.get("error")
+                if not shell_resp.get("ok")
+                else "赛季已启动"
+            ),
             "tradingbot_id": bot_id,
             "status": "running" if running else "stopped",
         }
@@ -1347,26 +1456,31 @@ def api_bot_season_stop(bot_id):
     if not _bot_is_controllable(bot_id):
         return jsonify({"success": False, "message": "未知 bot_id"}), 404
     resp = strategy_season_stop(bot_id)
-    _db.log_insert(
-        "INFO",
-        "season_stop_api",
-        source="api",
-        extra={
-            "bot_id": bot_id,
-            "username": getattr(g, "current_username", None),
-            "ok": resp.get("ok"),
-        },
+    user = getattr(g, "current_username", None)
+    dr = resp.get("message") or resp.get("error") or ""
+    detail = str(dr) if dr else None
+    _audit_bot_control_action(
+        _BOT_CTRL_ICONS["season_stop"],
+        "赛季结束",
+        "season_stop_shell",
+        bot_id,
+        ok=bool(resp.get("ok")),
+        username=user,
+        detail=detail,
     )
     if resp.get("ok"):
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         eq, cash = _live_equity_cash_for_bot(bot_id)
         _db.account_season_update_on_stop(bot_id, ts, eq, cash)
-        _db.strategy_event_insert(
-            bot_id,
-            "season_stop",
-            "manual",
-            getattr(g, "current_username", None),
-        )
+    _db.strategy_event_insert(
+        bot_id,
+        "season_stop",
+        "manual",
+        user,
+        success=bool(resp.get("ok")),
+        detail=detail,
+        action_icon=_BOT_CTRL_ICONS["season_stop"],
+    )
     return jsonify(_bot_op_response(resp, bot_id))
 
 

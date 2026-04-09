@@ -144,21 +144,59 @@ def get_remote_path():
     return target_config("flutterapp")["remote_path"]
 
 
+def _ssh_transport_opts(cfg: dict) -> list[str]:
+    """与 rsync -e 一致：keepalive、超时，并合并 deploy-aws.json 的 ssh_opts。"""
+    return [
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        "ServerAliveInterval=30",
+        "-o",
+        "ServerAliveCountMax=6",
+        "-o",
+        "TCPKeepAlive=yes",
+        "-o",
+        "ConnectTimeout=30",
+    ] + list(cfg.get("ssh_opts", []))
+
+
 def ssh_cmd(remote_cmd=None, cfg=None):
     """构建 ssh 命令。remote_cmd 为 None 时打开交互 shell。cfg 默认 FlutterApp 主机。"""
     c = cfg if cfg is not None else target_config("flutterapp")
     key = PROJECT_ROOT / c["key"]
     port = c.get("port", 22)
-    opts = c.get("ssh_opts", [])
-    base = ["ssh", "-i", str(key), "-p", str(port)] + opts + [f"{c['user']}@{c['host']}"]
+    base = (
+        ["ssh", "-i", str(key), "-p", str(port)]
+        + _ssh_transport_opts(c)
+        + [f"{c['user']}@{c['host']}"]
+    )
     if remote_cmd is not None:
         base.append(remote_cmd)
     return base
 
 
-def run_ssh(remote_cmd, check=True, cfg=None):
-    """在 AWS 上执行单条命令。check=False 时忽略非零退出码（如 pkill 无匹配）。"""
-    subprocess.run(ssh_cmd(remote_cmd, cfg=cfg), check=check, cwd=PROJECT_ROOT)
+def run_ssh(remote_cmd, check=True, cfg=None, retries: int = 3):
+    """在 AWS 上执行单条命令。check=False 时忽略非零退出码（如 pkill 无匹配）。
+
+    对 SSH 退出码 255（连接被关闭、瞬时网络问题）按 retries 重试，与 _run_rsync 行为一致。
+    """
+    for attempt in range(1, retries + 1):
+        try:
+            subprocess.run(ssh_cmd(remote_cmd, cfg=cfg), check=check, cwd=PROJECT_ROOT)
+            return
+        except subprocess.CalledProcessError as e:
+            if (
+                not check
+                or e.returncode != 255
+                or attempt >= retries
+            ):
+                raise
+            print(
+                "ssh 失败 exit 255（第 %s/%s 次），3 秒后重试…"
+                % (attempt, retries),
+                file=sys.stderr,
+            )
+            time.sleep(3)
 
 
 def _flutter_host_remove_sqlite(cfg: dict) -> None:
@@ -207,14 +245,13 @@ def _rsync_deploy_exclude_patterns() -> list[str]:
         "baasapi/build_and_deploy.sh",
         "baasapi/seed_mock_account_data.py",
         "baasapi/seed_test_seasons.py",
-        "baasapi/accounts/test_account_key.py",
         # 本地 SQLite 库体积大且不应覆盖远端生产库；远端由 init_db / 迁移维护
         "baasapi/sqlite/*.db",
     ]
 
 
 def _rsync_ssh_e(cfg: dict) -> str:
-    """rsync -e 使用的 ssh 命令：keepalive 防 NAT/防火墙 idle 断连，合并 deploy-aws.json 的 ssh_opts。"""
+    """rsync -e 使用的 ssh 命令：与 ssh_cmd/run_ssh 共用传输选项。"""
     key = PROJECT_ROOT / cfg["key"]
     port = cfg.get("port", 22)
     parts: list[str] = [
@@ -223,18 +260,7 @@ def _rsync_ssh_e(cfg: dict) -> str:
         str(key),
         "-p",
         str(port),
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-o",
-        "ServerAliveInterval=30",
-        "-o",
-        "ServerAliveCountMax=6",
-        "-o",
-        "TCPKeepAlive=yes",
-        "-o",
-        "ConnectTimeout=30",
-    ]
-    parts.extend(cfg.get("ssh_opts", []))
+    ] + _ssh_transport_opts(cfg)
     return " ".join(shlex.quote(p) for p in parts)
 
 
