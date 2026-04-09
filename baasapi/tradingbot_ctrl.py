@@ -7,10 +7,18 @@
 环境变量：
 - MOBILEAPP_ROOT：部署根目录（与 _project_root 一致）。
 - HZTECH_TRADINGBOT_CTRL_DIR：策略 shell 所在目录。未设置时默认为
-  `<accounts>/tradingbot_ctrl`（即 baasapi/accounts/tradingbot_ctrl）。
+  `<accounts>/tradingbot_ctrl`（即 `baasapi/accounts/tradingbot_ctrl`，例如本机
+  `/Volumes/HZTech/hztechApp/baasapi/accounts/tradingbot_ctrl`）。
+  `baasapi/run_local.sh` 会显式设为 `$MOBILEAPP_ROOT/baasapi/accounts/tradingbot_ctrl`。
+  AWS：`install_on_aws.sh`、`ops/aws_ops.sh` 与 `server_mgr` 远端重启缺省为 `/home/ec2-user/Alpha`
+  （本机执行部署时勿把 Mac 上的 CTRL_DIR 传到 EC2；若需改远端目录，用环境变量
+  `HZTECH_REMOTE_TRADINGBOT_CTRL_DIR`）。
   可为相对路径（相对 accounts 目录）或绝对路径。
   script_file 可为 `tradingbot_ctrl/xxx.sh`、`xxx.sh` 或任意相对 accounts 的子路径；
   解析时会尝试 accounts 根路径与上述目录的组合，取首个存在的文件。
+- HZTECH_TRADINGBOT_ACCOUNT_LIST_SOURCE：json（默认，读 Account_List.json）或 database（读库表 account_list，与 JSON 字段一致，供生产以库为准）。
+  AWS 部署脚本与 `server_mgr` 远端重启缺省为 database；覆盖远端可用 `HZTECH_REMOTE_TRADINGBOT_ACCOUNT_LIST_SOURCE`。
+- 账户未配置 script_file 时，启停统一缺省使用 `moneyflow_alangsandbox.sh`，避免误指缺失脚本。
 """
 from __future__ import annotations
 
@@ -27,6 +35,8 @@ BOT_SCRIPTS = {
 }
 # 停止时先 SIGTERM 等待秒数，再对剩余进程 kill -9
 STOP_GRACEFUL_WAIT_SEC = 3
+# Account_List / account_list 中 script_file 为空时的缺省启动脚本（须在 HZTECH_TRADINGBOT_CTRL_DIR 下存在）
+DEFAULT_ACCOUNT_SCRIPT_FILE = "moneyflow_alangsandbox.sh"
 
 
 def _project_root() -> Path:
@@ -39,6 +49,12 @@ def _project_root() -> Path:
 
 def _safe_pid_tag(account_id: str) -> str:
     return "".join(c if c.isalnum() or c in "._-" else "_" for c in account_id)
+
+
+def effective_account_script_file(stored: str) -> str:
+    """返回实际用于解析路径的 script_file；空则 DEFAULT_ACCOUNT_SCRIPT_FILE。"""
+    s = (stored or "").strip()
+    return s if s else DEFAULT_ACCOUNT_SCRIPT_FILE
 
 
 def tradingbot_ctrl_dir() -> Path:
@@ -100,15 +116,15 @@ def resolve_account_script_file(script_file: str) -> Path | None:
 
 
 def load_account_shell_map() -> dict[str, Path]:
-    """Account_List 中已启用且 script_file 可解析的账户 -> 脚本绝对路径。"""
+    """已启用账户且脚本可解析 -> 绝对路径（列表来源见 HZTECH_TRADINGBOT_ACCOUNT_LIST_SOURCE）。"""
     from accounts import AccountMgr as _am
 
     out: dict[str, Path] = {}
-    for basic in _am.list_account_basics(enabled_only=True):
+    for basic in _am.list_account_basics_for_tradingbot(enabled_only=True):
         aid = (basic.get("account_id") or "").strip()
-        sf = (basic.get("script_file") or "").strip()
-        if not aid or not sf:
+        if not aid:
             continue
+        sf = effective_account_script_file(basic.get("script_file") or "")
         p = resolve_account_script_file(sf)
         if p is not None:
             out[aid] = p

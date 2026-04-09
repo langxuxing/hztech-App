@@ -24,12 +24,35 @@ FLUTTER_APK_DIR = flutterapp / "build" / "app" / "outputs" / "flutter-apk"
 FLUTTER_IPA_DIR = flutterapp / "build" / "ios" / "ipa"
 # 生成 APK 放入项目根下 apk/，部署后对应 AWS 上 hztechapp/apk/（见 deploy-aws.json remote_path）
 APK_DIR = PROJECT_ROOT / "apk"
-# 与 deploy2AWS.sh（release）、deploy2Local.sh（debug）产物名一致
+# 与 deploy2AWS.sh / deploy2Local.sh 默认 release 产物名一致
 DEFAULT_APK_NAME_RELEASE = "hztech-app-release.apk"
 DEFAULT_APK_NAME_DEBUG = "hztech-app-debug.apk"
 # iOS：flutter build ipa 产物复制到 ipa/，随 rsync 一并上传（与 apk/ 并列）
 IPA_DIR = PROJECT_ROOT / "ipa"
 DEFAULT_IPA_NAME = "禾正量化-release.ipa"
+
+# 远端启动 main.py 时注入（与 install_on_aws.sh 一致）。勿用本机 HZTECH_TRADINGBOT_CTRL_DIR，避免 Mac 路径传到 EC2。
+_REMOTE_TRADINGBOT_CTRL_DIR = (
+    os.environ.get("HZTECH_REMOTE_TRADINGBOT_CTRL_DIR", "/home/ec2-user/Alpha").strip()
+    or "/home/ec2-user/Alpha"
+)
+_REMOTE_TRADINGBOT_ACCOUNT_LIST_SOURCE = (
+    os.environ.get("HZTECH_REMOTE_TRADINGBOT_ACCOUNT_LIST_SOURCE", "database").strip()
+    or "database"
+)
+
+
+def _remote_baasapi_start_env(remote_path: str, api_port: int) -> str:
+    """SSH 一行前缀：MOBILEAPP_ROOT、PORT、交易机器人目录与账户列表来源。"""
+    rp = shlex.quote(remote_path)
+    port_q = shlex.quote(str(api_port))
+    ctrl = shlex.quote(_REMOTE_TRADINGBOT_CTRL_DIR)
+    als = shlex.quote(_REMOTE_TRADINGBOT_ACCOUNT_LIST_SOURCE)
+    return (
+        f"MOBILEAPP_ROOT={rp} PORT={port_q} "
+        f"HZTECH_TRADINGBOT_CTRL_DIR={ctrl} "
+        f"HZTECH_TRADINGBOT_ACCOUNT_LIST_SOURCE={als} "
+    )
 
 
 def _ios_build_requested() -> bool:
@@ -130,6 +153,35 @@ def has_dual_deploy() -> bool:
     has_fa = isinstance(c.get("flutterapp"), dict) or isinstance(c.get("web"), dict)
     has_ba = isinstance(c.get("baasapi"), dict) or isinstance(c.get("api"), dict)
     return has_fa and has_ba
+
+
+def _deploy_apk_only_enabled() -> bool:
+    v = os.environ.get("HZTECH_DEPLOY_APK_ONLY", "").strip().lower()
+    return v in ("1", "true", "yes")
+
+
+def _rsync_release_apk_only_to_host(cfg: dict) -> None:
+    """将本机 apk/hztech-app-release.apk 同步到远端 remote_path/apk/（单文件，不带全量镜像）。"""
+    apk_path = APK_DIR / DEFAULT_APK_NAME_RELEASE
+    if not apk_path.is_file():
+        raise FileNotFoundError(
+            "未找到 %s，请先构建: python3 baasapi/server_mgr.py build"
+            % apk_path
+        )
+    ssh_e = _rsync_ssh_e(cfg)
+    remote_base = "%s@%s:%s" % (cfg["user"], cfg["host"], cfg["remote_path"])
+    rp = cfg["remote_path"]
+    run_ssh("mkdir -p %s" % shlex.quote(rp + "/apk"), cfg=cfg)
+    _run_rsync(
+        [
+            "rsync",
+            "-avz",
+            "-e",
+            ssh_e,
+            str(apk_path),
+            remote_base + "/apk/" + apk_path.name,
+        ]
+    )
 
 
 def get_ssh_target():
@@ -386,6 +438,17 @@ def rsync_sync(exclude=None, rsync_mirror: bool = True):
 
     排除项见 _rsync_deploy_exclude_patterns（测试/IDE/Gradle/Dart 源码/本地部署脚本等）。
     rsync_mirror：见 _rsync_one。"""
+    if _deploy_apk_only_enabled():
+        print(
+            "HZTECH_DEPLOY_APK_ONLY=1：仅上传 %s（双机时 API 与 Flutter 各推一份，便于 /download/apk）"
+            % DEFAULT_APK_NAME_RELEASE
+        )
+        if has_dual_deploy():
+            _rsync_release_apk_only_to_host(target_config("baasapi"))
+            _rsync_release_apk_only_to_host(target_config("flutterapp"))
+        else:
+            _rsync_release_apk_only_to_host(target_config("flutterapp"))
+        return
     ex = list(exclude) if exclude else []
     if has_dual_deploy():
         c_api = target_config("baasapi")
@@ -836,7 +899,7 @@ def remote_restart_api():
     run_ssh(f"cd {remote_path} && mkdir -p apk baasapi/sqlite", check=True, cfg=c)
     run_ssh(_remote_install_requirements_sh(remote_path), cfg=c)
     run_ssh(
-        f"cd {remote_path} && MOBILEAPP_ROOT={remote_path} PORT={api_port} "
+        f"cd {remote_path} && {_remote_baasapi_start_env(remote_path, api_port)}"
         f"nohup python3 baasapi/main.py >> server.log 2>&1 & sleep 1",
         cfg=c,
     )
@@ -895,7 +958,7 @@ def remote_restart_single():
     run_ssh(f"cd {remote_path} && mkdir -p apk res baasapi/sqlite")
     run_ssh(_remote_install_requirements_sh(remote_path))
     run_ssh(
-        f"cd {remote_path} && MOBILEAPP_ROOT={remote_path} PORT={api_port} "
+        f"cd {remote_path} && {_remote_baasapi_start_env(remote_path, api_port)}"
         f"nohup python3 baasapi/main.py >> server.log 2>&1 & sleep 1"
     )
     run_ssh(
@@ -940,7 +1003,19 @@ def deploy_and_start(port=None, start_server=True, rsync_mirror: bool = True):
     cweb = target_config("flutterapp")
     if port is None:
         port = int(c.get("flutterapp_port", c.get("web_port", 9000)))
-    if has_dual_deploy():
+    if _deploy_apk_only_enabled():
+        if has_dual_deploy():
+            capi = target_config("baasapi")
+            print(
+                "Syncing APK only (%s) dual: BaasAPI %s + FlutterApp %s"
+                % (DEFAULT_APK_NAME_RELEASE, capi["host"], cweb["host"])
+            )
+        else:
+            print(
+                "Syncing APK only (%s) → %s:%s"
+                % (DEFAULT_APK_NAME_RELEASE, cweb["host"], cweb["remote_path"])
+            )
+    elif has_dual_deploy():
         capi = target_config("baasapi")
         print(
             "Syncing: BaasAPI (full backend) %s:%s → FlutterApp (web + apk only) %s:%s ..."

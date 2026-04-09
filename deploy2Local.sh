@@ -4,7 +4,7 @@
 # 默认行为（无额外参数时）：
 #   · 数据库后端：PostgreSQL（HZTECH_DB_BACKEND=postgresql，连接见 baasapi/database_config.json）
 #   · 不执行 init_db：仅当传 --db / -db / HZTECH_DB_SYNC=1 等时才跑本地迁移
-#   · Flutter：debug 模式 Android APK + release Web（android + web；iOS 默认跳过）
+#   · Flutter：默认 release Android APK（hztech-app-release.apk）+ release Web（iOS 默认跳过）
 #   · 启动：pip 依赖后构建，再 exec baasapi/run_local.sh（API+Web 静态，端口见脚本输出）
 #
 # 可选远端 PostgreSQL 安装：HZTECH_SSH_INSTALL_PG_AWS_ALPHA=1（与本脚本前几行一致）。
@@ -37,6 +37,9 @@ fi
 unset _ssh_pg
 
 hztech_require_python3
+
+# 与线上一致：默认构建/引用 hztech-app-release.apk（本地无远端 rsync，仅产物与 API 下载名对齐）
+export HZTECH_APP_ANDROID_APK="${HZTECH_APP_ANDROID_APK:-hztech-app-release.apk}"
 
 _PY="$(command -v python3)"
 exec "$_PY" "$(hztech_orchestrator_py)" local "$@"

@@ -2289,6 +2289,41 @@ def account_list_get(account_id: str) -> dict | None:
         conn.close()
 
 
+def account_list_list_okx(*, enabled_only: bool = True) -> list[dict]:
+    """列出表 account_list 中 OKX 且已配置密钥文件名的行；字段形状与 Account_List.json 单行一致，供交易机器人启停与 /api/tradingbots 使用。"""
+    conn = get_conn()
+    try:
+        sql = """SELECT account_id, account_name, exchange_account, symbol, initial_capital,
+                        trading_strategy, account_key_file, script_file, enabled, updated_at
+                 FROM account_list
+                 WHERE UPPER(TRIM(COALESCE(exchange_account, ''))) = 'OKX'
+                   AND TRIM(COALESCE(account_key_file, '')) != ''"""
+        if enabled_only:
+            sql += " AND COALESCE(enabled, 1) = 1"
+        sql += " ORDER BY account_id"
+        cur = conn.execute(sql)
+        out: list[dict] = []
+        for r in cur.fetchall():
+            en = r[8]
+            enabled_bool = bool(int(en)) if en is not None else True
+            out.append(
+                {
+                    "account_id": r[0],
+                    "account_name": str(r[1] or ""),
+                    "exchange_account": str(r[2] or ""),
+                    "symbol": str(r[3] or ""),
+                    "Initial_capital": float(r[4]),
+                    "trading_strategy": str(r[5] or ""),
+                    "account_key_file": str(r[6] or ""),
+                    "script_file": str(r[7] or ""),
+                    "enabled": enabled_bool,
+                }
+            )
+        return out
+    finally:
+        conn.close()
+
+
 def account_list_prune_except(keep_account_ids: set[str]) -> None:
     """删除 account_list 中不在 keep_account_ids 内的行（与 Account_List.json 账户集合对齐）。"""
     conn = get_conn()

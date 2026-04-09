@@ -10,6 +10,9 @@
   - 日期范围：2026-03-01 ～ 2026-04-09（整月 3 月 + 4 月前 9 天）
   - ADP 列：net_realized_pnl / close_pos_count / equlity_changed / balance_changed /
     balance_changed_pct / pnl_pct 一并写入（pnl_pct 口径与 db 重建一致：net_realized_pnl÷当月月初基准×100）
+  - market_truevolatility：当日本库 market_daily_bars.tr（标的同 Account_List symbol），
+    北京日历日 → UTC 日线键与 db.account_daily_performance_rebuild_for_accounts 一致（与主仓/mainrepo 拉取的 OKX 日线同源）
+  - efficiency_ratio：strategy_efficiency.close_pnl_efficiency_ratio(net_realized_pnl, tr)
 
 用法（在 baasapi 目录下）:
   python seed_alang_sandbox_mar_apr_2026.py
@@ -29,6 +32,7 @@ if str(SERVER_DIR) not in sys.path:
 
 import db  # noqa: E402
 from db_backend import IS_POSTGRES  # noqa: E402
+from strategy_efficiency import close_pnl_efficiency_ratio  # noqa: E402
 
 ACCOUNT_ID = "Alang_Sandbox"
 YEAR = 2026
@@ -60,6 +64,42 @@ def _month_days(y: int, m: int) -> list[date]:
     return out
 
 
+def _tr_map_for_beijing_days(
+    conn,
+    days: list[date],
+    inst_id: str,
+) -> dict[str, float]:
+    """market_daily_bars.day -> tr；查询键含北京日与映射后的 UTC 日（与 db 重建逻辑一致）。"""
+    keys: set[str] = set()
+    for d in days:
+        ds = d.isoformat()
+        keys.add(ds)
+        keys.add(db.utc_bar_day_for_beijing_ledger_day(ds))
+    keys.discard("")
+    if not keys:
+        return {}
+    ks = sorted(keys)
+    ph = ",".join("?" * len(ks))
+    cur = conn.execute(
+        f"""
+        SELECT day, tr FROM market_daily_bars
+        WHERE inst_id = ? AND day IN ({ph})
+        """,
+        (inst_id, *ks),
+    )
+    return {str(r[0]): float(r[1] or 0.0) for r in cur.fetchall()}
+
+
+def _market_tr_for_ledger_day(tr_map: dict[str, float], d: date) -> float | None:
+    ds = d.isoformat()
+    utc_k = db.utc_bar_day_for_beijing_ledger_day(ds)
+    if utc_k in tr_map:
+        return tr_map[utc_k]
+    if ds in tr_map:
+        return tr_map[ds]
+    return None
+
+
 def seed(
     conn,
     *,
@@ -70,17 +110,18 @@ def seed(
     rng_a = random.Random(seed_april)
 
     mar_days = _month_days(YEAR, 3)
-    apr_days = _month_days(YEAR, 4)
+    apr_days = [d for d in _month_days(YEAR, 4) if d <= LAST_DAY]
 
     start_del = f"{YEAR}-03-01T00:00:00.000Z"
-    end_del = f"{YEAR}-05-01T00:00:00.000Z"
+    # 覆盖 3/1..4/9 的 UTC 08:00 快照：早于 4/10 00:00 UTC 即可包住 4/9 08:00
+    end_del = f"{YEAR}-04-10T00:00:00.000Z"
 
     cur = conn.execute(
         """
         DELETE FROM account_daily_performance
-        WHERE account_id = ? AND day >= ? AND day < ?
+        WHERE account_id = ? AND day >= ? AND day <= ?
         """,
-        (ACCOUNT_ID, f"{YEAR}-03-01", f"{YEAR}-05-01"),
+        (ACCOUNT_ID, f"{YEAR}-03-01", LAST_DAY.isoformat()),
     )
     deleted_adp = int(cur.rowcount)
 
@@ -139,6 +180,10 @@ def seed(
     meta = db.account_list_get(ACCOUNT_ID)
     initial_cap = float(meta["initial_capital"]) if meta else 0.0
 
+    all_ledger_days = mar_days + apr_days
+    tr_map = _tr_map_for_beijing_days(conn, all_ledger_days, INSTRUMENT_ID)
+    tr_miss = 0
+
     cash = MAR_BASE
     eq = MAR_BASE
 
@@ -147,12 +192,27 @@ def seed(
         month_denom: float,
         rng: random.Random,
     ) -> None:
-        nonlocal cash, eq, n_adp, n_sn
+        nonlocal cash, eq, n_adp, n_sn, tr_miss
         bch = float(30 + rng.randint(1, 10))
         ech = float(5 + rng.randint(-10, 10))
         cash += bch
         eq += ech
         bcp = (bch / month_denom * 100.0) if month_denom > 1e-18 else None
+        # 演示：已实现盈亏与权益日变动对齐；平仓笔数可复现随机
+        net_realized = ech
+        close_n = int(rng.randint(1, 8))
+        pnl_pct = (
+            (net_realized / month_denom * 100.0) if month_denom > 1e-18 else None
+        )
+
+        mtr = _market_tr_for_ledger_day(tr_map, d)
+        if mtr is None:
+            tr_miss += 1
+            market_tv: float | None = None
+            eff: float | None = None
+        else:
+            market_tv = float(mtr)
+            eff = close_pnl_efficiency_ratio(net_realized, market_tv)
 
         conn.execute(
             """
@@ -161,16 +221,20 @@ def seed(
                equlity_changed, balance_changed, balance_changed_pct, pnl_pct,
                instrument_id, market_truevolatility, efficiency_ratio,
                updated_at)
-            VALUES (?, ?, 0, 0, ?, ?, ?, ?, ?, NULL, NULL, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 ACCOUNT_ID,
                 d.isoformat(),
+                net_realized,
+                close_n,
                 ech,
                 bch,
                 bcp,
-                0.0,
+                pnl_pct,
                 INSTRUMENT_ID,
+                market_tv,
+                eff,
                 now_s,
             ),
         )
@@ -229,12 +293,14 @@ def seed(
         "account_daily_performance_deleted": deleted_adp,
         "account_daily_performance_inserted": n_adp,
         "account_balance_snapshots_inserted": n_sn,
+        "market_daily_bars_inst": INSTRUMENT_ID,
+        "ledger_days_missing_tr": tr_miss,
     }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="写入 Alang_Sandbox 2026-03/04 演示数据（仅该 account_id）",
+        description="写入 Alang_Sandbox 2026-03-01～04-09 演示数据（仅该 account_id）",
     )
     parser.add_argument(
         "--seed-march",
@@ -264,7 +330,7 @@ def main() -> int:
     if args.dry_run:
         dr = (
             f"[dry-run] account_id={ACCOUNT_ID} "
-            f"{YEAR}-03-01..{YEAR}-04-30 基准: 3月={MAR_BASE} 4月={APR_BASE}"
+            f"{YEAR}-03-01..{LAST_DAY.isoformat()} 基准: 3月={MAR_BASE} 4月={APR_BASE}"
         )
         print(dr)
         return 0

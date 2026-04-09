@@ -2338,14 +2338,58 @@ class _PriceAxisBar extends StatelessWidget {
                   ? norm(longCost!) * w
                   : null;
 
+              // 总浮动盈亏在轴线上方、最新价格在轴线下方；轴线在二者之间的垂直正中（上下留白相等）。
+              // 现价竖标高度 18、以轴线为中心向上伸出，故 gap 须大于「半竖标 − 半轴线」以免与文字叠在一起。
+              const axisLineH = 6.0;
+              const axisGap = 12.0;
+              final floatSpan = TextSpan(
+                style: floatPlStyle.copyWith(fontSize: 16),
+                children: [
+                  TextSpan(text: floatPrefix),
+                  TextSpan(
+                    text: floatValueText,
+                    style: floatPlStyle.copyWith(
+                      fontSize: 16,
+                      color: AppFinanceStyle.chartLoss,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              );
+              final floatPainter = TextPainter(
+                text: floatSpan,
+                textAlign: TextAlign.center,
+                textDirection: Directionality.of(context),
+                maxLines: 2,
+              )..layout(maxWidth: topColW);
+              final hFloat = floatPainter.height;
+              final latestPainter = TextPainter(
+                text: TextSpan(
+                  text: latestPxText,
+                  style: curPxStyle.copyWith(
+                    fontSize: 16,
+                    color: Colors.lightBlueAccent,
+                  ),
+                ),
+                textAlign: TextAlign.center,
+                textDirection: Directionality.of(context),
+                maxLines: 2,
+              )..layout(maxWidth: topColW);
+              final hLatest = latestPainter.height;
+              final blockH =
+                  hFloat + axisGap + axisLineH + axisGap + hLatest;
+              final topY = math.max(0.0, (92 - blockH) / 2);
+              final lineTop = topY + hFloat + axisGap;
+              final lineCenterY = lineTop + axisLineH / 2;
+
               return Stack(
                 clipBehavior: Clip.none,
                 children: [
                   Positioned(
                     left: 0,
                     right: 0,
-                    top: 44,
-                    height: 6,
+                    top: lineTop,
+                    height: axisLineH,
                     child: DecoratedBox(
                       decoration: BoxDecoration(
                         color: lc.withValues(alpha: 0.2),
@@ -2356,7 +2400,7 @@ class _PriceAxisBar extends StatelessWidget {
                   if (xShort != null)
                     Positioned(
                       left: xShort - 1,
-                      top: 40,
+                      top: lineCenterY - 7,
                       width: 2,
                       height: 14,
                       child: DecoratedBox(
@@ -2371,7 +2415,7 @@ class _PriceAxisBar extends StatelessWidget {
                   if (xLong != null)
                     Positioned(
                       left: xLong - 1,
-                      top: 40,
+                      top: lineCenterY - 7,
                       width: 2,
                       height: 14,
                       child: DecoratedBox(
@@ -2385,7 +2429,7 @@ class _PriceAxisBar extends StatelessWidget {
                     ),
                   Positioned(
                     left: xCur - 1.5,
-                    top: 38,
+                    top: lineCenterY - 9,
                     width: 3,
                     height: 18,
                     child: DecoratedBox(
@@ -2399,7 +2443,7 @@ class _PriceAxisBar extends StatelessWidget {
                     duration: const Duration(milliseconds: 220),
                     curve: Curves.easeOutCubic,
                     left: xCur - 1,
-                    top: 34,
+                    top: lineCenterY - 13,
                     width: 2,
                     height: 8,
                     child: DecoratedBox(
@@ -2413,42 +2457,29 @@ class _PriceAxisBar extends StatelessWidget {
                     duration: const Duration(milliseconds: 220),
                     curve: Curves.easeOutCubic,
                     left: topColLeft,
-                    top: 0, // 标签在价格轴上方，随现价变动平滑横向跟随
-                    child: SizedBox(
-                      width: topColW,
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          RichText(
-                            textAlign: TextAlign.center,
-                            maxLines: 2,
-                            text: TextSpan(
-                              style: floatPlStyle.copyWith(fontSize: 16),
-                              children: [
-                                TextSpan(text: floatPrefix),
-                                TextSpan(
-                                  text: floatValueText,
-                                  style: floatPlStyle.copyWith(
-                                    fontSize: 16,
-                                    color: AppFinanceStyle.chartLoss,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            latestPxText,
-                            textAlign: TextAlign.center,
-                            maxLines: 2,
-                            style: curPxStyle.copyWith(
-                              fontSize: 16,
-                              color: Colors.lightBlueAccent,
-                            ),
-                          ),
-                        ],
+                    top: topY,
+                    width: topColW,
+                    height: hFloat,
+                    child: RichText(
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      text: floatSpan,
+                    ),
+                  ),
+                  AnimatedPositioned(
+                    duration: const Duration(milliseconds: 220),
+                    curve: Curves.easeOutCubic,
+                    left: topColLeft,
+                    top: lineTop + axisLineH + axisGap,
+                    width: topColW,
+                    height: hLatest,
+                    child: Text(
+                      latestPxText,
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      style: curPxStyle.copyWith(
+                        fontSize: 16,
+                        color: Colors.lightBlueAccent,
                       ),
                     ),
                   ),

@@ -1,11 +1,13 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'dart:async';
 
 import '../api/client.dart';
 import '../app_update_prompt.dart';
+import '../constants/app_download.dart';
 import '../debug_ingest_log.dart';
 import '../secure/prefs.dart';
 import '../theme/finance_style.dart';
@@ -337,6 +339,19 @@ class _LoginScreenState extends State<LoginScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  Future<void> _openApkDownload() async {
+    final uri = Uri.tryParse(awsReleaseApkDownloadUrl());
+    if (uri == null) {
+      _showSnack('下载地址无效');
+      return;
+    }
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!mounted) return;
+    if (!ok) {
+      _showSnack('无法打开下载链接');
+    }
+  }
+
   Widget _buildAppTitle() {
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -443,6 +458,23 @@ class _LoginScreenState extends State<LoginScreen> {
           width: double.infinity,
           child: Center(child: _buildAppTitle()),
         ),
+        actions: [
+          TextButton.icon(
+            onPressed: _loading ? null : _openApkDownload,
+            icon: Icon(Icons.download_rounded, color: _electricCyan.withValues(alpha: 0.95), size: 20),
+            label: Text(
+              'APK',
+              style: TextStyle(
+                color: _electricCyan.withValues(alpha: 0.95),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            style: TextButton.styleFrom(
+              foregroundColor: _electricCyan,
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+            ),
+          ),
+        ],
         backgroundColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,

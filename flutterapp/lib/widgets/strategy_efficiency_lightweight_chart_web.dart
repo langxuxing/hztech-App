@@ -65,6 +65,11 @@ class _StrategyEfficiencyLightweightChartState
         1000;
   }
 
+  /// 与“效能对比图”同思路：先按日期排序，再用稳定序号生成横轴时间，
+  /// 避免将脏日期字符串直接喂给 Lightweight Charts 导致整图不渲染。
+  static int _stableUtcSecondsByIndex(int index) =>
+      DateTime.utc(2000, 1, 1 + index).millisecondsSinceEpoch ~/ 1000;
+
   @override
   void initState() {
     super.initState();
@@ -89,19 +94,25 @@ class _StrategyEfficiencyLightweightChartState
   }
 
   String _buildSrcDoc() {
-    final byUtcSec = <int, Map<String, dynamic>>{};
-    for (final e in widget.rows) {
-      final t = _utcSecondsForChartTime(e.day);
-      if (t == null) continue;
-      byUtcSec[t] = {
-        't': t,
+    final sorted = List<StrategyDailyEfficiencyRow>.from(widget.rows)
+      ..sort((a, b) {
+        final ta = _utcSecondsForChartTime(a.day);
+        final tb = _utcSecondsForChartTime(b.day);
+        if (ta != null && tb != null) return ta.compareTo(tb);
+        if (ta != null) return -1;
+        if (tb != null) return 1;
+        return a.day.compareTo(b.day);
+      });
+    final payload = <Map<String, dynamic>>[];
+    for (var i = 0; i < sorted.length; i++) {
+      final e = sorted[i];
+      payload.add({
+        't': _stableUtcSecondsByIndex(i),
         'cashPct': e.cashDeltaPct,
         'trPct': e.trPct,
         'ratio': e.efficiencyRatio,
-      };
+      });
     }
-    final keys = byUtcSec.keys.toList()..sort();
-    final payload = keys.map((k) => byUtcSec[k]!).toList();
     final b64 = base64Encode(utf8.encode(jsonEncode(payload)));
 
     return '''
@@ -140,7 +151,7 @@ html,body{margin:0;padding:0;height:100%;background:#141419;overflow:hidden;}
       return;
     }
     if (!DATA || !DATA.length) {
-      setMsg('暂无可绘制的数据（或日期格式无法解析，需 YYYY-MM-DD 或 带可选小时的日历键）。');
+      setMsg('暂无可绘制的数据。');
       return;
     }
     var chart = LightweightCharts.createChart(el, {
@@ -277,7 +288,15 @@ html,body{margin:0;padding:0;height:100%;background:#141419;overflow:hidden;}
         priceScaleId: 'right',
         color: 'rgba(107, 114, 128, 0.95)',
         lineWidth: 2,
-        priceFormat: { type: 'price', precision: 6, minMove: 0.000001 },
+        priceFormat: {
+          type: 'custom',
+          minMove: 0.1,
+          formatter: function (p) {
+            var x = Number(p);
+            if (x !== x) return '';
+            return x.toFixed(1) + '%';
+          },
+        },
       });
       serE.setData(linePts);
     } else {

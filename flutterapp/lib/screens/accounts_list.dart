@@ -12,6 +12,9 @@ import '../utils/number_display_format.dart';
 import '../widgets/water_background.dart';
 import 'account_profit_screen.dart';
 
+/// 列表页金额口径：与 [WebDashboardScreen] 一致，默认权益；可切换为 USDT 现金余额及相关盈亏。
+enum _AccountsListBasis { equity, cash }
+
 /// 移动端「账户管理」汇总列表；点击进「账户收益」，数据字段与 Web「账户画像」一致（权益、现金、浮动、收益率等）。
 ///
 /// [sharedBots] 由 [MainScreen] 下发时与账户收益页同源，避免下拉框空窗；为空则本页并行请求 `/api/tradingbots`。
@@ -26,6 +29,10 @@ class AccountsList extends StatefulWidget {
 
 class _AccountsListState extends State<AccountsList> {
   final _prefs = SecurePrefs();
+
+  /// 默认权益口径；可切换现金余额口径（与 Web 总览一致）。
+  _AccountsListBasis _basis = _AccountsListBasis.equity;
+
   List<AccountProfit> _accounts = [];
 
   /// 仅当 [widget.sharedBots] 为空时由本页拉取填充。
@@ -77,13 +84,19 @@ class _AccountsListState extends State<AccountsList> {
   double get _aggregateTotalProfit =>
       _accounts.fold<double>(0, (s, a) => s + a.profitAmount);
 
+  double get _aggregateTotalCash =>
+      _accounts.fold<double>(0, (s, a) => s + (a.cashBalance ?? a.balanceUsdt));
+
+  double get _aggregateTotalCashProfit =>
+      _accounts.fold<double>(0, (s, a) => s + a.cashProfitAmount);
+
   double get _aggregateReturnPercent {
-    var initialSum = 0.0;
-    for (final a in _accounts) {
-      initialSum += a.initialBalance;
-    }
+    final initialSum = _aggregateInitialSum;
     if (initialSum <= 0) return 0;
-    return (_aggregateTotalProfit / initialSum) * 100;
+    if (_basis == _AccountsListBasis.equity) {
+      return (_aggregateTotalProfit / initialSum) * 100;
+    }
+    return (_aggregateTotalCashProfit / initialSum) * 100;
   }
 
   /// 优先显示交易账户名称，不将「OKX」等交易所名作为主标题。
@@ -358,7 +371,37 @@ class _AccountsListState extends State<AccountsList> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                    if (_accounts.isNotEmpty)
+                    if (_accounts.isNotEmpty) ...[
+                      Row(
+                        children: [
+                          const Spacer(),
+                          SegmentedButton<_AccountsListBasis>(
+                            style: ButtonStyle(
+                              visualDensity: VisualDensity.compact,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            showSelectedIcon: false,
+                            segments: const [
+                              ButtonSegment(
+                                value: _AccountsListBasis.equity,
+                                label: Text('权益'),
+                                tooltip: '权益金额口径',
+                              ),
+                              ButtonSegment(
+                                value: _AccountsListBasis.cash,
+                                label: Text('现金余额'),
+                                tooltip: '现金余额口径',
+                              ),
+                            ],
+                            selected: {_basis},
+                            onSelectionChanged: (s) {
+                              if (s.isEmpty) return;
+                              setState(() => _basis = s.first);
+                            },
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
                       FinanceCard(
                         padding: kIsWeb
                             ? AppFinanceStyle.webSummaryStripPadding
@@ -369,6 +412,15 @@ class _AccountsListState extends State<AccountsList> {
                             final pctColor = pct >= 0
                                 ? AppFinanceStyle.textProfit
                                 : AppFinanceStyle.textLoss;
+                            final midLabel = _basis == _AccountsListBasis.equity
+                                ? '总权益'
+                                : '总现金';
+                            final midValue = _basis == _AccountsListBasis.equity
+                                ? _aggregateTotalEquity
+                                : _aggregateTotalCash;
+                            final pctLabel = _basis == _AccountsListBasis.equity
+                                ? '平均收益率'
+                                : '平均现金收益率';
                             return Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
@@ -383,15 +435,15 @@ class _AccountsListState extends State<AccountsList> {
                                 Expanded(
                                   child: AppFinanceStyle.mobileSummaryStackCell(
                                     context,
-                                    label: '资产余额',
-                                    value: formatUiInteger(_aggregateTotalEquity),
+                                    label: midLabel,
+                                    value: formatUiInteger(midValue),
                                     valueColor: AppFinanceStyle.valueColor,
                                   ),
                                 ),
                                 Expanded(
                                   child: AppFinanceStyle.mobileSummaryStackCell(
                                     context,
-                                    label: '盈利率',
+                                    label: pctLabel,
                                     value: formatUiPercentLabel(pct),
                                     valueColor: pctColor,
                                   ),
@@ -401,6 +453,7 @@ class _AccountsListState extends State<AccountsList> {
                           },
                         ),
                       ),
+                    ],
                     if (_accounts.isNotEmpty) const SizedBox(height: 24),
                     Text(
                       '账户概览',
@@ -461,7 +514,23 @@ class _AccountsListState extends State<AccountsList> {
                                             ).textTheme.titleLarge?.fontSize ??
                                             22) ;
                                     final upl = _floatingForAccount(a);
-                                    final pct = a.profitPercent;
+                                    final pctEquity = a.profitPercent;
+                                    final pctCash = a.cashProfitPercent;
+                                    final pct = _basis == _AccountsListBasis.equity
+                                        ? pctEquity
+                                        : pctCash;
+                                    final currentLabel =
+                                        _basis == _AccountsListBasis.equity
+                                        ? '当前权益'
+                                        : '当前现金';
+                                    final currentValue =
+                                        _basis == _AccountsListBasis.equity
+                                        ? a.equityUsdt
+                                        : (a.cashBalance ?? a.balanceUsdt);
+                                    final returnLabel =
+                                        _basis == _AccountsListBasis.equity
+                                        ? '收益率'
+                                        : '现金收益率';
                                     TextStyle metricValue(Color c) =>
                                         (Theme.of(
                                                   context,
@@ -507,14 +576,13 @@ class _AccountsListState extends State<AccountsList> {
                                             Column(
                                               children: [
                                                 Text(
-                                                  '余额',
+                                                  '月初',
                                                   style: rowLabelStyle,
                                                 ),
                                                 const SizedBox(height: 8),
                                                 Text(
                                                   formatUiInteger(
-                                                    a.cashBalance ??
-                                                        a.balanceUsdt,
+                                                    a.initialBalance,
                                                   ),
                                                   style: metricValue(
                                                     AppFinanceStyle
@@ -529,12 +597,12 @@ class _AccountsListState extends State<AccountsList> {
                                             Column(
                                               children: [
                                                 Text(
-                                                  '权益',
+                                                  currentLabel,
                                                   style: rowLabelStyle,
                                                 ),
                                                 const SizedBox(height: 8),
                                                 Text(
-                                                  formatUiInteger(a.equityUsdt),
+                                                  formatUiInteger(currentValue),
                                                   style: metricValue(
                                                     AppFinanceStyle
                                                         .profitGreenEnd,
@@ -571,7 +639,7 @@ class _AccountsListState extends State<AccountsList> {
                                             Column(
                                               children: [
                                                 Text(
-                                                  '收益率',
+                                                  returnLabel,
                                                   style: rowLabelStyle,
                                                 ),
                                                 const SizedBox(height: 8),

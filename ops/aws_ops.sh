@@ -41,6 +41,8 @@ _start_api() {
 set -euo pipefail
 cd "$RPATH"
 mkdir -p apk baasapi/sqlite
+export HZTECH_TRADINGBOT_CTRL_DIR="${HZTECH_TRADINGBOT_CTRL_DIR:-/home/ec2-user/Alpha}"
+export HZTECH_TRADINGBOT_ACCOUNT_LIST_SOURCE="${HZTECH_TRADINGBOT_ACCOUNT_LIST_SOURCE:-database}"
 MOBILEAPP_ROOT="$RPATH" PORT="$PORT" nohup python3 baasapi/main.py >> server.log 2>&1 &
 sleep 2
 ss -tlnp 2>/dev/null | grep ":${PORT} " || netstat -tlnp 2>/dev/null | grep ":${PORT} " || true

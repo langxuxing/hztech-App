@@ -9,6 +9,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
+export MOBILEAPP_ROOT="$PROJECT_ROOT"
+# 交易机器人 shell：本地缺省为仓库内 baasapi/accounts/tradingbot_ctrl（勿与 AWS /home/ec2-user/Alpha 混用）
+export HZTECH_TRADINGBOT_CTRL_DIR="${HZTECH_TRADINGBOT_CTRL_DIR:-$PROJECT_ROOT/baasapi/accounts/tradingbot_ctrl}"
+# 本地默认读 Account_List.json；生产见 install_on_aws.sh / server_mgr 远端启动（database）
+export HZTECH_TRADINGBOT_ACCOUNT_LIST_SOURCE="${HZTECH_TRADINGBOT_ACCOUNT_LIST_SOURCE:-json}"
+
 # 数据库：优先 database_config.json；否则自动使用 database_config.local.sqlite.json（SQLite，见 deploy2Local.sh）
 _DB_JSON="$SCRIPT_DIR/database_config.json"
 _DB_SQLITE_TMPL="$SCRIPT_DIR/database_config.local.sqlite.json"

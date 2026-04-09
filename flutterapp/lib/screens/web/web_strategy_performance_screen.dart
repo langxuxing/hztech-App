@@ -8,7 +8,6 @@ import '../../api/client.dart';
 import '../../api/models.dart';
 import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
-import '../../utils/number_display_format.dart';
 import '../../widgets/strategy_efficiency_lightweight_chart.dart';
 import '../../widgets/water_background.dart';
 
@@ -89,7 +88,7 @@ class WebStrategyPerformanceScreen extends StatefulWidget {
       _WebStrategyPerformanceScreenState();
 }
 
-/// 策略能效分档（按账户均能效绝对阈值）：小于 0.25 灰、0.25–0.5 绿、≥0.5 深绿。
+/// 策略能效分档（按账户均原始比值）：小于 0.25 灰、0.25–0.5 绿、≥0.5 深绿（界面展示为×100 的 %）。
 enum _EffBand { gray, green, darkGreen }
 
 class _BotEfficiencyBundle {
@@ -372,12 +371,37 @@ class _WebStrategyPerformanceScreenState
     return '${v.toStringAsFixed(2)}%';
   }
 
-  /// 策略能效：界面与其它数值一致，四舍五入为整数。
-  static String _fmtEfficiencyCell(double? v) => formatUiIntegerOpt(v);
+  /// 策略能效：服务端为 cash_delta÷(TR×1e9)；界面以百分比展示（×100），一位小数。
+  static String _fmtEfficiencyCell(double? v) {
+    if (v == null || !v.isFinite) return '—';
+    return '${(v * 100).toStringAsFixed(1)}%';
+  }
 
+  /// 对比图 Y 轴已用「能效×100」；此处格式化为一位小数 + `%`。
   static String _fmtAxisEfficiency(double v) {
     if (!v.isFinite) return '';
-    return formatUiInteger(v);
+    return '${v.toStringAsFixed(1)}%';
+  }
+
+  /// 数据表列头：将 `2026-3-1`、`2026-03-1 9`、`2026-03-01T00:00:00` 等统一为 `YYYY-MM-DD`。
+  static String _fmtEfficiencyDayHeader(String rawDay) {
+    final raw = rawDay.trim();
+    if (raw.isEmpty) return rawDay;
+    var datePart = raw.split(RegExp(r'\s+')).first;
+    if (datePart.contains('T')) {
+      datePart = datePart.split('T').first;
+    }
+    final m = RegExp(r'^(\d{4})-(\d{1,2})-(\d{1,2})').firstMatch(datePart);
+    if (m == null) return rawDay;
+    final y = int.tryParse(m.group(1)!);
+    final mo = int.tryParse(m.group(2)!);
+    final d = int.tryParse(m.group(3)!);
+    if (y == null || mo == null || d == null) return rawDay;
+    if (mo < 1 || mo > 12 || d < 1 || d > 31) return rawDay;
+    final ys = y.toString().padLeft(4, '0');
+    final ms = mo.toString().padLeft(2, '0');
+    final ds = d.toString().padLeft(2, '0');
+    return '$ys-$ms-$ds';
   }
 
   static Widget _chartLegendRow(
@@ -450,9 +474,9 @@ class _WebStrategyPerformanceScreenState
       spacing: 20,
       runSpacing: 8,
       children: [
-        _bandLegendChip(context, _bandGray, '偏低（能效<0.25）'),
-        _bandLegendChip(context, _bandGreen, '中等（0.25–0.5）'),
-        _bandLegendChip(context, _bandDarkGreen, '优良（≥0.5）'),
+        _bandLegendChip(context, _bandGray, '偏低（能效<25.0%）'),
+        _bandLegendChip(context, _bandGreen, '中等（25.0%–50.0%）'),
+        _bandLegendChip(context, _bandDarkGreen, '优良（≥50.0%）'),
       ],
     );
   }
@@ -654,11 +678,12 @@ class _WebStrategyPerformanceScreenState
       for (final day in allDays) {
         final ratio = byDay[day];
         if (ratio != null && ratio.isFinite) {
-          spots.add(FlSpot(dayToX[day]!.toDouble(), ratio));
+          final yPct = ratio * 100;
+          spots.add(FlSpot(dayToX[day]!.toDouble(), yPct));
           final my = minY;
           final xy = maxY;
-          minY = my == null ? ratio : math.min(ratio, my);
-          maxY = xy == null ? ratio : math.max(ratio, xy);
+          minY = my == null ? yPct : math.min(yPct, my);
+          maxY = xy == null ? yPct : math.max(yPct, xy);
         }
       }
       if (spots.length < 2) continue;
@@ -965,7 +990,7 @@ class _WebStrategyPerformanceScreenState
                   vertical: 10,
                 ),
                 child: Text(
-                  e.day,
+                  _fmtEfficiencyDayHeader(e.day),
                   style: hdrStyle,
                   textAlign: TextAlign.center,
                 ),
@@ -1281,7 +1306,8 @@ class _WebStrategyPerformanceScreenState
           const SizedBox(height: 14),
           Text(
             '${eff.instId}：每日波动率% = |最高−最低|÷收盘 × 100%；'
-            '策略能效 = 当日现金增量÷（最高−最低） × 1e9。',
+            '策略能效 = 当日现金增量÷（|最高−最低| × 1e9）；'
+            '表格与图中以该比值×100 显示为百分比（一位小数）。',
             style: AppFinanceStyle.labelTextStyle(context).copyWith(
               fontSize: 14,
               height: 1.45,
@@ -1381,7 +1407,7 @@ class _WebStrategyPerformanceScreenState
                                         _chartLegendRow(
                                           context,
                                           const Color(0xFF6B7280),
-                                          '策略能效折线（右轴；灰/绿/深绿：<0.25 / 0.25–0.5 / ≥0.5）',
+                                          '策略能效折线（右轴 %；灰/绿/深绿：<25.0 / 25.0–50.0 / ≥50.0）',
                                           isLine: true,
                                         ),
                                       ],

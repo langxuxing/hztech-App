@@ -29,6 +29,9 @@ API_PORT="${API_PORT:-9001}"
 WEB_PORT="${WEB_PORT:-9000}"
 WEB_ROOT="${HZTECH_WEB_ROOT:-$PROJECT_ROOT/flutterapp/build/web}"
 export MOBILEAPP_ROOT="$PROJECT_ROOT"
+# 交易机器人 shell：AWS 上策略脚本目录；生产启停账户列表来自库表 account_list
+export HZTECH_TRADINGBOT_CTRL_DIR="${HZTECH_TRADINGBOT_CTRL_DIR:-/home/ec2-user/Alpha}"
+export HZTECH_TRADINGBOT_ACCOUNT_LIST_SOURCE="${HZTECH_TRADINGBOT_ACCOUNT_LIST_SOURCE:-database}"
 
 # 停止已有进程
 pkill -f "baasapi/main.py" 2>/dev/null || true
@@ -37,7 +40,10 @@ pkill -f "baasapi/simpleserver.py" 2>/dev/null || true
 sleep 1
 
 echo "启动 API Flask (端口 $API_PORT) ..."
-MOBILEAPP_ROOT="$PROJECT_ROOT" PORT=$API_PORT nohup python3 baasapi/main.py >> server.log 2>&1 &
+MOBILEAPP_ROOT="$PROJECT_ROOT" PORT=$API_PORT \
+  HZTECH_TRADINGBOT_CTRL_DIR="$HZTECH_TRADINGBOT_CTRL_DIR" \
+  HZTECH_TRADINGBOT_ACCOUNT_LIST_SOURCE="$HZTECH_TRADINGBOT_ACCOUNT_LIST_SOURCE" \
+  nohup python3 baasapi/main.py >> server.log 2>&1 &
 sleep 1
 
 echo "启动 Web 静态 (端口 $WEB_PORT, HZTECH_WEB_ROOT=$WEB_ROOT) ..."

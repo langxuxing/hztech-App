@@ -137,7 +137,7 @@ def _apply_local_defaults() -> None:
         "FLUTTER_DART_DEFINE_FILE", "flutterapp/dart_defines/local.json"
     )
     os.environ.setdefault("HZTECH_SKIP_IOS_BUILD", "1")
-    os.environ.setdefault("HZTECH_APP_ANDROID_APK", "hztech-app-debug.apk")
+    os.environ.setdefault("HZTECH_APP_ANDROID_APK", "hztech-app-release.apk")
 
 
 def _apply_aws_defaults() -> None:
@@ -146,6 +146,7 @@ def _apply_aws_defaults() -> None:
     os.environ.setdefault(
         "FLUTTER_DART_DEFINE_FILE", "flutterapp/dart_defines/production.json"
     )
+    os.environ.setdefault("HZTECH_APP_ANDROID_APK", "hztech-app-release.apk")
 
 
 def run_aws(ns: argparse.Namespace) -> int:
@@ -155,6 +156,9 @@ def run_aws(ns: argparse.Namespace) -> int:
         return 1
     os.environ["DEPLOY_CONFIG"] = str(cfg_path)
     _apply_aws_defaults()
+    if _env_truthy("HZTECH_DEPLOY_APK_ONLY"):
+        # 仅上传 release APK：避免构建 Web、避免全量 rsync（见 server_mgr.rsync_sync）
+        ns.build = "android"
     if ns.dart_define_file:
         os.environ["FLUTTER_DART_DEFINE_FILE"] = ns.dart_define_file
     if ns.db_backend:
@@ -490,7 +494,7 @@ AWS 角色默认（等同 deploy2AWS.sh）:
     loc_epilog = """
 Local 角色默认（等同 deploy2Local.sh）:
   HZTECH_DB_BACKEND=postgresql  默认不执行 init_db（仅 --db / HZTECH_DB_SYNC 等触发）
-  --build android,web  --flutter-mode debug（APK debug；Web 仍 release 构建）
+  --build android,web  --flutter-mode release（APK：hztech-app-release.apk；Web 仍 release 构建）
   执行 pip 依赖  最后 exec run_local.sh
   表结构手工 SQL 对照：baasapi/migrations/（如 add_account_tables.sql、add_account_tables.postgresql.sql、add_account_season.postgresql.sql、add_account_daily_performance.postgresql.sql）
 """
@@ -508,8 +512,8 @@ Local 角色默认（等同 deploy2Local.sh）:
     loc.add_argument(
         "--flutter-mode",
         choices=("debug", "release"),
-        default="debug",
-        help="默认 debug（与 deploy2Local 一致）",
+        default="release",
+        help="默认 release（hztech-app-release.apk；调试可传 --flutter-mode debug）",
     )
     loc.add_argument(
         "--db",

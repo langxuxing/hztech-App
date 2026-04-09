@@ -20,6 +20,7 @@ positions / profit-history / ticker / pending-orders 等通过本模块解析密
 from __future__ import annotations
 
 import logging
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -228,6 +229,21 @@ def account_basic_dict(row: dict) -> dict[str, Any]:
 
 def list_account_basics(*, enabled_only: bool = True) -> list[dict[str, Any]]:
     return [account_basic_dict(r) for r in iter_okx_accounts(enabled_only=enabled_only)]
+
+
+def list_account_basics_for_tradingbot(*, enabled_only: bool = True) -> list[dict[str, Any]]:
+    """
+    交易机器人启停与 can_control 用的账户列表。
+    - 默认（HZTECH_TRADINGBOT_ACCOUNT_LIST_SOURCE 未设或为 json）：与 list_account_basics 相同，来自 Account_List.json。
+    - database：来自库表 account_list（与 JSON 结构一致，生产环境以库为准）。
+    """
+    raw = (os.environ.get("HZTECH_TRADINGBOT_ACCOUNT_LIST_SOURCE") or "json").strip().lower()
+    if raw in ("database", "db", "sql"):
+        import db as _db
+
+        rows = _db.account_list_list_okx(enabled_only=enabled_only)
+        return [account_basic_dict(r) for r in rows]
+    return list_account_basics(enabled_only=enabled_only)
 
 
 def account_list_row_by_id(account_id: str) -> dict[str, Any] | None:
@@ -1169,16 +1185,18 @@ def collect_tradingbots_style_list(strategy_status_fn: Any) -> list[dict]:
     供 /api/tradingbots 使用：与 UnifiedTradingBot 兼容的列表，数据来自 Account_List。
     tradingbot_id = account_id；策略运行状态按 tradingbot_id 匹配 strategy_status。
     """
+    import tradingbot_ctrl as _tc
+
     st = strategy_status_fn()
     bots_status = (st or {}).get("bots") or {}
     out: list[dict] = []
-    for basic in list_account_basics(enabled_only=True):
+    for basic in list_account_basics_for_tradingbot(enabled_only=True):
         aid = basic["account_id"]
         bot_st = bots_status.get(aid) or {}
         is_running = bool(bot_st.get("running", False))
-        sf = (basic.get("script_file") or "").strip()
-        script_path = (ACCOUNTS_DIR / sf) if sf else None
-        can_ctrl = bool(sf and script_path and script_path.is_file())
+        sf = _tc.effective_account_script_file(basic.get("script_file") or "")
+        rp = _tc.resolve_account_script_file(sf)
+        can_ctrl = bool(rp is not None and rp.is_file())
         out.append(
             {
                 "tradingbot_id": aid,
