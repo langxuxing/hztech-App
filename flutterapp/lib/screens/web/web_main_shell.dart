@@ -59,14 +59,16 @@ class _WebMainShellState extends State<WebMainShell> {
 
   List<_NavItem> _itemsForRole() {
     final bots = _sharedBots;
-    return [
+    final out = <_NavItem>[
       const _NavItem(
         title: '金融动力学',
         icon: Icons.home_outlined,
         selectedIcon: Icons.home,
         page: WebHomeScreen(),
       ),
-      if (_role.canViewGlobalDashboard)
+    ];
+    if (_role.canViewGlobalDashboard) {
+      out.add(
         _NavItem(
           title: '账户总览',
           icon: Icons.dashboard_outlined,
@@ -76,8 +78,12 @@ class _WebMainShellState extends State<WebMainShell> {
             onOpenAccountProfit: _openAccountProfitFromDashboard,
           ),
         ),
-
-      if (_role.canViewStrategyPerformance)
+      );
+    }
+    // P0：IndexedStack 非当前 Tab 时不轮询 API/OKX（与移动端 MainScreen 一致）
+    final accountProfitTabIndex = out.length;
+    if (_role.canViewStrategyPerformance) {
+      out.add(
         _NavItem(
           title: '账户收益',
           icon: Icons.insights_outlined,
@@ -86,23 +92,33 @@ class _WebMainShellState extends State<WebMainShell> {
             sharedBots: bots,
             embedInShell: true,
             initialBotId: _profitInitialFromDashboard,
+            periodicRefreshActive: _index == accountProfitTabIndex,
           ),
         ),
-      if (_role.canViewStrategyStart)
+      );
+    }
+    if (_role.canViewStrategyStart) {
+      out.add(
         _NavItem(
           title: '策略启停',
           icon: Icons.play_circle_outline,
           selectedIcon: Icons.play_circle,
           page: WebTradingBotControlScreen(sharedBots: bots),
         ),
-      if (_role.canViewStrategyPerformance)
+      );
+    }
+    if (_role.canViewStrategyPerformance) {
+      out.add(
         _NavItem(
           title: '策略能效',
           icon: Icons.speed_outlined,
           selectedIcon: Icons.speed,
           page: WebStrategyPerformanceScreen(sharedBots: bots),
         ),
-      if (_role.canViewAccountPerformanceComparison)
+      );
+    }
+    if (_role.canViewAccountPerformanceComparison) {
+      out.add(
         _NavItem(
           title: '绩效赛马',
           icon: Icons.table_chart_outlined,
@@ -112,7 +128,10 @@ class _WebMainShellState extends State<WebMainShell> {
             embedInShell: true,
           ),
         ),
-      if (_role.canViewStrategyPerformance)
+      );
+    }
+    if (_role.canViewStrategyPerformance) {
+      out.add(
         _NavItem(
           title: '赛季与历史仓位',
           icon: Icons.emoji_events_outlined,
@@ -122,40 +141,57 @@ class _WebMainShellState extends State<WebMainShell> {
             appUserRole: _role,
           ),
         ),
-      if (_role.canConfigureLinkedOkxKeys)
-        _NavItem(
+      );
+    }
+    if (_role.canConfigureLinkedOkxKeys) {
+      out.add(
+        const _NavItem(
           title: '账户配置',
           icon: Icons.vpn_key_outlined,
           selectedIcon: Icons.vpn_key,
-          page: const CustomerAccountSetupScreen(embedInShell: true),
+          page: CustomerAccountSetupScreen(embedInShell: true),
         ),
-      if (_role.canViewAutoNettingTest)
+      );
+    }
+    if (_role.canViewAutoNettingTest) {
+      out.add(
         _NavItem(
           title: '收网测试',
           icon: Icons.science_outlined,
           selectedIcon: Icons.science,
           page: WebMoneyflowCatchnetScreen(sharedBots: bots, embedInShell: true),
         ),
-      if (_role.canManageUsers)
-        _NavItem(
+      );
+    }
+    if (_role.canManageUsers) {
+      out.add(
+        const _NavItem(
           title: '账户管理',
           icon: Icons.account_balance_wallet_outlined,
           selectedIcon: Icons.account_balance_wallet,
-          page: const WebAccountManagementScreen(embedInShell: true),
+          page: WebAccountManagementScreen(embedInShell: true),
         ),
-      if (_role.canManageUsers)
+      );
+    }
+    if (_role.canManageUsers) {
+      out.add(
         _NavItem(
           title: '用户管理',
           icon: Icons.group_outlined,
           selectedIcon: Icons.group,
           page: UserManagementScreen(embedInShell: true),
         ),
+      );
+    }
+    out.add(
       const _NavItem(
         title: 'APK下载',
         icon: Icons.download_outlined,
         selectedIcon: Icons.download,
         page: WebDownloadAppPage(),
       ),
+    );
+    out.add(
       _NavItem(
         title: '设置',
         icon: Icons.settings_outlined,
@@ -169,7 +205,8 @@ class _WebMainShellState extends State<WebMainShell> {
               : null,
         ),
       ),
-    ];
+    );
+    return out;
   }
 
   /// 左侧可滚动导航（宽屏），避免 NavigationRail 在垂直空间不足时裁切底部项。

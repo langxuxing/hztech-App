@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Ops 一键部署：逻辑在 baasapi/deploy_orchestrator.py（子命令 aws）。
-# 本脚本为薄封装；远端目录由 DEPLOY_CONFIG（默认 baasapi/deploy-aws.json）各段
-# remote_path 决定。aws-alpha（BaasAPI）与 Flutter 机统一为项目根，例如
-# /home/ec2-user/hztechapp（其下有 baasapi/、flutterapp/、apk/ 等）。
+# 本脚本为薄封装；目标机与路径由 DEPLOY_CONFIG（默认 baasapi/deploy-aws.json）决定。
+# 双机（默认 baasapi/deploy-aws.json）：BaasAPI → aws-alpha 54.66.108.150:9001（hztech.pem）；
+# Flutter 静态站 → aws-defi 54.252.181.151:9000（aws-defi.pem）。各段 host/key/port 以 JSON 为准。
+# remote_path 一般为 /home/ec2-user/hztechapp，其下为 baasapi/、flutterapp/build/web、apk/ 等。
 #
 # 等价：python3 baasapi/deploy_orchestrator.py aws [选项...]
 # 常用：./deploy2AWS.sh   ./deploy2AWS.sh --db   ./deploy2AWS.sh --verify

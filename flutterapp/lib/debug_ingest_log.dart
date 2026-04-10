@@ -26,20 +26,22 @@ Future<void> debugIngestLog({
     'runId': runId,
   };
   unawaited(ingest_io.appendDebugSessionNdjsonFromPayload(payload));
-  try {
-    await http
-        .post(
-          Uri.parse(
-            'http://127.0.0.1:7293/ingest/4067d007-374f-4ae3-8716-ed65822af179',
-          ),
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Debug-Session-Id': '9b3e33',
-          },
-          body: jsonEncode(payload),
-        )
-        .timeout(const Duration(seconds: 3));
-  } catch (_) {}
+  if (kDebugMode) {
+    try {
+      await http
+          .post(
+            Uri.parse(
+              'http://127.0.0.1:7293/ingest/4067d007-374f-4ae3-8716-ed65822af179',
+            ),
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Debug-Session-Id': '9b3e33',
+            },
+            body: jsonEncode(payload),
+          )
+          .timeout(const Duration(seconds: 3));
+    } catch (_) {}
+  }
   debugPrint('[9b3e33] $location $message ${jsonEncode(data)}');
 }
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 两台 AWS 服务（baasapi / flutterapp）远程启停与 HTTP 状态探测。
 # 配置：baasapi/deploy-aws.json（与 server_mgr 一致）
+# 启动 API 时会传入 HZTECH_CORS_ORIGINS（默认同 deploy-aws.json 里 Flutter 公网 URL），避免双机 Web 跨域被浏览器拦截。
 #
 #   ./ops/aws_ops.sh status [api|web|all]
 #   ./ops/aws_ops.sh stop|start|restart [api|web|all]
@@ -24,6 +25,21 @@ _ssh_web() {
     "${OPS_FLUTTER_SSH_USER}@${OPS_FLUTTER_SSH_HOST}" "$@"
 }
 
+# 经 SSH 在远端本机探测 HTTP（公网 curl 超时时用于区分安全组 vs 服务未监听）
+_ssh_local_curl_code() {
+  local ssh_fn=$1 port=$2 path=$3
+  local _qpt _qpath _out
+  _qpt=$(printf '%q' "$port")
+  _qpath=$(printf '%q' "$path")
+  _out=$("$ssh_fn" "PORT=${_qpt}; HP=${_qpath}; export PORT HP; bash -s" <<'R' 2>/dev/null || true
+# curl 失败时 -w 仍会输出 000，若再 || echo 000 会拼成 000000
+c=$(curl -sS -m 8 -o /dev/null -w "%{http_code}" "http://127.0.0.1:${PORT}${HP}" 2>/dev/null || true)
+printf '%s' "${c:-000}"
+R
+  )
+  echo "${_out//$'\r'/}" | tr -d '\n' | head -c 16
+}
+
 _remote_stop_port() {
   local ssh_fn=$1 port=$2
   local _qpt
@@ -34,10 +50,17 @@ R
 }
 
 _start_api() {
-  local _qrp _qpt
+  local _qrp _qpt _qcors _cors
   _qrp=$(printf '%q' "$OPS_BAASAPI_REMOTE_PATH")
   _qpt=$(printf '%q' "$OPS_BAASAPI_HTTP_PORT")
-  _ssh_api "RPATH=${_qrp}; PORT=${_qpt}; export RPATH PORT; bash -s" <<'R'
+  # Flutter Web 与 BaasAPI 不同 IP 时为跨域；HTTPS 域名（如 www.sfund.now）见 deploy-aws.json hztech_cors_extra_origins。
+  _default_cors="$OPS_FLUTTER_PUBLIC_URL"
+  if [[ -n "${OPS_CORS_EXTRA_ORIGINS:-}" ]]; then
+    _default_cors="${_default_cors},${OPS_CORS_EXTRA_ORIGINS}"
+  fi
+  _cors="${HZTECH_CORS_ORIGINS:-$_default_cors}"
+  _qcors=$(printf '%q' "$_cors")
+  _ssh_api "RPATH=${_qrp}; PORT=${_qpt}; HZTECH_CORS_ORIGINS=${_qcors}; export RPATH PORT HZTECH_CORS_ORIGINS; bash -s" <<'R'
 set -euo pipefail
 cd "$RPATH"
 mkdir -p apk baasapi/sqlite
@@ -84,13 +107,46 @@ case "$_cmd" in
   status)
     if [[ "$_tgt" == api || "$_tgt" == all ]]; then
       echo "=== BaasAPI ${OPS_BAASAPI_PUBLIC_URL} ==="
-      curl -sS -m 12 -o /dev/null -w "  GET /api/health → %{http_code}\n" \
-        "${OPS_BAASAPI_PUBLIC_URL}/api/health" || echo "  (请求失败)"
+      _code=$(curl -sS -m 12 -o /dev/null -w "%{http_code}" \
+        "${OPS_BAASAPI_PUBLIC_URL}/api/health" 2>/dev/null) || true
+      [[ -z "$_code" ]] && _code=000
+      echo "  GET /api/health（公网）→ ${_code}"
+      if [[ "$_code" == "000" ]]; then
+        echo "  （公网无响应：常见为安全组未放行 TCP ${OPS_BAASAPI_HTTP_PORT}、服务未启动、或公网 IP 已变）"
+        _lc=$(_ssh_local_curl_code _ssh_api "$OPS_BAASAPI_HTTP_PORT" "/api/health")
+        if [[ -z "$_lc" ]]; then
+          echo "  GET /api/health（SSH→本机）→ (无输出，SSH 失败；检查密钥与 ${OPS_BAASAPI_SSH_HOST})"
+        else
+          echo "  GET /api/health（SSH→本机）→ ${_lc}"
+          if [[ "$_lc" == "200" ]]; then
+            echo "  → 本机 API 正常：多为安全组/ACL 未对你当前网络开放 ${OPS_BAASAPI_HTTP_PORT}。"
+          elif [[ "$_lc" == "000" ]]; then
+            echo "  → 本机也未连通：可执行 $0 restart api 或 $0 ssh api 'ss -tlnp | grep :${OPS_BAASAPI_HTTP_PORT} ; tail -n 30 server.log'"
+          else
+            echo "  → 本机 HTTP 码 ${_lc}，查看: $0 ssh api 'tail -n 50 server.log'"
+          fi
+        fi
+      fi
     fi
     if [[ "$_tgt" == web || "$_tgt" == all ]]; then
       echo "=== Flutter 静态 ${OPS_FLUTTER_PUBLIC_URL} ==="
-      curl -sS -m 12 -o /dev/null -w "  GET / → %{http_code}\n" \
-        "${OPS_FLUTTER_PUBLIC_URL}/" || echo "  (请求失败)"
+      _wcode=$(curl -sS -m 12 -o /dev/null -w "%{http_code}" \
+        "${OPS_FLUTTER_PUBLIC_URL}/" 2>/dev/null) || true
+      [[ -z "$_wcode" ]] && _wcode=000
+      echo "  GET /（公网）→ ${_wcode}"
+      if [[ "$_wcode" == "000" ]]; then
+        _wl=$(_ssh_local_curl_code _ssh_web "$OPS_FLUTTER_HTTP_PORT" "/")
+        if [[ -z "$_wl" ]]; then
+          echo "  GET /（SSH→本机）→ (无输出，SSH 失败；检查密钥与 ${OPS_FLUTTER_SSH_HOST})"
+        else
+          echo "  GET /（SSH→本机）→ ${_wl}"
+          if [[ "$_wl" == "200" || "$_wl" == "503" ]]; then
+            echo "  → 本机 Web 可达（503 可能为未构建）；公网失败多为安全组未放行 ${OPS_FLUTTER_HTTP_PORT}。"
+          elif [[ "$_wl" == "000" ]]; then
+            echo "  → 本机未监听：可执行 $0 restart web"
+          fi
+        fi
+      fi
     fi
     ;;
   stop)

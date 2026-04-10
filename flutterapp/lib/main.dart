@@ -6,6 +6,7 @@ import 'screens/login_screen.dart';
 import 'screens/main_screen.dart';
 import 'screens/web/web_main_shell.dart';
 import 'theme/finance_style.dart';
+import 'widgets/backend_health_guard.dart';
 import 'widgets/water_background.dart';
 
 void main() {
@@ -117,8 +118,12 @@ class _AuthGateState extends State<_AuthGate> {
       );
     }
     if (kIsWeb) {
-      return WebMainShell(onLogout: _onLogout);
+      return BackendHealthGuard(
+        child: WebMainShell(onLogout: _onLogout),
+      );
     }
-    return MainScreen(onLogout: _onLogout);
+    return BackendHealthGuard(
+      child: MainScreen(onLogout: _onLogout),
+    );
   }
 }

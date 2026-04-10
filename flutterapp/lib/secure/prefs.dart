@@ -28,8 +28,15 @@ const String _kCompileTimeApiBase = String.fromEnvironment(
   defaultValue: '',
 );
 
-/// 未使用 [API_BASE_URL] 时的线上默认（与 deploy-aws.json `baasapi` 主机及 `baasapi_port` 一致）
-const String _kDefaultProductionApiBase = 'http://54.66.108.150:9001/';
+/// 与 deploy-aws.json `web_https_api_base_url` 一致，由 server_mgr 构建 Web 时注入。
+/// 在 **https** 页面打开 Web 端时优先于 [API_BASE_URL]，避免浏览器混合内容拦截（https 页请求 http API）。
+const String _kWebHttpsApiBase = String.fromEnvironment(
+  'WEB_HTTPS_API_BASE_URL',
+  defaultValue: '',
+);
+
+/// 未使用 [API_BASE_URL] 时的线上默认（经 nginx `www.sfund.now/api/` → BaasAPI）
+const String _kDefaultProductionApiBase = 'https://www.sfund.now/';
 
 /// 未使用 [API_BASE_URL] 时的本地调试默认（API 服务端口；Flutter Web 页面由 serve_web_static 等单独端口提供）
 const String _kDefaultDebugApiBase = 'http://127.0.0.1:9001/';
@@ -55,6 +62,22 @@ bool _isAwsPresetHost(String host) {
 }
 
 /// 将历史保存的「Web 口 / 旧 API 口」迁到当前约定的 API 口 9001（本机与局域网 8080/9000；AWS 旧默认 9000）。
+/// 在 **https** 站点上打开 Web 时，将已保存的公网 **http** API 升为 [WEB_HTTPS_API_BASE_URL]，避免混合内容拦截。
+String _webHttpsUpgradeIfNeeded(String normalized) {
+  if (!kIsWeb || _kWebHttpsApiBase.trim().isEmpty) return normalized;
+  if (Uri.base.scheme.toLowerCase() != 'https') return normalized;
+  Uri u;
+  try {
+    u = Uri.parse(normalized);
+  } catch (_) {
+    return normalized;
+  }
+  if (u.scheme.toLowerCase() != 'http') return normalized;
+  final h = u.host.toLowerCase();
+  if (_isLocalDevHost(h)) return normalized;
+  return _normalizeBackendBaseUrl(_kWebHttpsApiBase);
+}
+
 String migrateLegacyBackendApiPort(String raw) {
   final normalized = _normalizeBackendBaseUrl(raw);
   if (normalized.isEmpty) return normalized;
@@ -64,12 +87,20 @@ String migrateLegacyBackendApiPort(String raw) {
   } catch (_) {
     return _migrateLegacyBackendApiPortStringFallback(normalized);
   }
+  // 误将 nginx 的 /api 前缀写进基址会导致 /api/api/login；统一升为站点根。
+  final pathNoTrailSlash = uri.path.replaceAll(RegExp(r'/+$'), '');
+  if (pathNoTrailSlash == '/api') {
+    return _normalizeBackendBaseUrl(uri.resolve('/').toString());
+  }
   if (!uri.hasPort) return normalized;
   final h = uri.host.toLowerCase();
   final p = uri.port;
-  // Web 机 54.252.181.151:9000 为静态页；后台 API 在 54.66.108.150:9001（与 deploy-aws.json 双机一致）
+  // Web 机 54.252.181.151:9000 为静态页；线上 API 经 nginx → https://www.sfund.now/api/
   if (h == '54.252.181.151' && p == 9000) {
-    return _normalizeBackendBaseUrl('http://54.66.108.150:9001/');
+    return _normalizeBackendBaseUrl('https://www.sfund.now/');
+  }
+  if (h == '54.66.108.150' && p == 9001) {
+    return _normalizeBackendBaseUrl('https://www.sfund.now/');
   }
   int? newPort;
   if (_isLocalDevHost(h) && (p == 8080 || p == 9000)) {
@@ -89,8 +120,12 @@ String _migrateLegacyBackendApiPortStringFallback(String normalized) {
     MapEntry('127.0.0.1:9000', '127.0.0.1:9001'),
     MapEntry('localhost:8080', 'localhost:9001'),
     MapEntry('localhost:9000', 'localhost:9001'),
-    MapEntry('54.66.108.150:9000', '54.66.108.150:9001'),
-    MapEntry('54.252.181.151:9000', '54.66.108.150:9001'),
+    MapEntry('http://54.66.108.150:9000/', 'https://www.sfund.now/'),
+    MapEntry('http://54.66.108.150:9000', 'https://www.sfund.now/'),
+    MapEntry('http://54.252.181.151:9000/', 'https://www.sfund.now/'),
+    MapEntry('http://54.252.181.151:9000', 'https://www.sfund.now/'),
+    MapEntry('http://54.66.108.150:9001/', 'https://www.sfund.now/'),
+    MapEntry('http://54.66.108.150:9001', 'https://www.sfund.now/'),
   ]) {
     s = s.replaceAll(entry.key, entry.value);
   }
@@ -99,15 +134,21 @@ String _migrateLegacyBackendApiPortStringFallback(String normalized) {
 
 /// 安装后首次打开时的默认后端基址（用户可在设置里修改并持久化）。
 ///
-/// 优先级：编译期 `API_BASE_URL` > Debug 构建默认本机 > 非 Debug（Release/Profile）默认 AWS。
+/// 优先级：Debug → 本机；Web 且当前页为 **https** 且已注入 `WEB_HTTPS_API_BASE_URL` → 该 HTTPS API（避免混合内容）；
+/// 否则编译期 `API_BASE_URL`；否则非 Debug 默认 AWS HTTP。
 /// 真机连本机请用 `--dart-define=API_BASE_URL=http://<电脑局域网IP>:9001/`；
 /// Android 模拟器连本机可用 `http://10.0.2.2:9001/`。
 String get defaultBackendUrl {
-  if (_kCompileTimeApiBase.trim().isNotEmpty) {
-    return _normalizeBackendBaseUrl(_kCompileTimeApiBase);
-  }
   if (kDebugMode) {
     return _kDefaultDebugApiBase;
+  }
+  if (kIsWeb &&
+      _kWebHttpsApiBase.trim().isNotEmpty &&
+      Uri.base.scheme.toLowerCase() == 'https') {
+    return _normalizeBackendBaseUrl(_kWebHttpsApiBase);
+  }
+  if (_kCompileTimeApiBase.trim().isNotEmpty) {
+    return _normalizeBackendBaseUrl(_kCompileTimeApiBase);
   }
   return _kDefaultProductionApiBase;
 }
@@ -218,6 +259,11 @@ class SecurePrefs {
       );
       // #endregion
       await writeBackendUrl(_storage, _keyBackendUrl, next);
+    }
+    final upgraded = _webHttpsUpgradeIfNeeded(next);
+    if (upgraded != next) {
+      await writeBackendUrl(_storage, _keyBackendUrl, upgraded);
+      return upgraded;
     }
     return next;
   }

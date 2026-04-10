@@ -895,9 +895,10 @@ class _WebTradingBotControlScreenState
                                         crossAxisCount: cross,
                                         mainAxisSpacing: 28,
                                         crossAxisSpacing: 28,
+                                        // 卡片高度 = 格宽 / childAspectRatio；比值 ÷1.2 即高度 +20%
                                         childAspectRatio: cross >= 3
-                                            ? 0.91
-                                            : 0.78,
+                                            ? 0.91 / 1.2
+                                            : 0.78 / 1.2,
                                       ),
                                   delegate: SliverChildBuilderDelegate((
                                     context,

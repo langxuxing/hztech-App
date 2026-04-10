@@ -4,6 +4,8 @@ import 'dart:typed_data';
 
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../constants/poll_intervals.dart';
+
 /// OKX 公共频道 tickers（无需 API Key），用于 Web 端持仓卡片实时现价。
 /// 见 https://www.okx.com/docs-v5/zh/#websocket-api-public-channel-tickers-channel
 class OkxPublicTickerWs {
@@ -49,7 +51,7 @@ class OkxPublicTickerWs {
         }),
       );
 
-      _pingTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+      _pingTimer = Timer.periodic(PollIntervals.mediumPoll, (_) {
         try {
           _channel?.sink.add('ping');
         } catch (_) {}

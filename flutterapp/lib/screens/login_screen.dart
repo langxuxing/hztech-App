@@ -26,12 +26,13 @@ const Color _loginBtnBlue = Color(0xFF2563EB);
 /// 登录页固定表单宽度
 const double _formWidth = 320;
 
-/// 登录页隐藏入口：后端 API 基址预设（与 API 服务端口一致，默认 9001）。
+/// 登录页隐藏入口：后端 **根**基址（[ApiClient] 会再拼 `api/...`）。
+/// 线上 nginx 将 `https://www.sfund.now/api/` 反代到 BaasAPI 时，此处填 `https://www.sfund.now/`，勿填 `.../api/`。
 const List<({String label, String apiBaseUrl})> _kBackendPresets = [
   (label: '开发环境[本地]', apiBaseUrl: 'http://127.0.0.1:9001/'),
   (label: '开发环境', apiBaseUrl: 'http://192.168.3.41:9001/'),
-  (label: 'AWS-Alpha', apiBaseUrl: 'http://54.66.108.150:9001/'),
-  // (label: 'AWS-Defi', apiBaseUrl: 'http://54.252.181.151:9001/'),
+  (label: '线上(nginx)', apiBaseUrl: 'https://www.sfund.now/'),
+  (label: 'AWS-Alpha 直连', apiBaseUrl: 'http://54.66.108.150:9001/'),
 ];
 
 class LoginScreen extends StatefulWidget {
@@ -141,7 +142,8 @@ class _LoginScreenState extends State<LoginScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
-                      '请选择服务器地址（9001端口）。',
+                      '线上请选「nginx」：根地址为 https://www.sfund.now/（nginx 把 /api 转到后端）；'
+                      '勿填以 /api/ 结尾。直连 EC2 调试用「AWS-Alpha 直连」。',
                       style: TextStyle(
                         fontSize: 12,
                         color: AppFinanceStyle.textDefault,
@@ -294,9 +296,17 @@ class _LoginScreenState extends State<LoginScreen> {
         final looksUnreachable =
             s.contains('Failed to fetch') || s.contains('ClientException');
         if (kIsWeb && looksUnreachable) {
-          msg =
+          if (Uri.base.scheme.toLowerCase() == 'https' &&
+              rawUrl.trim().toLowerCase().startsWith('http://')) {
+            msg =
+                '当前为 HTTPS 页面，浏览器会拦截对 HTTP 接口的请求（混合内容）。请改用 HTTPS 的 API 根地址（需反代/证书），'
+                '或清空本地保存的后端地址后重载；勿在 https 站点填写 http://54.x 直连。';
+          } else {
+            msg =
               '无法连接后端 $rawUrl。请确认 API 已启动（例如 ./baasapi/run_local.sh，默认 API 端口 9001），'
-              '并填写 API 根地址（如 http://127.0.0.1:9001/）；勿将浏览器打开的 Web 静态端口当成 API。';
+              '并填写 API 根地址（线上 nginx 入口为 https://www.sfund.now/，勿填 …/api/）；'
+              '勿将浏览器打开的 Web 静态端口当成 API。';
+          }
         } else {
           msg = '网络异常: $e';
         }

@@ -33,6 +33,10 @@ class WebDashboardScreen extends StatefulWidget {
 class _WebDashboardScreenState extends State<WebDashboardScreen> {
   final _prefs = SecurePrefs();
 
+  /// 仪表盘卡片小图仅需近期快照：减小 limit 与窗口，降低 JSON 体积与后端排序压力（不经 OKX）。
+  static const int _kDashboardProfitHistoryLimit = 2500;
+  static const int _kDashboardProfitHistoryDays = 50;
+
   /// 默认权益口径；可切换现金余额口径。
   _DashboardBasis _basis = _DashboardBasis.equity;
 
@@ -63,8 +67,21 @@ class _WebDashboardScreenState extends State<WebDashboardScreen> {
             .where((id) => id.isNotEmpty)
             .toList();
         if (ids.isNotEmpty) {
+          final sinceUtc = DateTime.now()
+              .toUtc()
+              .subtract(const Duration(days: _kDashboardProfitHistoryDays));
+          final sinceIso =
+              '${sinceUtc.year.toString().padLeft(4, '0')}-'
+              '${sinceUtc.month.toString().padLeft(2, '0')}-'
+              '${sinceUtc.day.toString().padLeft(2, '0')}T00:00:00.000Z';
           final results = await Future.wait(
-            ids.map((id) => api.getBotProfitHistory(id)),
+            ids.map(
+              (id) => api.getBotProfitHistory(
+                id,
+                limit: _kDashboardProfitHistoryLimit,
+                since: sinceIso,
+              ),
+            ),
           );
           for (var i = 0; i < ids.length && i < results.length; i++) {
             final snaps = results[i].snapshots;

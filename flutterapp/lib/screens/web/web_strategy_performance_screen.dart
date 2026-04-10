@@ -8,73 +8,7 @@ import '../../api/client.dart';
 import '../../api/models.dart';
 import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
-import '../../widgets/strategy_efficiency_lightweight_chart.dart';
 import '../../widgets/water_background.dart';
-
-enum _EffBarHatchPattern { diagonal, grid }
-
-class _EffBarPatternLegendPainter extends CustomPainter {
-  const _EffBarPatternLegendPainter({
-    required this.pattern,
-    required this.baseColor,
-  });
-
-  final _EffBarHatchPattern pattern;
-  final Color baseColor;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final r = RRect.fromRectAndRadius(
-      Offset.zero & size,
-      const Radius.circular(2),
-    );
-    canvas.drawRRect(r, Paint()..color = baseColor);
-    canvas.save();
-    canvas.clipRRect(r);
-    final w = size.width;
-    final h = size.height;
-    if (pattern == _EffBarHatchPattern.grid) {
-      final g1 = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1
-        ..color = Colors.white.withValues(alpha: 0.4);
-      final g2 = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1
-        ..color = Colors.black.withValues(alpha: 0.22);
-      for (var g = 0.0; g <= w; g += w / 3) {
-        canvas.drawLine(Offset(0, g), Offset(w, g), g1);
-        canvas.drawLine(Offset(g, 0), Offset(g, h), g1);
-      }
-      final border = RRect.fromRectAndRadius(
-        Rect.fromLTWH(0.5, 0.5, w - 1, h - 1),
-        const Radius.circular(1.5),
-      );
-      canvas.drawRRect(border, g2);
-    } else {
-      final d1 = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1
-        ..color = Colors.black.withValues(alpha: 0.22);
-      final d2 = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1
-        ..color = Colors.white.withValues(alpha: 0.14);
-      for (var o = -w; o <= w; o += 4.0) {
-        canvas.drawLine(Offset(o, 0), Offset(o + w, h), d1);
-      }
-      for (var o = -h; o <= w; o += 4.0) {
-        canvas.drawLine(Offset(o, h), Offset(o + w, 0), d2);
-      }
-    }
-    canvas.restore();
-  }
-
-  @override
-  bool shouldRepaint(covariant _EffBarPatternLegendPainter oldDelegate) {
-    return oldDelegate.pattern != pattern || oldDelegate.baseColor != baseColor;
-  }
-}
 
 /// Web：策略效能——每日波动率、现金收益率%（较 UTC 月初）、策略能效；全账户对比折线可选账户，明细区下拉切换账户（日线波动全站共用缓存）。
 /// 明细表不展示权益/ATR 列；后端 API 仍可能返回这些字段供其他端使用。
@@ -431,35 +365,6 @@ class _WebStrategyPerformanceScreenState
               borderRadius: BorderRadius.circular(2),
             ),
           ),
-        const SizedBox(width: 8),
-        Text(
-          label,
-          style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 12),
-        ),
-      ],
-    );
-  }
-
-  /// 与 Lightweight Charts 内柱形图纹一致：波动率斜纹、现金收益率网格。
-  static Widget _chartBarPatternLegendRow(
-    BuildContext context, {
-    required _EffBarHatchPattern pattern,
-    required Color baseColor,
-    required String label,
-  }) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        SizedBox(
-          width: 22,
-          height: 14,
-          child: CustomPaint(
-            painter: _EffBarPatternLegendPainter(
-              pattern: pattern,
-              baseColor: baseColor,
-            ),
-          ),
-        ),
         const SizedBox(width: 8),
         Text(
           label,
@@ -935,6 +840,396 @@ class _WebStrategyPerformanceScreenState
     );
   }
 
+  /// 单账户「图表」Tab：左轴双柱（每日波动率%、现金收益率%），右轴折线（策略能效×100）；叠在同一坐标区，与全账户对比相同的按日 X。
+  Widget _buildDetailEfficiencyCharts(
+    BuildContext context, {
+    required List<StrategyDailyEfficiencyRow> rows,
+    required double chartPlotW,
+  }) {
+    if (rows.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 24),
+        child: Text(
+          '暂无按日数据',
+          style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 13),
+        ),
+      );
+    }
+
+    const chartH = 340.0;
+    const leftAxisReserved = 48.0;
+    const rightAxisReserved = 52.0;
+    final n = rows.length;
+    final cTr = _comparisonLineColors[0];
+    final cCash = _comparisonLineColors[1];
+    final cEff = _comparisonLineColors[2];
+
+    final barVals = <double>[
+      for (final r in rows) ...[
+        if (r.trPct != null && r.trPct!.isFinite) r.trPct!,
+        if (r.cashDeltaPct != null && r.cashDeltaPct!.isFinite) r.cashDeltaPct!,
+      ],
+    ];
+    final effVals = <double>[
+      for (final r in rows)
+        if (r.efficiencyRatio != null && r.efficiencyRatio!.isFinite)
+          r.efficiencyRatio! * 100,
+    ];
+    if (barVals.isEmpty && effVals.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 24),
+        child: Text(
+          '暂无有效数值点（波动、收益、能效均为空）',
+          style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 13),
+        ),
+      );
+    }
+
+    double barLo;
+    double barHi;
+    if (barVals.isNotEmpty) {
+      barLo = barVals.reduce(math.min);
+      barHi = barVals.reduce(math.max);
+      if (barLo == barHi) {
+        barLo -= 1e-9;
+        barHi += 1e-9;
+      }
+      final bPad = (barHi - barLo) * 0.12;
+      barLo -= bPad;
+      barHi += bPad;
+    } else {
+      barLo = 0;
+      barHi = 1;
+    }
+
+    double lineLo;
+    double lineHi;
+    if (effVals.isNotEmpty) {
+      lineLo = effVals.reduce(math.min);
+      lineHi = effVals.reduce(math.max);
+      if (lineLo == lineHi) {
+        lineLo -= 1e-9;
+        lineHi += 1e-9;
+      }
+      final lPad = (lineHi - lineLo) * 0.12;
+      lineLo -= lPad;
+      lineHi += lPad;
+    } else {
+      lineLo = 0;
+      lineHi = 1;
+    }
+
+    final labelStep = n <= _efficiencyDays
+        ? 1
+        : (n / 6).ceil().clamp(1, n);
+
+    final spotsEff = <FlSpot>[
+      for (var i = 0; i < n; i++)
+        if (rows[i].efficiencyRatio != null &&
+            rows[i].efficiencyRatio!.isFinite)
+          FlSpot(i.toDouble(), rows[i].efficiencyRatio! * 100),
+    ];
+
+    final maxX = n <= 1 ? 0.0 : (n - 1).toDouble();
+
+    final rodW = (chartPlotW / math.max(n, 1) * 0.2).clamp(2.5, 11.0);
+    final barGroups = <BarChartGroupData>[
+      for (var i = 0; i < n; i++)
+        BarChartGroupData(
+          x: i,
+          barsSpace: 3,
+          barRods: [
+            BarChartRodData(
+              toY: (rows[i].trPct != null && rows[i].trPct!.isFinite)
+                  ? rows[i].trPct!
+                  : 0,
+              width: rodW,
+              color: (rows[i].trPct != null && rows[i].trPct!.isFinite)
+                  ? cTr
+                  : Colors.transparent,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(2)),
+            ),
+            BarChartRodData(
+              toY:
+                  (rows[i].cashDeltaPct != null &&
+                      rows[i].cashDeltaPct!.isFinite)
+                  ? rows[i].cashDeltaPct!
+                  : 0,
+              width: rodW,
+              color:
+                  (rows[i].cashDeltaPct != null &&
+                      rows[i].cashDeltaPct!.isFinite)
+                  ? cCash
+                  : Colors.transparent,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(2)),
+            ),
+          ],
+        ),
+    ];
+
+    AxisTitles bottomTitles() => AxisTitles(
+      sideTitles: SideTitles(
+        showTitles: true,
+        reservedSize: 28,
+        interval: labelStep.toDouble(),
+        getTitlesWidget: (v, m) {
+          final i = v.round();
+          if (i < 0 || i >= n) {
+            return const SizedBox.shrink();
+          }
+          final d = _fmtEfficiencyDayHeader(rows[i].day);
+          final short = d.length >= 10 ? d.substring(5) : d;
+          return Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Text(
+              short,
+              style: TextStyle(
+                color: AppFinanceStyle.labelColor.withValues(alpha: 0.85),
+                fontSize: 9,
+              ),
+            ),
+          );
+        },
+      ),
+    );
+
+    Widget barLayer() => BarChart(
+          BarChartData(
+            alignment: BarChartAlignment.spaceBetween,
+            minY: barLo,
+            maxY: barHi,
+            barTouchData: BarTouchData(
+              enabled: barVals.isNotEmpty,
+              touchTooltipData: BarTouchTooltipData(
+                getTooltipColor: (_) =>
+                    AppFinanceStyle.cardBackground.withValues(alpha: 0.95),
+                tooltipPadding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                getTooltipItem: (group, groupIndex, rod, rodIndex) {
+                  if (rodIndex != 0) return null;
+                  final xi = group.x;
+                  if (xi < 0 || xi >= n) return null;
+                  final day = _fmtEfficiencyDayHeader(rows[xi].day);
+                  final r = rows[xi];
+                  return BarTooltipItem(
+                    '$day\n'
+                    '每日波动率% ${_fmtPctTwo(r.trPct)}\n'
+                    '现金收益率% ${_fmtPctTwo(r.cashDeltaPct)}\n'
+                    '策略能效 ${_fmtEfficiencyCell(r.efficiencyRatio)}',
+                    TextStyle(
+                      color: AppFinanceStyle.valueColor,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 11,
+                    ),
+                  );
+                },
+              ),
+            ),
+            gridData: FlGridData(
+              show: true,
+              drawVerticalLine: false,
+              getDrawingHorizontalLine: (v) => FlLine(
+                color: Colors.white.withValues(alpha: 0.06),
+                strokeWidth: 1,
+              ),
+            ),
+            borderData: FlBorderData(show: false),
+            titlesData: FlTitlesData(
+              show: true,
+              topTitles: const AxisTitles(
+                sideTitles: SideTitles(showTitles: false),
+              ),
+              rightTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: false,
+                  reservedSize: rightAxisReserved,
+                ),
+              ),
+              leftTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: barVals.isNotEmpty,
+                  reservedSize: leftAxisReserved,
+                  getTitlesWidget: (v, m) => Text(
+                    v.toStringAsFixed(1),
+                    style: TextStyle(
+                      color: AppFinanceStyle.labelColor.withValues(alpha: 0.85),
+                      fontSize: 9,
+                    ),
+                  ),
+                ),
+              ),
+              bottomTitles: bottomTitles(),
+            ),
+            barGroups: barGroups,
+          ),
+          duration: const Duration(milliseconds: 150),
+        );
+
+    Widget lineLayer({
+      required bool showBottomAxis,
+      required bool enableTouch,
+    }) =>
+        LineChart(
+          LineChartData(
+            minX: 0,
+            maxX: maxX,
+            minY: lineLo,
+            maxY: lineHi,
+            gridData: FlGridData(
+              show: showBottomAxis,
+              drawVerticalLine: false,
+              getDrawingHorizontalLine: (v) => FlLine(
+                color: Colors.white.withValues(alpha: 0.05),
+                strokeWidth: 1,
+              ),
+            ),
+            borderData: FlBorderData(show: false),
+            titlesData: FlTitlesData(
+              show: true,
+              topTitles: const AxisTitles(
+                sideTitles: SideTitles(showTitles: false),
+              ),
+              leftTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: false,
+                  reservedSize: leftAxisReserved,
+                ),
+              ),
+              rightTitles: AxisTitles(
+                sideTitles: SideTitles(
+                  showTitles: effVals.isNotEmpty,
+                  reservedSize: rightAxisReserved,
+                  getTitlesWidget: (v, m) => Text(
+                    _fmtAxisEfficiency(v),
+                    style: TextStyle(
+                      color: cEff.withValues(alpha: 0.95),
+                      fontSize: 9,
+                    ),
+                  ),
+                ),
+              ),
+              bottomTitles: showBottomAxis
+                  ? bottomTitles()
+                  : AxisTitles(
+                      sideTitles: SideTitles(
+                        showTitles: false,
+                        reservedSize: 28,
+                      ),
+                    ),
+            ),
+            lineTouchData: LineTouchData(
+              enabled: enableTouch,
+              touchTooltipData: LineTouchTooltipData(
+                getTooltipColor: (_) =>
+                    AppFinanceStyle.cardBackground.withValues(alpha: 0.95),
+                tooltipPadding: const EdgeInsets.all(10),
+                getTooltipItems: (touchedSpots) {
+                  return touchedSpots.map((s) {
+                    final xi = s.x.round().clamp(0, n - 1);
+                    final day = _fmtEfficiencyDayHeader(rows[xi].day);
+                    final r = rows[xi];
+                    return LineTooltipItem(
+                      '$day\n'
+                      '策略能效 ${_fmtEfficiencyCell(r.efficiencyRatio)}\n'
+                      '波动 ${_fmtPctTwo(r.trPct)} · 收益 ${_fmtPctTwo(r.cashDeltaPct)}',
+                      TextStyle(
+                        color: AppFinanceStyle.valueColor,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    );
+                  }).toList();
+                },
+              ),
+            ),
+            lineBarsData: [
+              if (spotsEff.isNotEmpty)
+                LineChartBarData(
+                  spots: spotsEff,
+                  color: cEff,
+                  barWidth: 2.5,
+                  dotData: FlDotData(show: n <= 22),
+                  belowBarData: BarAreaData(show: false),
+                ),
+            ],
+          ),
+          duration: const Duration(milliseconds: 150),
+        );
+
+    final hasBars = barVals.isNotEmpty;
+    final hasLine = effVals.isNotEmpty;
+
+    Widget chartCore() {
+      if (hasBars && hasLine) {
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            barLayer(),
+            IgnorePointer(
+              child: lineLayer(
+                showBottomAxis: false,
+                enableTouch: false,
+              ),
+            ),
+          ],
+        );
+      }
+      if (hasBars) {
+        return barLayer();
+      }
+      return lineLayer(
+        showBottomAxis: true,
+        enableTouch: true,
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '左轴：每日波动率%、现金收益率%（柱）；右轴：策略能效（折线，比值×100）',
+          style: AppFinanceStyle.labelTextStyle(context).copyWith(
+            fontSize: 12,
+            color: AppFinanceStyle.labelColor.withValues(alpha: 0.75),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 16,
+          runSpacing: 6,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            _chartLegendRow(context, cTr, '每日波动率%（柱）', isLine: false),
+            _chartLegendRow(context, cCash, '现金收益率%（柱）', isLine: false),
+            _chartLegendRow(
+              context,
+              cEff,
+              '策略能效（折线，右轴 %）',
+              isLine: true,
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          width: chartPlotW,
+          height: chartH,
+          child: chartCore(),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          barVals.isEmpty
+              ? '暂无波动/收益柱数据，仅显示策略能效折线（右轴）。'
+              : effVals.isEmpty
+                  ? '暂无策略能效折线，仅显示波动与收益柱（左轴）。'
+                  : '点击柱查看当日三项数值；折线为策略能效（独立右轴刻度）。',
+          style: AppFinanceStyle.labelTextStyle(context).copyWith(fontSize: 11),
+        ),
+      ],
+    );
+  }
+
   Widget _transposedMetricsTable(
     BuildContext context,
     List<StrategyDailyEfficiencyRow> rows,
@@ -1349,81 +1644,51 @@ class _WebStrategyPerformanceScreenState
                   ),
                 ),
                 SizedBox(
-                  height: 460,
+                  height: 640,
                   child: TabBarView(
                     physics: const NeverScrollableScrollPhysics(),
                     children: [
                       LayoutBuilder(
                         builder: (context, c) {
-                          final mw = math
+                          final viewW = MediaQuery.sizeOf(context).width;
+                          final tabW = c.maxWidth.isFinite
+                              ? c.maxWidth
+                              : viewW;
+                          final chartScrollMinW = math
                               .max(
-                                c.maxWidth.isFinite ? c.maxWidth : 720.0,
-                                720.0,
+                                tabW,
+                                math.max(
+                                  viewW - 64,
+                                  math.max(
+                                    720.0,
+                                    rows.length * 40.0 + 120,
+                                  ),
+                                ),
                               )
                               .toDouble();
+                          final chartPlotW = math
+                              .max(chartScrollMinW - 40, 560.0)
+                              .toDouble();
                           return SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
                             physics: const ClampingScrollPhysics(),
-                            child: ConstrainedBox(
-                              constraints: BoxConstraints(minWidth: mw),
-                              child: Padding(
-                                padding: const EdgeInsets.only(
-                                  top: 10,
-                                  right: 8,
+                            child: SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              physics: const ClampingScrollPhysics(),
+                              child: ConstrainedBox(
+                                constraints: BoxConstraints(
+                                  minWidth: chartScrollMinW,
                                 ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Wrap(
-                                      spacing: 16,
-                                      runSpacing: 6,
-                                      crossAxisAlignment:
-                                          WrapCrossAlignment.center,
-                                      children: [
-                                        _chartBarPatternLegendRow(
-                                          context,
-                                          pattern: _EffBarHatchPattern.diagonal,
-                                          baseColor: const Color.fromRGBO(
-                                            245,
-                                            245,
-                                            245,
-                                            0.58,
-                                          ),
-                                          label:
-                                              '每日波动率%（上半轴柱，斜纹；着色：白/黄/红 <6% / 6–10% / >10%）',
-                                        ),
-                                        _chartBarPatternLegendRow(
-                                          context,
-                                          pattern: _EffBarHatchPattern.grid,
-                                          baseColor: const Color.fromRGBO(
-                                            34,
-                                            197,
-                                            94,
-                                            0.62,
-                                          ),
-                                          label:
-                                              '现金收益率%（下半轴柱，网格；着色：灰/白/绿 <0.5% / 0.5–1% / ≥1%）',
-                                        ),
-                                        _chartLegendRow(
-                                          context,
-                                          const Color(0xFF6B7280),
-                                          '策略能效折线（右轴 %；灰/绿/深绿：<25.0 / 25.0–50.0 / ≥50.0）',
-                                          isLine: true,
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 8),
-                                    StrategyEfficiencyLightweightChart(
-                                      rows: rows,
-                                      height: 360,
-                                    ),
-                                    Text(
-                                      '图表：TradingView Lightweight Charts · 可横向滑动查看',
-                                      style: AppFinanceStyle.labelTextStyle(
-                                        context,
-                                      ).copyWith(fontSize: 11),
-                                    ),
-                                  ],
+                                child: Padding(
+                                  padding: const EdgeInsets.only(
+                                    top: 10,
+                                    right: 8,
+                                    bottom: 12,
+                                  ),
+                                  child: _buildDetailEfficiencyCharts(
+                                    context,
+                                    rows: rows,
+                                    chartPlotW: chartPlotW,
+                                  ),
                                 ),
                               ),
                             ),

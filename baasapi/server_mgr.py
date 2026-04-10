@@ -1,8 +1,9 @@
 """AWS 部署配置与 SSH 管理。从 baasapi/deploy-aws.json 读取配置；盘符目录为 baasapi/、flutterapp/，
 配置段键名仍为 flutterapp / baasapi（ports：flutterapp_port、baasapi_port）。兼容旧键 web / api。
 
-双机部署（同时配置 flutterapp 与 baasapi 段）：BaasAPI 主机同步完整后端（含数据库目录）；Flutter 主机
-仅同步 APK、Flutter Web 产物与静态站所需的最小 baasapi 文件，不部署、不创建、并清理遗留的 sqlite/。"""
+双机部署（同时配置 flutterapp 与 baasapi 段且 host/remote_path 不同）：BaasAPI 主机同步完整后端（含数据库目录）；Flutter 主机
+仅同步 APK、Flutter Web 产物与静态站所需的最小 baasapi 文件，不部署、不创建、并清理遗留的 sqlite/。
+若两段指向同一台同一 remote_path，则按单机处理（整包 + flutterapp/build/web），避免双机第二步 rm -rf 远端 baasapi。"""
 from pathlib import Path
 import json
 import os
@@ -79,8 +80,12 @@ def load_config():
 
 
 def default_hztech_api_base_url() -> str:
-    """与 deploy2AWS.sh 一致：双机取 baasapi 段 host，单机补齐 host；用于未设置 HZTECH_API_BASE_URL 时。"""
+    """未设置 HZTECH_API_BASE_URL 时：优先 deploy-aws.json `web_https_api_base_url`（公网 nginx 入口），否则 EC2 直连。"""
     c = load_config()
+    pub = c.get("web_https_api_base_url")
+    if isinstance(pub, str) and pub.strip():
+        u = pub.strip()
+        return u if u.endswith("/") else u + "/"
     scheme = str(c.get("scheme") or "http")
     api_port = int(
         c.get("baasapi_port", c.get("app_port", c.get("web_port", 9001)))
@@ -153,6 +158,27 @@ def has_dual_deploy() -> bool:
     has_fa = isinstance(c.get("flutterapp"), dict) or isinstance(c.get("web"), dict)
     has_ba = isinstance(c.get("baasapi"), dict) or isinstance(c.get("api"), dict)
     return has_fa and has_ba
+
+
+def _deploy_same_remote_target() -> bool:
+    """flutterapp 与 baasapi 是否同一 SSH 目标（同 host、port、remote_path）。
+
+    为 True 时不可走双机 rsync 第二步（会清空远端 baasapi/），应按单机同步并推送 build/web。
+    """
+    if not has_dual_deploy():
+        return False
+    fa = target_config("flutterapp")
+    ba = target_config("baasapi")
+    return (
+        fa["host"] == ba["host"]
+        and fa["remote_path"] == ba["remote_path"]
+        and int(fa.get("port", 22)) == int(ba.get("port", 22))
+    )
+
+
+def split_dual_deploy() -> bool:
+    """配置里有两段且物理上分两台机器部署。"""
+    return has_dual_deploy() and not _deploy_same_remote_target()
 
 
 def _deploy_apk_only_enabled() -> bool:
@@ -443,14 +469,14 @@ def rsync_sync(exclude=None, rsync_mirror: bool = True):
             "HZTECH_DEPLOY_APK_ONLY=1：仅上传 %s（双机时 API 与 Flutter 各推一份，便于 /download/apk）"
             % DEFAULT_APK_NAME_RELEASE
         )
-        if has_dual_deploy():
+        if split_dual_deploy():
             _rsync_release_apk_only_to_host(target_config("baasapi"))
             _rsync_release_apk_only_to_host(target_config("flutterapp"))
         else:
             _rsync_release_apk_only_to_host(target_config("flutterapp"))
         return
     ex = list(exclude) if exclude else []
-    if has_dual_deploy():
+    if split_dual_deploy():
         c_api = target_config("baasapi")
         api_ex = ex + ["flutterapp", "apk"]
         _rsync_one(c_api, api_ex, sync_flutter_web=False, rsync_mirror=rsync_mirror)
@@ -479,6 +505,18 @@ def _flutter_build_env():
     return env
 
 
+def _web_https_api_dart_define_args() -> list[str]:
+    """deploy-aws.json 顶层 web_https_api_base_url：HTTPS 站点上 Web 客户端用，避免混合内容拦截。"""
+    try:
+        c = load_config()
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return []
+    v = c.get("web_https_api_base_url")
+    if not isinstance(v, str) or not v.strip():
+        return []
+    return ["--dart-define", "WEB_HTTPS_API_BASE_URL=%s" % v.strip()]
+
+
 def _flutter_dart_define_args():
     """为 flutter build 追加 --dart-define / --dart-define-from-file（API 基址等）。
 
@@ -488,17 +526,22 @@ def _flutter_dart_define_args():
 
     若均未设置且存在 flutterapp/dart_defines/production.json，则默认使用该文件（Release APK/Web
     与 AWS 线上 API 一致；与 prefs.dart 中非 Debug 默认基址对齐）。
+
+    另追加 deploy-aws.json 的 web_https_api_base_url → WEB_HTTPS_API_BASE_URL（仅 Web 在 https 页生效）。
     """
+    https_extra = _web_https_api_dart_define_args()
     args: list[str] = []
     url = os.environ.get("HZTECH_API_BASE_URL", "").strip()
     if url:
         args.extend(["--dart-define", "API_BASE_URL=%s" % url])
+        args.extend(https_extra)
         return args
     f = os.environ.get("FLUTTER_DART_DEFINE_FILE", "").strip()
     if not f:
         default_file = flutterapp / "dart_defines" / "production.json"
         if default_file.is_file():
             args.extend(["--dart-define-from-file", str(default_file.resolve())])
+        args.extend(https_extra)
         return args
     path = Path(f)
     if not path.is_absolute():
@@ -508,6 +551,7 @@ def _flutter_dart_define_args():
         print("警告: FLUTTER_DART_DEFINE_FILE 不是有效文件，已忽略: %s" % path)
         return args
     args.extend(["--dart-define-from-file", str(path)])
+    args.extend(https_extra)
     return args
 
 
@@ -972,8 +1016,8 @@ def remote_restart_single():
 
 
 def remote_restart():
-    """双机时先 API 后 Web；单机时与原先一致。"""
-    if has_dual_deploy():
+    """分两台时先 API 后 Web；单机或同机两段配置时用一次 SSH 起双进程。"""
+    if split_dual_deploy():
         remote_restart_api()
         remote_restart_web()
     else:
@@ -981,8 +1025,8 @@ def remote_restart():
 
 
 def remote_pip_install_only():
-    """仅在远端执行 pip install -r baasapi/requirements.txt（双机则两台都执行）。"""
-    if has_dual_deploy():
+    """仅在远端执行 pip install -r baasapi/requirements.txt（真双机则两台都执行）。"""
+    if split_dual_deploy():
         c_api = target_config("baasapi")
         c_web = target_config("flutterapp")
         print("pip install on BaasAPI host %s ..." % c_api["host"])
@@ -1004,7 +1048,7 @@ def deploy_and_start(port=None, start_server=True, rsync_mirror: bool = True):
     if port is None:
         port = int(c.get("flutterapp_port", c.get("web_port", 9000)))
     if _deploy_apk_only_enabled():
-        if has_dual_deploy():
+        if split_dual_deploy():
             capi = target_config("baasapi")
             print(
                 "Syncing APK only (%s) dual: BaasAPI %s + FlutterApp %s"
@@ -1015,11 +1059,16 @@ def deploy_and_start(port=None, start_server=True, rsync_mirror: bool = True):
                 "Syncing APK only (%s) → %s:%s"
                 % (DEFAULT_APK_NAME_RELEASE, cweb["host"], cweb["remote_path"])
             )
-    elif has_dual_deploy():
+    elif split_dual_deploy():
         capi = target_config("baasapi")
         print(
             "Syncing: BaasAPI (full backend) %s:%s → FlutterApp (web + apk only) %s:%s ..."
             % (capi["host"], capi["remote_path"], cweb["host"], cweb["remote_path"])
+        )
+    elif has_dual_deploy() and _deploy_same_remote_target():
+        print(
+            "Syncing (flutterapp + baasapi 同机同目录): %s:%s，含 flutterapp/build/web …"
+            % (cweb["host"], cweb["remote_path"])
         )
     else:
         print("Syncing to %s:%s ..." % (cweb["host"], cweb["remote_path"]))
@@ -1032,7 +1081,7 @@ def deploy_and_start(port=None, start_server=True, rsync_mirror: bool = True):
     api_port = _api_listen_port(c)
     rp = get_remote_path()
     scheme = c.get("scheme", "http")
-    if has_dual_deploy():
+    if split_dual_deploy():
         capi = target_config("baasapi")
         print(
             "Deploy done. BaasAPI: %s://%s:%s/api/  FlutterApp: %s://%s:%s/  "

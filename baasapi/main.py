@@ -1110,8 +1110,17 @@ def api_strategy_analyst_auto_net_test():
 
 
 def _collect_accounts_profit() -> list[dict]:
-    """与 /api/account-profit 一致：数据来自 Account_List.json（AccountMgr）。"""
-    return _account_mgr.collect_accounts_profit_for_api(_db)
+    """与 /api/account-profit 一致：数据来自 Account_List.json（AccountMgr）。
+
+    客户仅对绑定 account_id 拉 OKX balance，避免扫全站启用账户。
+    """
+    allow: frozenset[str] | None = None
+    if _is_customer():
+        linked = _db.user_get_linked_account_ids(g.current_username)
+        allow = frozenset(str(x).strip() for x in linked if str(x).strip())
+    return _account_mgr.collect_accounts_profit_for_api(
+        _db, account_ids_allowlist=allow
+    )
 
 
 # ---------- API：App 所需（与 QtraderApi 一致，需登录） ----------

@@ -16,17 +16,22 @@ bool _isConnectionClosedError(Object e, StackTrace s) {
 
 const _timeout = Duration(seconds: 30);
 
+http.Client? _sharedApiHttpClient;
+
+http.Client _apiHttpClient() => _sharedApiHttpClient ??= http.Client();
+
 Future<http.Response> _getWithRetry(
   Uri uri,
   Map<String, String> headers,
 ) async {
+  final c = _apiHttpClient();
   try {
-    final resp = await http.get(uri, headers: headers).timeout(_timeout);
+    final resp = await c.get(uri, headers: headers).timeout(_timeout);
     return resp;
   } on Exception catch (e, st) {
     if (_isConnectionClosedError(e, st)) {
       await Future<void>.delayed(const Duration(milliseconds: 800));
-      return await http.get(uri, headers: headers).timeout(_timeout);
+      return await c.get(uri, headers: headers).timeout(_timeout);
     }
     rethrow;
   }
@@ -37,17 +42,15 @@ Future<http.Response> _postWithRetry(
   Map<String, String> headers, {
   Object? body,
 }) async {
+  final c = _apiHttpClient();
   try {
-    final resp = await http
-        .post(uri, headers: headers, body: body)
-        .timeout(_timeout);
+    final resp =
+        await c.post(uri, headers: headers, body: body).timeout(_timeout);
     return resp;
   } on Exception catch (e, st) {
     if (_isConnectionClosedError(e, st)) {
       await Future<void>.delayed(const Duration(milliseconds: 800));
-      return await http
-          .post(uri, headers: headers, body: body)
-          .timeout(_timeout);
+      return await c.post(uri, headers: headers, body: body).timeout(_timeout);
     }
     rethrow;
   }
@@ -71,7 +74,6 @@ class ApiClient {
     final h = <String, String>{
       'Content-Type': 'application/json',
       'Accept': 'application/json',
-      'Connection': 'close',
     };
     if (token != null && token!.isNotEmpty) {
       h['Authorization'] = 'Bearer $token';
@@ -83,7 +85,6 @@ class ApiClient {
   Map<String, String> get _headersPublic {
     return <String, String>{
       'Accept': 'application/json',
-      'Connection': 'close',
     };
   }
 
@@ -156,8 +157,9 @@ class ApiClient {
     if (linkedAccountIds != null) body['linked_account_ids'] = linkedAccountIds;
     if (fullName != null) body['full_name'] = fullName;
     if (phone != null) body['phone'] = phone;
-    final resp =
-        await http.patch(uri, headers: _headers, body: jsonEncode(body)).timeout(_timeout);
+    final resp = await _apiHttpClient()
+        .patch(uri, headers: _headers, body: jsonEncode(body))
+        .timeout(_timeout);
     return _parsePatchUserRequired(resp);
   }
 
@@ -201,7 +203,8 @@ class ApiClient {
   /// DELETE /api/users/:id（仅管理员）。失败时抛出 [StateError]。
   Future<void> deleteUser(int userId) async {
     final uri = Uri.parse('${_normalizedBase}api/users/$userId');
-    final resp = await http.delete(uri, headers: _headers).timeout(_timeout);
+    final resp =
+        await _apiHttpClient().delete(uri, headers: _headers).timeout(_timeout);
     final map = jsonDecode(resp.body) as Map<String, dynamic>;
     if (map['success'] != true) {
       throw StateError(map['message']?.toString() ?? '删除失败');
@@ -423,7 +426,8 @@ class ApiClient {
   /// GET /api/health（无需登录）
   Future<HealthResponse> getHealth() async {
     final uri = Uri.parse('${_normalizedBase}api/health');
-    final resp = await http.get(uri, headers: _headersPublic).timeout(_timeout);
+    final resp =
+        await _apiHttpClient().get(uri, headers: _headersPublic).timeout(_timeout);
     final map = jsonDecode(resp.body) as Map<String, dynamic>;
     return HealthResponse.fromJson(map);
   }
@@ -519,7 +523,7 @@ class ApiClient {
     final uri = Uri.parse(
       '${_normalizedBase}api/admin/accounts/${Uri.encodeComponent(accountId)}',
     );
-    final resp = await http
+    final resp = await _apiHttpClient()
         .put(uri, headers: _headers, body: jsonEncode(patch))
         .timeout(_timeout);
     final map = jsonDecode(resp.body) as Map<String, dynamic>;
@@ -530,7 +534,8 @@ class ApiClient {
     final uri = Uri.parse(
       '${_normalizedBase}api/admin/accounts/${Uri.encodeComponent(accountId)}',
     );
-    final resp = await http.delete(uri, headers: _headers).timeout(_timeout);
+    final resp =
+        await _apiHttpClient().delete(uri, headers: _headers).timeout(_timeout);
     final map = jsonDecode(resp.body) as Map<String, dynamic>;
     return SimpleMessageResponse.fromJson(map);
   }
@@ -566,7 +571,7 @@ class ApiClient {
     final uri = Uri.parse(
       '${_normalizedBase}api/me/customer-accounts/${Uri.encodeComponent(accountId)}/okx-json',
     );
-    final resp = await http
+    final resp = await _apiHttpClient()
         .put(uri, headers: _headers, body: jsonEncode(body))
         .timeout(_timeout);
     return jsonDecode(resp.body) as Map<String, dynamic>;

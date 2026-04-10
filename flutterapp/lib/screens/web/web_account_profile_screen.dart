@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../api/client.dart';
+import '../../constants/poll_intervals.dart';
 import '../../api/models.dart';
 import '../../debug_ingest_log.dart';
 import '../../secure/prefs.dart';
@@ -55,7 +56,8 @@ class WebAccountProfileScreen extends StatefulWidget {
       _WebAccountProfileScreenState();
 }
 
-class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
+class _WebAccountProfileScreenState extends State<WebAccountProfileScreen>
+    with WidgetsBindingObserver {
   static const double _maxContentWidth = 1680;
   final _prefs = SecurePrefs();
   List<AccountProfit> _accounts = [];
@@ -512,6 +514,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     // 若父级已下发列表则先展示，再异步拉取收益等（选中项与 initialBotId 对齐，避免先闪第一个账户）
     if (widget.sharedBots.isNotEmpty) {
       _bots = _mergeInitialPlaceholder(List.from(widget.sharedBots));
@@ -530,9 +533,20 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
     _autoRefreshTimer = null;
     if (!widget.periodicRefreshActive) return;
     _autoRefreshTimer = Timer.periodic(
-      const Duration(seconds: 5),
-      (_) => _refreshLiveAccountSlice(),
+      PollIntervals.mediumPoll,
+      (_) => unawaited(_refreshLiveAccountSlice()),
     );
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
+      _autoRefreshTimer?.cancel();
+      _autoRefreshTimer = null;
+    } else if (state == AppLifecycleState.resumed) {
+      _syncAutoRefreshTimer();
+    }
   }
 
   @override
@@ -570,6 +584,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _noDropdownAccountController.dispose();
     _disconnectOkxPublicTicker();
     _autoRefreshTimer?.cancel();

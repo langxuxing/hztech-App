@@ -49,6 +49,22 @@ _OKX_HTTP_POOL_MAXSIZE = max(10, int(os.environ.get("OKX_HTTP_POOL_MAXSIZE", "48
 _OKX_HTTP_POOL_CONNECTIONS = max(5, int(os.environ.get("OKX_HTTP_POOL_CONNECTIONS", "24")))
 # 私有请求遇 SSLError / ConnectionError（含 UNEXPECTED_EOF_WHILE_READING）时每轮重试次数
 _OKX_SSL_RETRY_ATTEMPTS = max(1, int(os.environ.get("OKX_SSL_RETRY_ATTEMPTS", "5")))
+# 同一密钥路径下 balance / positions 短时复用，合并 App 轮询对 OKX 的重复请求（秒；0=关闭）
+_OKX_ACCOUNT_LIVE_CACHE_TTL = max(
+    0.0, float(os.environ.get("OKX_ACCOUNT_LIVE_CACHE_TTL_SEC", "3"))
+)
+_OKX_ACCOUNT_LIVE_CACHE_LOCK = threading.Lock()
+_OKX_BALANCE_CACHE: dict[str, tuple[float, dict]] = {}
+_OKX_POSITIONS_CACHE: dict[str, tuple[float, tuple[list, str | None]]] = {}
+
+
+def _okx_live_cache_key(config_path: Path | None) -> str | None:
+    if config_path is None:
+        return None
+    try:
+        return str(config_path.resolve())
+    except OSError:
+        return str(config_path)
 
 
 def _okx_public_base_url() -> str:
@@ -974,8 +990,18 @@ def okx_fetch_balance(config_path: Path | None = None) -> dict | None:
     cfg = load_okx_config(path) if path else None
     if not cfg or not (cfg.get("key") and cfg.get("secret")):
         return None
+    cache_key = _okx_live_cache_key(path)
+    if cache_key and _OKX_ACCOUNT_LIVE_CACHE_TTL > 0:
+        now_m = time.monotonic()
+        with _OKX_ACCOUNT_LIVE_CACHE_LOCK:
+            hit = _OKX_BALANCE_CACHE.get(cache_key)
+            if hit is not None and (now_m - hit[0]) < _OKX_ACCOUNT_LIVE_CACHE_TTL:
+                return hit[1]
     out, err_detail = _okx_fetch_balance_fallback(path)
     if out is not None:
+        if cache_key and _OKX_ACCOUNT_LIVE_CACHE_TTL > 0:
+            with _OKX_ACCOUNT_LIVE_CACHE_LOCK:
+                _OKX_BALANCE_CACHE[cache_key] = (time.monotonic(), out)
         return out
     cfg_name = path.name if path else "default"
     logger.warning(
@@ -1400,7 +1426,22 @@ def okx_fetch_positions(config_path: Path | None = None) -> tuple[list[dict], st
     cfg = load_okx_config(path) if path else None
     if not path or not cfg or not (cfg.get("key") and cfg.get("secret")):
         return ([], "OKX 配置文件不存在或格式无效")
-    return _okx_fetch_positions_fallback(path)
+    cache_key = _okx_live_cache_key(path)
+    if cache_key and _OKX_ACCOUNT_LIVE_CACHE_TTL > 0:
+        now_m = time.monotonic()
+        with _OKX_ACCOUNT_LIVE_CACHE_LOCK:
+            hit = _OKX_POSITIONS_CACHE.get(cache_key)
+            if hit is not None and (now_m - hit[0]) < _OKX_ACCOUNT_LIVE_CACHE_TTL:
+                rows, err = hit[1]
+                return (list(rows), err)
+    rows, err = _okx_fetch_positions_fallback(path)
+    if cache_key and _OKX_ACCOUNT_LIVE_CACHE_TTL > 0 and err is None:
+        with _OKX_ACCOUNT_LIVE_CACHE_LOCK:
+            _OKX_POSITIONS_CACHE[cache_key] = (
+                time.monotonic(),
+                (list(rows), err),
+            )
+    return rows, err
 
 
 def _positions_history_row_utime_ms(row: dict) -> int:

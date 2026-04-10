@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
+import '../constants/poll_intervals.dart';
 import '../api/models.dart';
 import '../secure/prefs.dart';
 import '../theme/finance_style.dart';
@@ -135,7 +136,7 @@ class _TradingBotControlState extends State<TradingBotControl> {
       (b) => b.status == 'running' || b.isRunning == true,
     );
     if (!anyRunning || !mounted) return;
-    _runtimeTickTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+    _runtimeTickTimer = Timer.periodic(PollIntervals.mediumPoll, (_) {
       if (mounted) setState(() {});
     });
   }

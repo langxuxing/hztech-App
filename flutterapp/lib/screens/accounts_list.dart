@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
+import '../constants/poll_intervals.dart';
 import '../api/models.dart';
 import '../secure/prefs.dart';
 import '../services/okx_public_ticker_ws.dart';
@@ -18,10 +19,17 @@ enum _AccountsListBasis { equity, cash }
 /// 移动端「账户管理」汇总列表；点击进「账户收益」，数据字段与 Web「账户画像」一致（权益、现金、浮动、收益率等）。
 ///
 /// [sharedBots] 由 [MainScreen] 下发时与账户收益页同源，避免下拉框空窗；为空则本页并行请求 `/api/tradingbots`。
+///
+/// [periodicRefreshActive] 为 false 时不轮询持仓（例如 [MainScreen] 底栏非「账户总览」时）。
 class AccountsList extends StatefulWidget {
-  const AccountsList({super.key, this.sharedBots = const []});
+  const AccountsList({
+    super.key,
+    this.sharedBots = const [],
+    this.periodicRefreshActive = true,
+  });
 
   final List<UnifiedTradingBot> sharedBots;
+  final bool periodicRefreshActive;
 
   @override
   State<AccountsList> createState() => _AccountsListState();
@@ -286,14 +294,29 @@ class _AccountsListState extends State<AccountsList> {
   static const _barBg = AppFinanceStyle.backgroundDark;
   static const _barTextColor = AppFinanceStyle.valueColor;
 
+  void _syncPositionsRefreshTimer() {
+    _positionsRefreshTimer?.cancel();
+    _positionsRefreshTimer = null;
+    if (!widget.periodicRefreshActive) return;
+    _positionsRefreshTimer = Timer.periodic(PollIntervals.slowPoll, (_) {
+      if (!mounted) return;
+      unawaited(_refreshPositionsOnly());
+    });
+  }
+
   @override
   void initState() {
     super.initState();
     _load();
-    _positionsRefreshTimer = Timer.periodic(const Duration(seconds: 120), (_) {
-      if (!mounted) return;
-      unawaited(_refreshPositionsOnly());
-    });
+    _syncPositionsRefreshTimer();
+  }
+
+  @override
+  void didUpdateWidget(covariant AccountsList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.periodicRefreshActive != widget.periodicRefreshActive) {
+      _syncPositionsRefreshTimer();
+    }
   }
 
   @override

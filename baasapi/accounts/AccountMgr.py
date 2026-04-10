@@ -1038,11 +1038,18 @@ def fetch_pending_orders_live(account_id: str) -> tuple[list[dict], str | None]:
     return okx_mod.okx_fetch_pending_orders(config_path=path)
 
 
-def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
+def collect_accounts_profit_for_api(
+    db_module: Any,
+    *,
+    account_ids_allowlist: frozenset[str] | None = None,
+) -> list[dict]:
     """
     组装 /api/account-profit 的 accounts 数组（与现有 AccountProfit 字段兼容）。
     bot_id 使用 account_id，便于客户端沿用同一套下拉与持仓 API。
     多账户时对 OKX 余额请求并行执行，避免串行累加超过客户端 HTTP 超时。
+
+    account_ids_allowlist：非 None 时仅处理这些 account_id（用于客户仅拉绑定账户，减少 OKX balance 调用）；
+    为 frozenset() 时结果为空列表且不请求 OKX。
     """
     import exchange.okx as okx_mod
 
@@ -1050,6 +1057,8 @@ def collect_accounts_profit_for_api(db_module: Any) -> list[dict]:
     prep: list[tuple[str, str, Any, Any, float, dict | None, str]] = []
     for row in rows:
         aid = str(row.get("account_id") or "").strip()
+        if account_ids_allowlist is not None and aid not in account_ids_allowlist:
+            continue
         ex_name = (row.get("exchange_account") or "OKX").strip()
         acc_name = (row.get("account_name") or "").strip()
         path = resolve_okx_config_path(aid)

@@ -14,6 +14,16 @@ OPS_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = OPS_DIR.parent
 
 
+def _cors_extra_origins_csv(c_top: dict) -> str:
+    raw = c_top.get("hztech_cors_extra_origins")
+    if isinstance(raw, list):
+        parts = [str(x).strip() for x in raw if str(x).strip()]
+        return ",".join(parts)
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip()
+    return ""
+
+
 def _load_server_mgr():
     path = PROJECT_ROOT / "baasapi" / "server_mgr.py"
     spec = importlib.util.spec_from_file_location("server_mgr", path)
@@ -76,6 +86,8 @@ def bash_export_all() -> None:
             print(f"export OPS_{prefix}_HTTP_PORT={shlex.quote(str(p))}")
             pub = f"{scheme}://{host}:{p}"
             print(f"export OPS_{prefix}_PUBLIC_URL={shlex.quote(pub)}")
+    cors_extra = _cors_extra_origins_csv(c_top)
+    print(f"export OPS_CORS_EXTRA_ORIGINS={shlex.quote(cors_extra)}")
 
 
 def bash_export(role: str) -> None:

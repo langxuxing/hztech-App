@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../api/client.dart';
+import '../constants/poll_intervals.dart';
 import '../api/models.dart';
 import '../auth/app_user_role.dart';
 import '../debug_ingest_log.dart';
@@ -16,7 +17,24 @@ import '../widgets/month_end_profit_panel.dart';
 import '../widgets/account_detail_loading_overlay.dart';
 import '../widgets/water_background.dart';
 
-/// APK「账户收益」（客户视图）：账户选择 → 账户盈利总览 → 当前持仓 → 现金（日历 / 曲线 / 每日）→ 权益（日历 / 曲线 / 每日）。
+/// [_AccountProfitScreenState] 内现金三块图表共享的布局参数（按次 build 计算，供 Sliver 懒构建复用）。
+class _AccountProfitCashLayout {
+  _AccountProfitCashLayout({
+    required this.snap,
+    required this.month,
+    required this.setCashMonth,
+    required this.plotH,
+    required this.calendarGridH,
+  });
+
+  final List<BotProfitSnapshot> snap;
+  final DateTime month;
+  final void Function(DateTime) setCashMonth;
+  final double plotH;
+  final double calendarGridH;
+}
+
+/// APK「账户收益」（客户视图）：账户选择 → 账户盈利总览 → 当前持仓 → 现金（日历 / 曲线 / 每日）。
 class AccountProfitScreen extends StatefulWidget {
   const AccountProfitScreen({
     super.key,
@@ -42,7 +60,8 @@ class AccountProfitScreen extends StatefulWidget {
   State<AccountProfitScreen> createState() => _AccountProfitScreenState();
 }
 
-class _AccountProfitScreenState extends State<AccountProfitScreen> {
+class _AccountProfitScreenState extends State<AccountProfitScreen>
+    with WidgetsBindingObserver {
   final _prefs = SecurePrefs();
   List<AccountProfit> _accounts = [];
   List<UnifiedTradingBot> _bots = [];
@@ -55,6 +74,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
   bool _switchingAccount = false;
   String? _error;
   Timer? _autoRefreshTimer;
+  Timer? _historyRefreshTimer;
   OkxPublicTickerWs? _tickerWs;
   StreamSubscription<double>? _tickerSub;
   double? _liveLastPx;
@@ -65,20 +85,22 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
   static const double _kUnifiedChartBandHeight = 210;
   static const double _kLineBarHeightFactor = 0.7;
 
-  /// 与 [MonthEndValueCalendarPanel] / [calendarGridPixelHeightForCap] 中非 compact 的
-  /// 表头、行数、行间距一致：在折线/柱图高度 [lineBarPlotHeight] 下推出基准单元格高度，
-  /// 再按 4 倍（相对基准为原先「双倍」预算再增高 100%）作为日历总高度预算。
-  double _calendarGridMaxHeightDoubled(double lineBarPlotHeight) {
+  /// 移动端日历 [gridMaxHeight]：与 [MonthEndValueCalendarPanel.compact] 行距一致，
+  /// 单元格高度按 2 倍放大（原 4 倍）并整体封顶，降低首屏绘制面积。
+  double _calendarGridBudgetMobile(
+    double lineBarPlotHeight, {
+    required bool compact,
+  }) {
     const headerH = 22.0;
     const rows = 6.0;
-    const rowSpacing = 4.0;
+    final rowSpacing = compact ? 1.5 : 3.0;
     final overhead = headerH + rowSpacing + rows * rowSpacing;
-    final baseCell = ((lineBarPlotHeight - overhead) / rows).clamp(28.0, 58.0);
-    final tallCell = baseCell * 4;
-    return headerH + rowSpacing + rows * (tallCell + rowSpacing);
+    final baseCell = ((lineBarPlotHeight - overhead) / rows).clamp(22.0, 40.0);
+    final tallCell = baseCell * 2;
+    final raw = headerH + rowSpacing + rows * (tallCell + rowSpacing);
+    return raw.clamp(160.0, 240.0);
   }
 
-  DateTime? _equityMetricsMonth;
   DateTime? _cashMetricsMonth;
   final TextEditingController _noDropdownAccountController =
       TextEditingController();
@@ -102,8 +124,8 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
     _liveLastPx = null;
   }
 
-  /// 保持当前选中账户，拉取最新收益、曲线与持仓（用于定时刷新与下拉切换后的全量刷新）
-  Future<void> _refreshLatestData() async {
+  /// 定时轮询：账户汇总 + 持仓（与 Web 切片一致）；不打 profit-history，减轻流量与 OKX。
+  Future<void> _refreshLiveSlice() async {
     if (!mounted || _loading || _detailLoading) return;
     final list = _bots.isNotEmpty ? _bots : widget.sharedBots;
     final role = await _prefs.getAppUserRole();
@@ -121,22 +143,45 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
       final api = ApiClient(baseUrl, token: token);
       final batch = await Future.wait([
         api.getAccountProfit(),
-        api.getBotProfitHistory(botId),
         api.getTradingbotPositions(botId),
       ]);
       if (!mounted || g != _accountSwitchGeneration) return;
       final profitResp = batch[0] as AccountProfitResponse;
-      final historyResp = batch[1] as BotProfitHistoryResponse;
-      final posResp = batch[2] as OkxPositionsResponse;
+      final posResp = batch[1] as OkxPositionsResponse;
       setState(() {
         _accounts = profitResp.accounts ?? [];
-        _snapshots = historyResp.snapshots;
         _positions = posResp.positions;
         _positionsLoadError = posResp.positionsError;
-        _equityMetricsMonth = null;
-        _cashMetricsMonth = null;
       });
       _syncOkxTickerSubscription();
+    } catch (_) {
+      // 后台轮询失败不打扰主流程
+    }
+  }
+
+  /// 低频刷新收益曲线快照（仅 DB，不经 OKX）；下拉 [_load] 仍会全量拉取。
+  Future<void> _refreshProfitHistoryOnly() async {
+    if (!mounted || _loading || _detailLoading) return;
+    final list = _bots.isNotEmpty ? _bots : widget.sharedBots;
+    final isCustomer =
+        (await _prefs.getAppUserRole()) == AppUserRole.customer;
+    final botId =
+        _selectedBotId ??
+        (list.isNotEmpty ? list.first.tradingbotId : null) ??
+        (isCustomer ? null : _defaultBotId);
+    if (botId == null || botId.isEmpty) return;
+    final g = _accountSwitchGeneration;
+    try {
+      final baseUrl = await _prefs.backendBaseUrl;
+      final token = await _prefs.authToken;
+      if (!mounted || g != _accountSwitchGeneration) return;
+      final api = ApiClient(baseUrl, token: token);
+      final historyResp = await api.getBotProfitHistory(botId);
+      if (!mounted || g != _accountSwitchGeneration) return;
+      setState(() {
+        _snapshots = historyResp.snapshots;
+        _cashMetricsMonth = null;
+      });
     } catch (_) {
       // 后台轮询失败不打扰主流程
     }
@@ -255,7 +300,6 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
             _snapshots = historyResp.snapshots;
             _positions = posResp.positions;
             _positionsLoadError = posResp.positionsError;
-            _equityMetricsMonth = null;
             _cashMetricsMonth = null;
             _detailLoading = false;
             _switchingAccount = false;
@@ -283,7 +327,6 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
           setState(() {
             _accounts = profitResp.accounts ?? [];
             _snapshots = const [];
-            _equityMetricsMonth = null;
             _cashMetricsMonth = null;
             _detailLoading = false;
             _switchingAccount = false;
@@ -381,7 +424,6 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
       setState(() {
         _accounts = profitResp.accounts ?? [];
         _snapshots = historyResp.snapshots;
-        _equityMetricsMonth = null;
         _cashMetricsMonth = null;
       });
 
@@ -408,25 +450,54 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _load();
-    _syncAutoRefreshTimer();
+    unawaited(_syncAutoRefreshTimers());
   }
 
-  void _syncAutoRefreshTimer() {
+  Future<void> _syncAutoRefreshTimers() async {
     _autoRefreshTimer?.cancel();
     _autoRefreshTimer = null;
+    _historyRefreshTimer?.cancel();
+    _historyRefreshTimer = null;
     if (!widget.periodicRefreshActive) return;
+    final role = await _prefs.getAppUserRole();
+    if (!mounted || !widget.periodicRefreshActive) return;
+    final isCustomer = role == AppUserRole.customer;
+    final livePoll = isCustomer
+        ? PollIntervals.accountProfitCustomerLivePoll
+        : PollIntervals.mediumPoll;
+    final historyPoll = isCustomer
+        ? PollIntervals.accountProfitCustomerHistoryPoll
+        : PollIntervals.slowPoll;
     _autoRefreshTimer = Timer.periodic(
-      const Duration(seconds: 30),
-      (_) => _refreshLatestData(),
+      livePoll,
+      (_) => unawaited(_refreshLiveSlice()),
     );
+    _historyRefreshTimer = Timer.periodic(
+      historyPoll,
+      (_) => unawaited(_refreshProfitHistoryOnly()),
+    );
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive) {
+      _autoRefreshTimer?.cancel();
+      _autoRefreshTimer = null;
+      _historyRefreshTimer?.cancel();
+      _historyRefreshTimer = null;
+    } else if (state == AppLifecycleState.resumed) {
+      unawaited(_syncAutoRefreshTimers());
+    }
   }
 
   @override
   void didUpdateWidget(covariant AccountProfitScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.periodicRefreshActive != widget.periodicRefreshActive) {
-      _syncAutoRefreshTimer();
+      unawaited(_syncAutoRefreshTimers());
       if (!widget.periodicRefreshActive) {
         _disconnectOkxPublicTicker();
         if (mounted) setState(() {});
@@ -448,9 +519,11 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _noDropdownAccountController.dispose();
     _disconnectOkxPublicTicker();
     _autoRefreshTimer?.cancel();
+    _historyRefreshTimer?.cancel();
     super.dispose();
   }
 
@@ -543,11 +616,6 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
     }
     final i = _selectedBotIndex;
     return i < _accounts.length ? _accounts[i] : _accounts.first;
-  }
-
-  DateTime _equityMonthFor(List<BotProfitSnapshot> snap) {
-    final seed = _equityMetricsMonth ?? focusedMonthFromProfitSnapshots(snap);
-    return clampMonthToSnapshots(snap, seed);
   }
 
   DateTime _cashMonthFor(List<BotProfitSnapshot> snap) {
@@ -763,7 +831,8 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
     );
   }
 
-  Widget _buildAccountPageContent() {
+  /// 首屏与轻量区块：错误、账户选择、空态、总览、持仓（不内含现金图表，供 Sliver 首项懒加载边界）。
+  Widget _buildAccountScrollHead() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -810,10 +879,114 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
         _buildProfitOverview(),
         const SizedBox(height: 28),
         _buildPositionsSection(),
-        const SizedBox(height: 28),
-        _buildCashCustomerSections(),
-        const SizedBox(height: 28),
-        _buildEquityCustomerSections(),
+      ],
+    );
+  }
+
+  _AccountProfitCashLayout? _layoutCashPanelsIfNeeded() {
+    if (_selectedAccount == null) return null;
+    final snap = _snapshots;
+    final month = _cashMonthFor(snap);
+    void setCashMonth(DateTime d) {
+      setState(() => _cashMetricsMonth = clampMonthToSnapshots(snap, d));
+    }
+    const calCompact = true;
+    final calCap = _kUnifiedChartBandHeight;
+    final plotH =
+        calendarGridPixelHeightForCap(calCap, compact: calCompact) *
+        _kLineBarHeightFactor;
+    final calendarGridH = _calendarGridBudgetMobile(
+      plotH,
+      compact: calCompact,
+    );
+    return _AccountProfitCashLayout(
+      snap: snap,
+      month: month,
+      setCashMonth: setCashMonth,
+      plotH: plotH,
+      calendarGridH: calendarGridH,
+    );
+  }
+
+  Widget _buildCashCalendarPanel(_AccountProfitCashLayout L) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _partHeading('现金日历视图'),
+        if (L.snap.isNotEmpty) ...[
+          _buildMetricsMonthNav(
+            snapshots: L.snap,
+            month: L.month,
+            onMonthChanged: L.setCashMonth,
+          ),
+          const SizedBox(height: 12),
+        ],
+        _glassCard(
+          MonthEndValueCalendarPanel(
+            snapshots: L.snap,
+            title: '',
+            description: '',
+            valueAt: (s) => s.currentBalance,
+            emptyMessage: '暂无历史快照，无法统计月度现金余额',
+            showMonthNavigator: false,
+            focusedMonth: L.month,
+            onFocusedMonthChanged: L.setCashMonth,
+            gridMaxHeight: L.calendarGridH,
+            compact: true,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCashLinePanel(_AccountProfitCashLayout L) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _partHeading('现金曲线'),
+        _glassCard(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              SizedBox(
+                height: L.plotH,
+                child: RepaintBoundary(
+                  child: SnapshotPercentLineChart(
+                    snapshots: L.snap,
+                    series: SnapshotReturnSeries.cash,
+                    compact: true,
+                    focusedMonth: L.month,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCashDailyPanel(_AccountProfitCashLayout L) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _partHeading('每日现金'),
+        _glassCard(
+          MonthEndValueBarPanel(
+            snapshots: L.snap,
+            title: '',
+            description: '',
+            valueAt: (s) => s.currentBalance,
+            emptyMessage: '暂无历史快照，无法统计月度现金余额',
+            showMonthNavigator: false,
+            selectedEndMonth: L.month,
+            onSelectedEndMonthChanged: L.setCashMonth,
+            barChartHeight: L.plotH,
+            maxBars: 8,
+            useDailyBarsForEndMonth: true,
+            compact: true,
+          ),
+        ),
       ],
     );
   }
@@ -857,10 +1030,47 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
         ),
       );
     }
-    return ListView(
+    final cash = _layoutCashPanelsIfNeeded();
+    final childCount = cash != null ? 4 : 1;
+    return CustomScrollView(
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
-      children: [_buildAccountPageContent()],
+      slivers: [
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
+          sliver: SliverList(
+            delegate: SliverChildBuilderDelegate(
+              (context, index) {
+                switch (index) {
+                  case 0:
+                    return Padding(
+                      padding: EdgeInsets.only(bottom: cash != null ? 28 : 0),
+                      child: _buildAccountScrollHead(),
+                    );
+                  case 1:
+                    return cash == null
+                        ? const SizedBox.shrink()
+                        : _buildCashCalendarPanel(cash);
+                  case 2:
+                    if (cash == null) return const SizedBox.shrink();
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 20),
+                      child: _buildCashLinePanel(cash),
+                    );
+                  case 3:
+                    if (cash == null) return const SizedBox.shrink();
+                    return Padding(
+                      padding: const EdgeInsets.only(top: 20),
+                      child: _buildCashDailyPanel(cash),
+                    );
+                  default:
+                    return const SizedBox.shrink();
+                }
+              },
+              childCount: childCount,
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1077,161 +1287,4 @@ class _AccountProfitScreenState extends State<AccountProfitScreen> {
     );
   }
 
-  /// 2–4：现金日历、现金曲线、每日现金（共用「查看月份」）
-  Widget _buildCashCustomerSections() {
-    if (_selectedAccount == null) return const SizedBox.shrink();
-    final snap = _snapshots;
-    final month = _cashMonthFor(snap);
-    void setCashMonth(DateTime d) {
-      setState(() => _cashMetricsMonth = clampMonthToSnapshots(snap, d));
-    }
-
-    final calCap = _kUnifiedChartBandHeight;
-    final plotH =
-        calendarGridPixelHeightForCap(calCap, compact: false) *
-        _kLineBarHeightFactor;
-    final calendarGridH = _calendarGridMaxHeightDoubled(plotH);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _partHeading('现金日历视图'),
-        if (snap.isNotEmpty) ...[
-          _buildMetricsMonthNav(
-            snapshots: snap,
-            month: month,
-            onMonthChanged: setCashMonth,
-          ),
-          const SizedBox(height: 12),
-        ],
-        _glassCard(
-          MonthEndValueCalendarPanel(
-            snapshots: snap,
-            title: '',
-            description: '',
-            valueAt: (s) => s.currentBalance,
-            emptyMessage: '暂无历史快照，无法统计月度现金余额',
-            showMonthNavigator: false,
-            focusedMonth: month,
-            onFocusedMonthChanged: setCashMonth,
-            gridMaxHeight: calendarGridH,
-          ),
-        ),
-        const SizedBox(height: 20),
-        _partHeading('现金曲线'),
-        _glassCard(
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              SizedBox(
-                height: plotH,
-                child: SnapshotPercentLineChart(
-                  snapshots: snap,
-                  series: SnapshotReturnSeries.cash,
-                  compact: true,
-                  focusedMonth: month,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 20),
-        _partHeading('每日现金'),
-        _glassCard(
-          MonthEndValueBarPanel(
-            snapshots: snap,
-            title: '',
-            description: '',
-            valueAt: (s) => s.currentBalance,
-            emptyMessage: '暂无历史快照，无法统计月度现金余额',
-            showMonthNavigator: false,
-            selectedEndMonth: month,
-            onSelectedEndMonthChanged: setCashMonth,
-            barChartHeight: plotH,
-            maxBars: 8,
-            useDailyBarsForEndMonth: true,
-          ),
-        ),
-      ],
-    );
-  }
-
-  /// 5–7：权益日历、权益曲线、每日权益（共用「查看月份」，与现金月份可独立切换）
-  Widget _buildEquityCustomerSections() {
-    if (_selectedAccount == null) return const SizedBox.shrink();
-    final snap = _snapshots;
-    final month = _equityMonthFor(snap);
-    void setEquityMonth(DateTime d) {
-      setState(() => _equityMetricsMonth = clampMonthToSnapshots(snap, d));
-    }
-
-    final calCap = _kUnifiedChartBandHeight;
-    final plotH =
-        calendarGridPixelHeightForCap(calCap, compact: false) *
-        _kLineBarHeightFactor;
-    final calendarGridH = _calendarGridMaxHeightDoubled(plotH);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _partHeading('权益日历视图'),
-        if (snap.isNotEmpty) ...[
-          _buildMetricsMonthNav(
-            snapshots: snap,
-            month: month,
-            onMonthChanged: setEquityMonth,
-          ),
-          const SizedBox(height: 12),
-        ],
-        _glassCard(
-          MonthEndValueCalendarPanel(
-            snapshots: snap,
-            title: '',
-            description: '',
-            valueAt: (s) => s.equityUsdt,
-            emptyMessage: '暂无历史快照，无法统计月度权益',
-            showMonthNavigator: false,
-            focusedMonth: month,
-            onFocusedMonthChanged: setEquityMonth,
-            gridMaxHeight: calendarGridH,
-          ),
-        ),
-        const SizedBox(height: 20),
-        _partHeading('权益曲线'),
-        _glassCard(
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              SizedBox(
-                height: plotH,
-                child: SnapshotPercentLineChart(
-                  snapshots: snap,
-                  series: SnapshotReturnSeries.equity,
-                  compact: true,
-                  focusedMonth: month,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 20),
-        _partHeading('每日权益'),
-        _glassCard(
-          MonthEndValueBarPanel(
-            snapshots: snap,
-            title: '',
-            description: '',
-            valueAt: (s) => s.equityUsdt,
-            emptyMessage: '暂无历史快照，无法统计月度权益',
-            showMonthNavigator: false,
-            selectedEndMonth: month,
-            onSelectedEndMonthChanged: setEquityMonth,
-            barChartHeight: plotH,
-            maxBars: 8,
-            useDailyBarsForEndMonth: true,
-          ),
-        ),
-      ],
-    );
-  }
 }
