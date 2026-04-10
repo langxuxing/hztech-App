@@ -253,11 +253,15 @@ fi
 if ! need_sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname = '$PG_DB'" | grep -q 1; then
   need_sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"$PG_DB\" OWNER \"$PG_USER\";"
 fi
+# 库已存在但属主仍是 postgres 时，否则 PG15+ 在 public 上无 CREATE，BaasAPI 建表会失败
+need_sudo -u postgres psql -v ON_ERROR_STOP=1 -c "ALTER DATABASE \"$PG_DB\" OWNER TO \"$PG_USER\";"
 
 # schema（幂等）+ 权限 + 缺省 search_path
 need_sudo -u postgres psql -v ON_ERROR_STOP=1 -d "$PG_DB" -c "CREATE SCHEMA IF NOT EXISTS \"$PG_SCHEMA\" AUTHORIZATION \"$PG_USER\";"
 need_sudo -u postgres psql -v ON_ERROR_STOP=1 -d "$PG_DB" -c "ALTER SCHEMA \"$PG_SCHEMA\" OWNER TO \"$PG_USER\";"
 need_sudo -u postgres psql -v ON_ERROR_STOP=1 -d "$PG_DB" -c "GRANT USAGE, CREATE ON SCHEMA \"$PG_SCHEMA\" TO \"$PG_USER\";"
+# PostgreSQL 15+ 默认撤销 PUBLIC 在 schema public 上的 CREATE；若 search_path 回落到 public 需显式授权
+need_sudo -u postgres psql -v ON_ERROR_STOP=1 -d "$PG_DB" -c "GRANT USAGE, CREATE ON SCHEMA public TO \"$PG_USER\";"
 need_sudo -u postgres psql -v ON_ERROR_STOP=1 -d "$PG_DB" -c "ALTER ROLE \"$PG_USER\" IN DATABASE \"$PG_DB\" SET search_path TO \"$PG_SCHEMA\", public;"
 
 echo "=== PostgreSQL 就绪 ==="

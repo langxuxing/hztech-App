@@ -5,7 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'api/client.dart';
 import 'api/models.dart';
-import 'constants/app_download.dart';
+import 'constants/app_download.dart' show kAwsApkStorageBaseUrl, kDefaultApkFileName;
 import 'version_utils.dart';
 
 /// 打包 iOS 时可传入：`--dart-define=IOS_APP_STORE_URL=https://apps.apple.com/...`
@@ -33,7 +33,15 @@ Uri? _androidApkUri(String base, String fileName) {
   final b = _normalizeBase(base);
   if (b.isEmpty) return null;
   final name = fileName.trim().isEmpty ? kDefaultApkFileName : fileName.trim();
-  return Uri.parse('${b}download/apk/${Uri.encodeComponent(name)}');
+  return Uri.parse('${b}api/download/apk/${Uri.encodeComponent(name)}');
+}
+
+/// 优先使用线上公开下载域名（与登录页 APK 直链一致），避免 API 与 APK 分机部署时链到无文件的 API。
+Uri? _androidApkUriPreferPublic(String backendBaseUrl, String fileName) {
+  if (kAwsApkStorageBaseUrl.trim().isNotEmpty) {
+    return _androidApkUri(kAwsApkStorageBaseUrl, fileName);
+  }
+  return _androidApkUri(backendBaseUrl, fileName);
 }
 
 /// 本会话内用户点了「稍后」则不再弹可选升级（低于 [latest]）；低于 [min] 仍强制提示。
@@ -121,7 +129,7 @@ class AppUpdatePrompt {
     required String? storeUrl,
   }) async {
     if (isAndroid) {
-      final u = _androidApkUri(backendBaseUrl, apkFileName);
+      final u = _androidApkUriPreferPublic(backendBaseUrl, apkFileName);
       if (u != null && await canLaunchUrl(u)) {
         await launchUrl(u, mode: LaunchMode.externalApplication);
       }

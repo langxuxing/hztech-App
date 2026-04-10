@@ -2,7 +2,8 @@
 # 将本地 PostgreSQL 备份并导入 aws-alpha（baasapi/deploy-aws.json 中 baasapi 段，即 BaasAPI EC2）。
 # 远端库仅监听 127.0.0.1:5432（见 baasapi/install_postgresql_remote.sh），故通过 SSH 管道执行 psql。
 #
-# 依赖：本机已安装 pg_dump；ssh 可登录目标机；远端已创建 hztech 库与用户。
+# 依赖：本机已安装 pg_dump；ssh 可登录目标机；远端已创建目标库与用户。
+# 若目标库名为 hztechapp：python3 ops/migrate_local_pg_to_aws.py（默认远端库 hztechapp）。
 #
 # 用法：
 #   ./ops/pg_dump_to_aws_alpha.sh

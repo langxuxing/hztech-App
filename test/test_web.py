@@ -67,3 +67,18 @@ class TestDownloadApk:
             )
         else:
             assert r.status_code == 404
+
+    def test_api_download_invalid_filename_400(self, client):
+        r = client.get("/api/download/apk/notanapk.txt")
+        assert r.status_code == 400
+
+    def test_api_download_nonexistent_404(self, client):
+        r = client.get("/api/download/apk/nonexistent.apk")
+        assert r.status_code == 404
+
+    def test_api_download_apk_matches_root_path(self, client):
+        r1 = client.get("/download/apk/hztech-app-release.apk")
+        r2 = client.get("/api/download/apk/hztech-app-release.apk")
+        assert r1.status_code == r2.status_code
+        if r1.status_code == 200:
+            assert r1.data == r2.data

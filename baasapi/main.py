@@ -3,7 +3,7 @@
 MobileApp API 服务（部署于 AWS 等）
 - API（JSON）：App / Flutter Web 共用，路径 /api/*
 - Flutter Web 静态资源由 baasapi/serve_web_static.py 或独立 CDN 托管，不由本进程提供
-- 文件端点：GET /download/apk/<name>.apk、GET /res/bg；K 线 JSON：GET /kline/<file>.json
+- 文件端点：GET /download/apk/<name>.apk、GET /api/download/apk/<name>.apk（后者便于 nginx 仅反代 /api/）、GET /res/bg；K 线 JSON：GET /kline/<file>.json
 
 App 所需 API（与 QtraderApi.kt 一致）：
   POST /api/login                 登录，Body: {username, password}，返回 {success, token}
@@ -799,8 +799,7 @@ def res_bg():
     return send_file(path, mimetype="image/png", max_age=3600)
 
 
-@app.route("/download/apk/<filename>")
-def download_apk(filename):
+def _apk_download_response(filename: str):
     """下载 APK（仅允许 .apk 且位于 APK_DIR 内）。"""
     if not filename.endswith(".apk"):
         return jsonify({"error": "invalid file"}), 400
@@ -808,6 +807,17 @@ def download_apk(filename):
     if not path.exists() or not path.is_file():
         return jsonify({"error": "not found"}), 404
     return send_file(path, as_attachment=True, download_name=filename)
+
+
+@app.route("/download/apk/<filename>")
+def download_apk(filename):
+    return _apk_download_response(filename)
+
+
+@app.route("/api/download/apk/<filename>")
+def download_apk_under_api(filename):
+    """与 /download/apk/ 相同；nginx 只反代 /api/ 时无需改配置即可下载。"""
+    return _apk_download_response(filename)
 
 
 @app.route("/", methods=["GET"])

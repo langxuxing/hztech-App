@@ -58,10 +58,18 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _obscurePassword = true;
   Timer? _logoTapResetTimer;
   int _logoSecretTapCount = 0;
+  /// Web：拉取公开 `GET /api/app-version`（无需登录），提示可下载版本。
+  String? _webPublishedLatest;
+  String? _webPublishedMin;
 
   @override
   void initState() {
     super.initState();
+    if (kIsWeb && kAwsApkStorageBaseUrl.trim().isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(_loadWebVersionHint());
+      });
+    }
     _prefs.backendBaseUrl.then((url) {
       // #region agent log
       unawaited(
@@ -349,6 +357,51 @@ class _LoginScreenState extends State<LoginScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  Future<void> _loadWebVersionHint() async {
+    try {
+      final api = ApiClient(_normalizeBaseUrl(kAwsApkStorageBaseUrl));
+      final cfg = await api.getAppVersionConfig();
+      if (!mounted || cfg == null || !cfg.success) return;
+      final latest = cfg.android.latestVersion.trim();
+      final min = cfg.android.minVersion.trim();
+      if (latest.isEmpty && min.isEmpty) return;
+      setState(() {
+        _webPublishedLatest = latest.isEmpty ? null : latest;
+        _webPublishedMin = min.isEmpty ? null : min;
+      });
+    } catch (_) {}
+  }
+
+  PreferredSizeWidget? _webVersionBannerBottom() {
+    if (!kIsWeb) return null;
+    final latest = _webPublishedLatest?.trim() ?? '';
+    final min = _webPublishedMin?.trim() ?? '';
+    if (latest.isEmpty && min.isEmpty) return null;
+    late final String msg;
+    if (min.isNotEmpty && latest.isNotEmpty) {
+      msg = 'Android 最低版本 $min，最新版 $latest；无需登录，点右上角「APK」直接下载。';
+    } else if (min.isNotEmpty) {
+      msg = 'Android 最低版本 $min；请点右上角「APK」下载安装。';
+    } else {
+      msg = 'Android 最新版 $latest；无需登录，点右上角「APK」下载。';
+    }
+    return PreferredSize(
+      preferredSize: const Size.fromHeight(44),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+        child: Text(
+          msg,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 12,
+            height: 1.35,
+            color: AppFinanceStyle.textDefault.withValues(alpha: 0.88),
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _openApkDownload() async {
     final uri = Uri.tryParse(awsReleaseApkDownloadUrl());
     if (uri == null) {
@@ -489,6 +542,7 @@ class _LoginScreenState extends State<LoginScreen> {
         elevation: 0,
         scrolledUnderElevation: 0,
         foregroundColor: AppFinanceStyle.textDefault,
+        bottom: _webVersionBannerBottom(),
       ),
       body: WaterBackground(
         child: LayoutBuilder(

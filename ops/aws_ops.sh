@@ -9,18 +9,25 @@
 # 说明：停服务用 fuser -k 端口，避免 pkill -f 误杀 ssh 的 bash -c。
 set -euo pipefail
 
+# 简洁中文日志 + 图标（需 UTF-8 终端）
+_log_hdr() { printf '\n━━ %s ━━\n' "$*"; }
+_log_ok() { printf '  ✅ %s\n' "$*"; }
+_log_bad() { printf '  ❌ %s\n' "$*"; }
+_log_info() { printf '  ℹ️  %s\n' "$*"; }
+_log_warn() { printf '  ⚠️  %s\n' "$*"; }
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1090
 eval "$("$SCRIPT_DIR/read_deploy_config.py" --bash-export-all)"
 
 _ssh_api() {
-  ssh -i "$OPS_BAASAPI_SSH_KEY" -p "$OPS_BAASAPI_SSH_PORT" \
+  ssh -o LogLevel=ERROR -i "$OPS_BAASAPI_SSH_KEY" -p "$OPS_BAASAPI_SSH_PORT" \
     "${OPS_BAASAPI_SSH_OPTS[@]}" \
     "${OPS_BAASAPI_SSH_USER}@${OPS_BAASAPI_SSH_HOST}" "$@"
 }
 
 _ssh_web() {
-  ssh -i "$OPS_FLUTTER_SSH_KEY" -p "$OPS_FLUTTER_SSH_PORT" \
+  ssh -o LogLevel=ERROR -i "$OPS_FLUTTER_SSH_KEY" -p "$OPS_FLUTTER_SSH_PORT" \
     "${OPS_FLUTTER_SSH_OPTS[@]}" \
     "${OPS_FLUTTER_SSH_USER}@${OPS_FLUTTER_SSH_HOST}" "$@"
 }
@@ -68,6 +75,7 @@ export HZTECH_TRADINGBOT_CTRL_DIR="${HZTECH_TRADINGBOT_CTRL_DIR:-/home/ec2-user/
 export HZTECH_TRADINGBOT_ACCOUNT_LIST_SOURCE="${HZTECH_TRADINGBOT_ACCOUNT_LIST_SOURCE:-database}"
 MOBILEAPP_ROOT="$RPATH" PORT="$PORT" nohup python3 baasapi/main.py >> server.log 2>&1 &
 sleep 2
+echo "📋 远端快照（监听 + 最近日志）"
 ss -tlnp 2>/dev/null | grep ":${PORT} " || netstat -tlnp 2>/dev/null | grep ":${PORT} " || true
 tail -n 8 server.log
 R
@@ -85,6 +93,7 @@ rm -rf baasapi/sqlite
 HZTECH_WEB_ROOT="$RPATH/flutterapp/build/web" PORT="$PORT" \
   nohup python3 baasapi/serve_web_static.py >> web_static.log 2>&1 &
 sleep 2
+echo "📋 远端快照（监听 + 最近日志）"
 ss -tlnp 2>/dev/null | grep ":${PORT} " || netstat -tlnp 2>/dev/null | grep ":${PORT} " || true
 tail -n 8 web_static.log
 R
@@ -98,7 +107,7 @@ case "$_tgt" in
   web | flutter | flutterapp) _tgt=web ;;
   all | both) _tgt=all ;;
   *)
-    echo "未知目标: $_tgt （用 api / web / all）" >&2
+    printf '❌ 未知目标: %s（请用 api / web / all）\n' "$_tgt" >&2
     exit 2
     ;;
 esac
@@ -106,44 +115,56 @@ esac
 case "$_cmd" in
   status)
     if [[ "$_tgt" == api || "$_tgt" == all ]]; then
-      echo "=== BaasAPI ${OPS_BAASAPI_PUBLIC_URL} ==="
+      _log_hdr "🖥️  BaasAPI  ${OPS_BAASAPI_PUBLIC_URL}"
       _code=$(curl -sS -m 12 -o /dev/null -w "%{http_code}" \
         "${OPS_BAASAPI_PUBLIC_URL}/api/health" 2>/dev/null) || true
       [[ -z "$_code" ]] && _code=000
-      echo "  GET /api/health（公网）→ ${_code}"
+      if [[ "$_code" == "200" ]]; then
+        _log_ok "公网 /api/health → HTTP ${_code}"
+      elif [[ "$_code" == "000" ]]; then
+        _log_bad "公网 /api/health → HTTP ${_code}"
+      else
+        _log_warn "公网 /api/health → HTTP ${_code}"
+      fi
       if [[ "$_code" == "000" ]]; then
-        echo "  （公网无响应：常见为安全组未放行 TCP ${OPS_BAASAPI_HTTP_PORT}、服务未启动、或公网 IP 已变）"
+        _log_warn "公网无响应：安全组未放行 :${OPS_BAASAPI_HTTP_PORT}、服务未起或 IP 已变"
         _lc=$(_ssh_local_curl_code _ssh_api "$OPS_BAASAPI_HTTP_PORT" "/api/health")
         if [[ -z "$_lc" ]]; then
-          echo "  GET /api/health（SSH→本机）→ (无输出，SSH 失败；检查密钥与 ${OPS_BAASAPI_SSH_HOST})"
+          _log_bad "经 SSH 本机探测失败（检查密钥与 ${OPS_BAASAPI_SSH_HOST}）"
         else
-          echo "  GET /api/health（SSH→本机）→ ${_lc}"
+          _log_info "经 SSH 本机 /api/health → HTTP ${_lc}"
           if [[ "$_lc" == "200" ]]; then
-            echo "  → 本机 API 正常：多为安全组/ACL 未对你当前网络开放 ${OPS_BAASAPI_HTTP_PORT}。"
+            _log_warn "本机正常 → 多为安全组/ACL 未对你开放 :${OPS_BAASAPI_HTTP_PORT}"
           elif [[ "$_lc" == "000" ]]; then
-            echo "  → 本机也未连通：可执行 $0 restart api 或 $0 ssh api 'ss -tlnp | grep :${OPS_BAASAPI_HTTP_PORT} ; tail -n 30 server.log'"
+            _log_warn "本机也不通 → 试: $0 restart api 或 $0 ssh api 'ss -tlnp | grep :${OPS_BAASAPI_HTTP_PORT}; tail -n 30 server.log'"
           else
-            echo "  → 本机 HTTP 码 ${_lc}，查看: $0 ssh api 'tail -n 50 server.log'"
+            _log_warn "本机 HTTP ${_lc} → $0 ssh api 'tail -n 50 server.log'"
           fi
         fi
       fi
     fi
     if [[ "$_tgt" == web || "$_tgt" == all ]]; then
-      echo "=== Flutter 静态 ${OPS_FLUTTER_PUBLIC_URL} ==="
+      _log_hdr "🌐 Flutter 静态  ${OPS_FLUTTER_PUBLIC_URL}"
       _wcode=$(curl -sS -m 12 -o /dev/null -w "%{http_code}" \
         "${OPS_FLUTTER_PUBLIC_URL}/" 2>/dev/null) || true
       [[ -z "$_wcode" ]] && _wcode=000
-      echo "  GET /（公网）→ ${_wcode}"
+      if [[ "$_wcode" == "200" ]]; then
+        _log_ok "公网 / → HTTP ${_wcode}"
+      elif [[ "$_wcode" == "000" ]]; then
+        _log_bad "公网 / → HTTP ${_wcode}"
+      else
+        _log_warn "公网 / → HTTP ${_wcode}"
+      fi
       if [[ "$_wcode" == "000" ]]; then
         _wl=$(_ssh_local_curl_code _ssh_web "$OPS_FLUTTER_HTTP_PORT" "/")
         if [[ -z "$_wl" ]]; then
-          echo "  GET /（SSH→本机）→ (无输出，SSH 失败；检查密钥与 ${OPS_FLUTTER_SSH_HOST})"
+          _log_bad "经 SSH 本机探测失败（检查密钥与 ${OPS_FLUTTER_SSH_HOST}）"
         else
-          echo "  GET /（SSH→本机）→ ${_wl}"
+          _log_info "经 SSH 本机 / → HTTP ${_wl}"
           if [[ "$_wl" == "200" || "$_wl" == "503" ]]; then
-            echo "  → 本机 Web 可达（503 可能为未构建）；公网失败多为安全组未放行 ${OPS_FLUTTER_HTTP_PORT}。"
+            _log_warn "本机可达（503 可能未构建）→ 公网多为安全组未放行 :${OPS_FLUTTER_HTTP_PORT}"
           elif [[ "$_wl" == "000" ]]; then
-            echo "  → 本机未监听：可执行 $0 restart web"
+            _log_warn "本机未监听 → 试: $0 restart web"
           fi
         fi
       fi
@@ -151,39 +172,39 @@ case "$_cmd" in
     ;;
   stop)
     if [[ "$_tgt" == api || "$_tgt" == all ]]; then
-      echo "=== 停止 BaasAPI :${OPS_BAASAPI_HTTP_PORT} @ ${OPS_BAASAPI_SSH_HOST} ==="
+      _log_hdr "⏹️  停止 BaasAPI  :${OPS_BAASAPI_HTTP_PORT}  ${OPS_BAASAPI_SSH_HOST}"
       _remote_stop_port _ssh_api "$OPS_BAASAPI_HTTP_PORT"
     fi
     if [[ "$_tgt" == web || "$_tgt" == all ]]; then
-      echo "=== 停止 Flutter 静态 :${OPS_FLUTTER_HTTP_PORT} @ ${OPS_FLUTTER_SSH_HOST} ==="
+      _log_hdr "⏹️  停止 Flutter 静态  :${OPS_FLUTTER_HTTP_PORT}  ${OPS_FLUTTER_SSH_HOST}"
       _remote_stop_port _ssh_web "$OPS_FLUTTER_HTTP_PORT"
     fi
     ;;
   start)
     if [[ "$_tgt" == api || "$_tgt" == all ]]; then
-      echo "=== 启动 BaasAPI @ ${OPS_BAASAPI_SSH_HOST} ==="
+      _log_hdr "🚀 启动 BaasAPI  ${OPS_BAASAPI_SSH_HOST}"
       _start_api
     fi
     if [[ "$_tgt" == web || "$_tgt" == all ]]; then
-      echo "=== 启动 Flutter 静态 @ ${OPS_FLUTTER_SSH_HOST} ==="
+      _log_hdr "🚀 启动 Flutter 静态  ${OPS_FLUTTER_SSH_HOST}"
       _start_web
     fi
     ;;
   restart)
     if [[ "$_tgt" == api || "$_tgt" == all ]]; then
-      echo "=== 重启 BaasAPI @ ${OPS_BAASAPI_SSH_HOST} ==="
+      _log_hdr "🔄 重启 BaasAPI  ${OPS_BAASAPI_SSH_HOST}"
       _remote_stop_port _ssh_api "$OPS_BAASAPI_HTTP_PORT"
       sleep 1
       _start_api
     fi
     if [[ "$_tgt" == web || "$_tgt" == all ]]; then
-      echo "=== 重启 Flutter 静态 @ ${OPS_FLUTTER_SSH_HOST} ==="
+      _log_hdr "🔄 重启 Flutter 静态  ${OPS_FLUTTER_SSH_HOST}"
       _remote_stop_port _ssh_web "$OPS_FLUTTER_HTTP_PORT"
       sleep 1
       _start_web
     fi
     if [[ "$_tgt" == all ]]; then
-      echo "=== 合并状态探测 ==="
+      _log_hdr "🔍 健康检查（两台）"
       "$0" status all
     fi
     ;;
@@ -199,23 +220,23 @@ case "$_cmd" in
     elif [[ "$_tgt" == web ]]; then
       _ssh_web "${REST[@]}"
     else
-      echo "用法: $0 ssh api|web [远程命令...]  例: $0 ssh api 'tail -n 30 server.log'" >&2
+      printf '❌ 用法: %s ssh api|web [远程命令…]  例: %s ssh api '\''tail -n 30 server.log'\''\n' "$0" "$0" >&2
       exit 2
     fi
     ;;
   help | -h | --help)
     cat <<'H'
-用法: ops/aws_ops.sh <命令> [目标]
+📖 ops/aws_ops.sh <命令> [目标]
 
-命令:
-  status          HTTP 探测（默认两台）
-  stop|start|restart   经 SSH 在远端停/启/重启进程
-  ssh             交互或执行远程命令
+命令
+  🔍 status              公网 HTTP 探测（默认两台）
+  ⏹️ stop | 🚀 start | 🔄 restart   经 SSH 远端停/启/重启
+  🔧 ssh                 交互或执行远程命令
 
-目标:
-  api|web|all     默认 all；restart all 后会再执行一次 status all
+目标
+  api | web | all        默认 all；restart all 末尾会再跑 status
 
-示例:
+示例
   ./ops/aws_ops.sh status
   ./ops/aws_ops.sh restart api
   ./ops/aws_ops.sh ssh web 'tail -n 20 web_static.log'
@@ -223,7 +244,7 @@ H
     exit 0
     ;;
   *)
-    echo "用法: $0 {status|stop|start|restart|ssh|help} [api|web|all]" >&2
+    printf '❌ 用法: %s {status|stop|start|restart|ssh|help} [api|web|all]\n' "$0" >&2
     exit 2
     ;;
 esac

@@ -6,6 +6,11 @@
 - HZTECH_WEB_ROOT：静态根目录，默认当前工作目录
 - PORT：监听端口，默认 9000
 - HZTECH_SERVICE_LOG_TAG：日志行首标签，默认 FlutterApp
+- HZTECH_APK_DIR：APK 目录（可选）。未设置时依次尝试 MOBILEAPP_ROOT/apk、
+  由 WEB_ROOT 推断的项目根下 apk/（flutterapp/build/web → 上溯三级到项目根）。
+
+**直链下载（无需登录）**：注册 `GET /download/apk/<文件名>.apk` 与 `GET /api/download/apk/<文件名>.apk`
+（后者便于 nginx 仅反代 `/api/` 到 BaasAPI 时由本机静态服务代下 APK），避免被 SPA 回退成登录页。
 """
 from __future__ import annotations
 
@@ -13,7 +18,7 @@ import logging
 import os
 from pathlib import Path
 
-from flask import Flask, abort, send_from_directory
+from flask import Flask, abort, send_file, send_from_directory
 
 HZTECH_SERVICE_LOG_TAG = (
     os.environ.get("HZTECH_SERVICE_LOG_TAG", "FlutterApp").strip() or "FlutterApp"
@@ -81,9 +86,50 @@ def _safe_file(root: Path, rel: str) -> Path | None:
     return full
 
 
+def _resolve_apk_dir(web_root: Path) -> Path:
+    raw = os.environ.get("HZTECH_APK_DIR", "").strip()
+    if raw:
+        p = Path(raw)
+        return p.resolve() if p.is_absolute() else (Path.cwd() / p).resolve()
+    mob = os.environ.get("MOBILEAPP_ROOT", "").strip()
+    if mob:
+        return (Path(mob) / "apk").resolve()
+    wr = web_root.resolve()
+    # …/flutterapp/build/web → 项目根/apk
+    try:
+        return (wr.parent.parent.parent / "apk").resolve()
+    except (OSError, ValueError):
+        return (wr / "apk").resolve()
+
+
 def create_app(web_root: Path) -> Flask:
     app = Flask(__name__)
     root = web_root.resolve()
+
+    def _apk_download(filename: str):
+        if not filename.endswith(".apk"):
+            abort(400)
+        apk_dir = _resolve_apk_dir(root)
+        if not apk_dir.is_dir():
+            abort(404)
+        path = (apk_dir / filename).resolve()
+        try:
+            path.relative_to(apk_dir.resolve())
+        except ValueError:
+            abort(404)
+        if not path.is_file():
+            abort(404)
+        return send_file(path, as_attachment=True, download_name=filename)
+
+    @app.route("/download/apk/<filename>")
+    def download_apk(filename: str):
+        """与 main.py 一致：仅 .apk，且必须在 APK 目录内（无需登录）。"""
+        return _apk_download(filename)
+
+    @app.route("/api/download/apk/<filename>")
+    def download_apk_under_api(filename: str):
+        """与 /download/apk/ 相同；nginx 只反代 /api/ 时 Web 入口仍可提供 APK。"""
+        return _apk_download(filename)
 
     @app.route("/", defaults={"spa_path": ""})
     @app.route("/<path:spa_path>")
