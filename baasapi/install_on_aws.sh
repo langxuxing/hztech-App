@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # 在 AWS EC2 上首次安装服务端依赖并启动（在项目部署目录下执行，如 /home/ec2-user/hztechapp）
 # 用法：cd /home/ec2-user/hztechapp && bash baasapi/install_on_aws.sh
-# 默认：BaasAPI（main.py）+ FlutterApp 静态（serve_web_static.py）双进程；端口见 deploy-aws.json 的 baasapi_port / flutterapp_port（或旧键）
+# PostgreSQL：库名 hztech、schema flutterapp、用户 hztech（安装/建库见 baasapi/install_postgresql_remote.sh；目录名 hztechapp 非库名）
+# 默认：BaasAPI（main.py）+ FlutterApp 静态（flutterapp/web_static/serve_web_static.py）；端口见 deploy-aws.json
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -36,6 +37,7 @@ export HZTECH_TRADINGBOT_ACCOUNT_LIST_SOURCE="${HZTECH_TRADINGBOT_ACCOUNT_LIST_S
 # 停止已有进程
 pkill -f "baasapi/main.py" 2>/dev/null || true
 pkill -f "baasapi/serve_web_static.py" 2>/dev/null || true
+pkill -f "flutterapp/web_static/serve_web_static.py" 2>/dev/null || true
 pkill -f "baasapi/simpleserver.py" 2>/dev/null || true
 sleep 1
 
@@ -47,7 +49,7 @@ MOBILEAPP_ROOT="$PROJECT_ROOT" PORT=$API_PORT \
 sleep 1
 
 echo "启动 Web 静态 (端口 $WEB_PORT, HZTECH_WEB_ROOT=$WEB_ROOT) ..."
-HZTECH_WEB_ROOT="$WEB_ROOT" PORT=$WEB_PORT nohup python3 baasapi/serve_web_static.py >> web_static.log 2>&1 &
+HZTECH_WEB_ROOT="$WEB_ROOT" PORT=$WEB_PORT nohup python3 flutterapp/web_static/serve_web_static.py >> web_static.log 2>&1 &
 sleep 2
 
 if pgrep -f "baasapi/main.py" >/dev/null; then

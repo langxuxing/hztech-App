@@ -80,6 +80,8 @@ cd /home/ec2-user/hztechapp && bash baasapi/install_on_aws.sh
 
 会安装依赖、创建 `apk` 等目录，并后台启动 **BaasAPI**（`main.py`）与 **FlutterApp 静态**（`serve_web_static.py`）两个进程（单机示例）。
 
+**PostgreSQL（生产）**：数据库名 **`hztech`**，schema **`flutterapp`**，用户 **`hztech`**（密码与 `database_config.example.json` 或环境变量一致）。首次在 EC2 上建库：`bash baasapi/install_postgresql_remote.sh`（默认即 `HZTECH_PG_DB=hztech`）。从本机导入数据：`./ops/gp_ops.sh` 或 `python3 ops/pg_ows_import.py`。说明：路径里的 **`hztechapp` 是 EC2 上的项目目录名**（`remote_path`），**不是** PostgreSQL 库名。
+
 ## 部署后测试
 
 在本地（需能访问 AWS 公网 IP）执行：
@@ -96,6 +98,6 @@ cd /home/ec2-user/hztechapp && bash baasapi/install_on_aws.sh
 
 - **FlutterApp**（浏览器静态页）：`flutterapp.host` + `flutterapp_port` 示例 `http://54.252.181.151:9000`
 - **BaasAPI**（App / 前端调用的后端）：`baasapi.host` + `baasapi_port` 示例 `http://54.66.108.150:9001`
-- APK 下载（当前由 BaasAPI 提供）：`http://<baasapi.host>:<baasapi_port>/download/apk/hztech-app-release.apk`
+- APK 直链（不经主站 nginx；客户端统一短路径）：`http://<baasapi.host>:<baasapi_port>/download/apk/hztech-app-release.apk`。服务端仍保留 `/api/download/apk/...` 供仅反代 `/api/` 的 nginx。全量/仅 APK 部署在双机且未设 `HZTECH_DEPLOY_SKIP_APK_SYNC=1` 时，会将本机 `apk/` 同步到 BaasAPI 与 Flutter 两台。若只在一台放 APK，请将 App 的 `HZTECH_APK_BASE_URL` 指到该机。
 - HTTPS：在实例前加 Nginx/Caddy，并把 `scheme` 改为 `https`。
 - 日志：BaasAPI `server.log`；FlutterApp `web_static.log`（路径为各段 `remote_path` 下）。控制台每行带 **`[BaasAPI]`** / **`[FlutterApp]`** 前缀；可用环境变量 **`HZTECH_SERVICE_LOG_TAG`** 覆盖默认标签（两进程分别设置）。

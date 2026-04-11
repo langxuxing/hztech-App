@@ -3,7 +3,7 @@
 """
 AWS API 服务测试程序：对远程 API（或本地）发真实 HTTP 请求，校验各接口。
 用法：
-  ./ops/test_aws_alpha_baasapi.sh          # aws-alpha（与 deploy-aws.json 中 baasapi 段一致）
+  ./ops/hztech_ops_menu.sh run 5           # 或菜单选 5（与 deploy-aws.json 中 baasapi 段一致）
   python test/test_aws_api.py
   BASE_URL=http://54.66.108.150:9001 python test/test_aws_api.py
   python test/test_aws_api.py -v

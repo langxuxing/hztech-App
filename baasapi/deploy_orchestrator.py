@@ -10,15 +10,35 @@ import importlib.util
 import os
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
+import deploy_ui as du
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
+def _baasapi_python() -> str:
+    """优先使用 baasapi/.venv（install_python_deps.sh 创建），与本地 PEP 668 环境及 run_local 一致。"""
+    override = os.environ.get("HZTECH_PYTHON", "").strip()
+    if override:
+        p = Path(override)
+        if p.is_file() and os.access(p, os.X_OK):
+            return str(p)
+    vdir = PROJECT_ROOT / "baasapi" / ".venv"
+    if os.name == "nt":
+        cand = vdir / "Scripts" / "python.exe"
+    else:
+        cand = vdir / "bin" / "python"
+    if cand.is_file() and os.access(cand, os.X_OK):
+        return str(cand)
+    return sys.executable
+
+
 def _log(msg: str) -> None:
-    print("[deploy] %s" % msg)
+    du.deploy_log(msg)
 
 
 def _resolve_config_path(raw: str) -> Path:
@@ -37,12 +57,37 @@ def _load_server_mgr():
     return mod
 
 
-def _run_sm(args: list[str], dry_run: bool) -> int:
-    cmd = [sys.executable, str(PROJECT_ROOT / "baasapi" / "server_mgr.py")] + args
+def _run_sm(
+    args: list[str],
+    dry_run: bool,
+    *,
+    extra_env: dict[str, str] | None = None,
+    timeout_sec: float | None = None,
+) -> int:
+    cmd = [_baasapi_python(), str(PROJECT_ROOT / "baasapi" / "server_mgr.py")] + args
     if dry_run:
         _log("dry-run: %s" % cmd)
+        if extra_env:
+            _log("dry-run env: %r" % (extra_env,))
+        if timeout_sec is not None:
+            _log("dry-run timeout_sec=%r" % (timeout_sec,))
         return 0
-    r = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
+    run_env = os.environ.copy()
+    if extra_env:
+        run_env.update(extra_env)
+    pop_kw: dict = {"cwd": str(PROJECT_ROOT), "env": run_env}
+    if timeout_sec is not None and timeout_sec > 0:
+        pop_kw["timeout"] = timeout_sec
+    try:
+        r = subprocess.run(cmd, **pop_kw)
+    except subprocess.TimeoutExpired:
+        lim = timeout_sec if timeout_sec is not None else 0.0
+        du.err("子进程超时（%.0fs）已中止：%s" % (lim, " ".join(cmd)))
+        du.warn(
+            "若网络或 PyPI 较慢，请增大 HZTECH_PIP_REMOTE_TIMEOUT_SEC；"
+            "依赖已就绪可设 HZTECH_SKIP_REMOTE_PIP=1 跳过阶段 7。"
+        )
+        return 124
     return int(r.returncode or 0)
 
 
@@ -64,7 +109,8 @@ def _http_ok(url: str, label: str) -> bool:
     except OSError:
         code = 0
     ok = code in (200, 503)
-    print("  %s %s -> HTTP %s (%s)" % ("OK" if ok else "WARN", label, code, url))
+    mark = du.I_OK if ok else du.I_WARN
+    print("  %s %s → HTTP %s  %s" % (mark, label, code, url))
     return ok
 
 
@@ -84,7 +130,7 @@ def _run_local_init_db(dry_run: bool) -> int:
     env["PYTHONPATH"] = str(PROJECT_ROOT)
     r = subprocess.run(
         [
-            sys.executable,
+            _baasapi_python(),
             "-c",
             "from baasapi.db import init_db; init_db()",
         ],
@@ -106,6 +152,33 @@ def _ios_build_allowed() -> bool:
 def _env_truthy(name: str) -> bool:
     v = os.environ.get(name, "").strip().lower()
     return v in ("1", "true", "yes")
+
+
+def _should_run_remote_pip() -> bool:
+    """与 server_mgr._remote_pip_install_wanted 一致：HZTECH_SKIP_REMOTE_PIP=1 时不跑远端 pip。
+    双机且 HZTECH_DEPLOY_APK_ONLY=1 时仅推 APK、未改 BaasAPI 代码树，默认跳过阶段 7。"""
+    v = os.environ.get("HZTECH_SKIP_REMOTE_PIP", "").strip().lower()
+    if v in ("1", "true", "yes"):
+        return False
+    if _env_truthy("HZTECH_DEPLOY_APK_ONLY"):
+        sm = _load_server_mgr()
+        if sm.split_dual_deploy():
+            return False
+    return True
+
+
+def _pip_remote_timeout_sec() -> float | None:
+    """阶段 7 pip-remote 超时（秒）。HZTECH_PIP_REMOTE_TIMEOUT_SEC 未设时默认 3600；0 或负数表示不限时。"""
+    raw = os.environ.get("HZTECH_PIP_REMOTE_TIMEOUT_SEC", "3600").strip()
+    if raw == "":
+        return 3600.0
+    try:
+        v = float(raw)
+    except ValueError:
+        return 3600.0
+    if v <= 0:
+        return None
+    return v
 
 
 def _should_run_db_migrate(cli_db: bool) -> bool:
@@ -152,7 +225,7 @@ def _apply_aws_defaults() -> None:
 def run_aws(ns: argparse.Namespace) -> int:
     cfg_path = _resolve_config_path(ns.config)
     if not cfg_path.is_file():
-        print("错误: 未找到部署配置: %s" % cfg_path, file=sys.stderr)
+        du.err("未找到部署配置: %s" % cfg_path)
         return 1
     os.environ["DEPLOY_CONFIG"] = str(cfg_path)
     _apply_aws_defaults()
@@ -169,89 +242,290 @@ def run_aws(ns: argparse.Namespace) -> int:
 
     skip_build = ns.skip_build or os.environ.get("HZTECH_SKIP_BUILD", "").strip() == "1"
     bset = _parse_build_set(ns.build)
+    skip_mobile = getattr(ns, "skip_mobile_build_aws", False) or os.environ.get(
+        "HZTECH_SKIP_MOBILE_BUILD", ""
+    ).strip().lower() in ("1", "true", "yes")
+    if skip_mobile:
+        bset.discard("android")
+        bset.discard("ios")
     if skip_build:
         bset = set()
 
     if ns.db_reset:
         if os.environ.get("HZTECH_ALLOW_DB_RESET") != "1":
-            print(
-                "错误: --db-reset 需同时设置环境变量 HZTECH_ALLOW_DB_RESET=1",
-                file=sys.stderr,
-            )
+            du.err("--db-reset 需同时设置环境变量 HZTECH_ALLOW_DB_RESET=1")
             return 2
-        print("错误: 数据库破坏性重建尚未实现，请使用 init_db/db-sync 迁移。", file=sys.stderr)
+        du.err("数据库破坏性重建尚未实现，请使用 init_db/db-sync 迁移。")
         return 3
 
-    print("==============================================")
-    print("  Ops 部署（orchestrator）AWS")
-    print("  配置: %s" % cfg_path)
-    print("  构建目标: %s  skip_build=%s" % (",".join(sorted(bset)) or "(无)", skip_build))
-    print("  API_BASE_URL: %s" % os.environ.get("HZTECH_API_BASE_URL", ""))
-    print("==============================================")
+    build_desc = ",".join(sorted(bset)) if bset else "（无）"
+    if skip_build:
+        build_desc = "（已跳过）"
+    aws_quiet = _env_truthy("HZTECH_DEPLOY_QUIET")
+    T = du.DEPLOY_STAGE_TOTAL_AWS
+    # 阶段 1–9 始终打印；HZTECH_DEPLOY_QUIET 仅影响 rsync/SSH/pip 刷屏（server_mgr）与下方细粒度 ok/step
+    du.title_staged(
+        1,
+        T,
+        du.I_ROCKET,
+        "AWS 部署流水线",
+        sub=(
+            "%s 共 %d 个阶段　｜　配置见 deploy-aws.json\n"
+            "   %s 流程：说明 → Flutter → rsync → 可选 DB → 远端 pip → restart → HTTP"
+            % (du.I_PIN, T, du.I_CLIP)
+        ),
+    )
+    print("   %s 配置文件: %s" % (du.I_CLIP, cfg_path))
+    print("   %s API 基址: %s" % (du.I_LINK, os.environ.get("HZTECH_API_BASE_URL", "")))
+    print(
+        "   %s 构建目标: %s　｜　skip_build=%s"
+        % (du.I_PACKAGE, build_desc, skip_build)
+    )
+    du.hr()
+    du.stage_step(
+        2,
+        T,
+        du.I_TIP,
+        "本机 Python 依赖：不在此流水线安装（远端 pip 为阶段 7，进程拉起为阶段 8）",
+    )
 
     if ns.flutter_clean:
+        du.stage_step(3, T, du.I_TIME, "清理 Flutter 构建缓存（flutter clean）…")
         rc = _run_flutter_clean(ns.dry_run)
         if rc != 0:
             return rc
+        if not aws_quiet:
+            du.ok("flutter clean 已完成")
+    else:
+        du.stage_step(3, T, du.I_SKIP, "跳过：未指定 --flutter-clean")
 
-    if not skip_build:
+    if not skip_build and bset:
+        du.stage_step(
+            4,
+            T,
+            du.I_PACKAGE,
+            "Flutter 构建（%s）…" % ",".join(sorted(bset)),
+        )
         if "android" in bset:
+            mode_zh = "Release" if ns.flutter_mode == "release" else "Debug"
+            du.step(du.I_PHONE, "📱 Android")
+            if not aws_quiet:
+                du.step(
+                    du.I_PHONE,
+                    "   构建 APK（%s，Gradle 首次可能较慢）…" % mode_zh,
+                )
             if ns.flutter_mode == "release":
                 rc = _run_sm(["build"], ns.dry_run)
             else:
                 rc = _run_sm(["build-debug"], ns.dry_run)
             if rc != 0:
                 return rc
+            if not aws_quiet:
+                du.ok("APK 构建阶段结束")
         if "ios" in bset:
             if not _ios_build_allowed():
-                _log("跳过 iOS（HZTECH_SKIP_IOS_BUILD 未设为 0/false/no）")
+                if not aws_quiet:
+                    du.skip("跳过 iOS：将 HZTECH_SKIP_IOS_BUILD 设为 0 可启用 IPA 构建")
             else:
+                du.step(du.I_APPLE, "🍎 iOS")
+                if not aws_quiet:
+                    du.step(du.I_APPLE, "   构建 IPA（release）…")
                 rc = _run_sm(["build-ios"], ns.dry_run)
                 if rc != 0:
                     return rc
+                if not aws_quiet:
+                    du.ok("IPA 构建阶段结束")
         if "web" in bset:
-            if ns.flutter_mode == "debug":
-                _log("提示: Web 暂仅 release 构建，忽略 --flutter-mode debug")
+            if ns.flutter_mode == "debug" and not aws_quiet:
+                du.tip("Web 暂仅支持 release，已忽略 --flutter-mode debug")
+            du.step(du.I_GLOBE, "🌐 Web")
+            if not aws_quiet:
+                du.step(du.I_GLOBE, "   构建 Flutter Web（release）…")
             rc = _run_sm(["build-web"], ns.dry_run)
             if rc != 0:
-                _log("Web 构建失败（继续同步，远端 Web 可能 503）")
+                if not aws_quiet:
+                    du.warn("Web 构建失败：将继续同步，远端静态站可能返回 503")
+            elif not aws_quiet:
+                du.ok("Web 构建阶段结束")
+    else:
+        du.stage_step(
+            4,
+            T,
+            du.I_SKIP,
+            "跳过：skip_build 或无可构建目标（android/ios/web）",
+        )
 
     deploy_args = ["deploy", "--no-start"]
     if ns.rsync_no_delete:
         deploy_args.append("--rsync-no-delete")
+    du.stage_step(
+        5,
+        T,
+        du.I_UPLOAD,
+        "同步文件到服务器（rsync；HZTECH_DEPLOY_APK_ONLY=1 时仅推 apk，双机推 BaasAPI + Flutter）…",
+    )
+    if aws_quiet:
+        du.tip(
+            "静默模式：rsync 仍会逐步打印「目标 + 开始/结束耗时」及 --stats 传输汇总（无逐文件 -v 列表）；"
+            "双机多段可能各需数分钟。需逐文件请 HZTECH_DEPLOY_QUIET=0 ./deploy2AWS.sh"
+        )
+        sys.stdout.flush()
     rc = _run_sm(deploy_args, ns.dry_run)
     if rc != 0:
         return rc
+    if not aws_quiet:
+        du.ok("文件同步完成")
 
     if _should_run_db_migrate(ns.db):
+        du.stage_step(6, T, du.I_DB, "远程数据库迁移（db-sync / init_db）…")
         rc = _run_sm(["db-sync"], ns.dry_run)
         if rc != 0:
             return rc
+        if not aws_quiet:
+            du.ok("数据库迁移已执行")
+    else:
+        du.stage_step(
+            6,
+            T,
+            du.I_SKIP,
+            "跳过：未启用远程数据库迁移（--db / HZTECH_DB_SYNC 等）",
+        )
 
-    if not ns.no_start:
-        rc = _run_sm(["restart"], ns.dry_run)
+    dbg_timing = _env_truthy("HZTECH_DEPLOY_DEBUG_TIMING")
+    if dbg_timing:
+        du.tip(
+            "HZTECH_DEPLOY_DEBUG_TIMING=1：阶段 7 pip 与阶段 8 restart 将打印 [deploy-timing] 分段耗时。"
+        )
+        sys.stdout.flush()
+
+    if _should_run_remote_pip():
+        du.stage_step(
+            7,
+            T,
+            du.I_TIME,
+            "远端 pip install -r baasapi/requirements.txt（双机则两台依次执行）…",
+        )
+        pip_timeout = _pip_remote_timeout_sec()
+        du.tip(
+            "阶段 7：pip 子进程强制详细输出（完整 pip 日志）。"
+            + (
+                " 超时上限 %.0f 秒（HZTECH_PIP_REMOTE_TIMEOUT_SEC；设为 0 表示不限时）。"
+                % pip_timeout
+                if pip_timeout
+                else " 未启用超时（HZTECH_PIP_REMOTE_TIMEOUT_SEC=0）。"
+            )
+        )
+        sys.stdout.flush()
+        t_pip = time.time()
+        rc = _run_sm(
+            ["pip-remote"],
+            ns.dry_run,
+            extra_env={"HZTECH_DEPLOY_QUIET": "0"},
+            timeout_sec=pip_timeout,
+        )
+        if dbg_timing:
+            print(
+                "%s [deploy-timing] 阶段 7（pip-remote）总耗时 %.2fs"
+                % (du.I_TIME, time.time() - t_pip),
+                flush=True,
+            )
         if rc != 0:
             return rc
+        if not aws_quiet:
+            du.ok("远端 requirements 已安装（或已满足）")
+    else:
+        _v_skip = os.environ.get("HZTECH_SKIP_REMOTE_PIP", "").strip().lower()
+        if _v_skip in ("1", "true", "yes"):
+            _pip_skip = "HZTECH_SKIP_REMOTE_PIP=1（不在此流水线执行远端 pip）"
+        else:
+            _pip_skip = (
+                "HZTECH_DEPLOY_APK_ONLY=1 且双机：仅推 APK（含 BaasAPI 与 Flutter），未改 BaasAPI 代码，跳过远端 pip"
+            )
+        du.stage_step(7, T, du.I_SKIP, "跳过：%s" % _pip_skip)
+
+    if not ns.no_start:
+        restart_args = ["restart"]
+        if _env_truthy("HZTECH_DEPLOY_APK_ONLY"):
+            sm = _load_server_mgr()
+            if sm.split_dual_deploy():
+                restart_args = ["restart-web"]
+        _st8_title = "重启远端（合并 SSH：停旧进程 + 目录 + nohup；本阶段不含 pip）…"
+        if restart_args == ["restart-web"]:
+            _st8_title = "重启 Flutter 静态站（仅 serve_web_static；双机 APK-only）…"
+        du.stage_step(8, T, du.I_REFRESH, _st8_title)
+        if restart_args == ["restart-web"]:
+            du.tip(
+                "阶段 8：仅 Flutter 静态机；无 pip 时一次 SSH（pkill+清目录+nohup+sleep1）。"
+                "HZTECH_DEPLOY_DEBUG_TIMING=1 可看各步耗时。"
+            )
+        else:
+            du.tip(
+                "阶段 8：server_mgr 已合并远程命令；无 pip 时 BaasAPI / Flutter 各约 1 次 SSH（同机则 1 次起双进程）。"
+                "编排器传 HZTECH_SKIP_REMOTE_PIP=1 时不跑远端 pip。耗时至多为握手 RTT 与 sleep 1；"
+                "HZTECH_DEPLOY_DEBUG_TIMING=1 可细分。"
+            )
+        sys.stdout.flush()
+        t_restart = time.time()
+        rc = _run_sm(
+            restart_args,
+            ns.dry_run,
+            extra_env={"HZTECH_SKIP_REMOTE_PIP": "1"},
+        )
+        if dbg_timing:
+            print(
+                "%s [deploy-timing] 阶段 8（restart）总耗时 %.2fs"
+                % (du.I_TIME, time.time() - t_restart),
+                flush=True,
+            )
+        if rc != 0:
+            return rc
+        if not aws_quiet:
+            du.ok("远端进程已拉起")
+    else:
+        du.stage_step(
+            8,
+            T,
+            du.I_SKIP,
+            "跳过：--no-start（未重启远端服务）",
+        )
 
     do_verify = ns.verify or _env_truthy("HZTECH_POST_DEPLOY_VERIFY")
     if do_verify:
-        print("")
-        print("=== 部署后探测 ===")
+        du.stage_step(
+            9,
+            T,
+            du.I_SEARCH,
+            "HTTP 健康检查（API /health 与 Flutter 静态根路径）…",
+        )
+    else:
+        du.stage_step(
+            9,
+            T,
+            du.I_SKIP,
+            "跳过：未启用部署后验证（可加 --verify 或 HZTECH_POST_DEPLOY_VERIFY=1）",
+        )
+    if do_verify:
         rc = _run_sm(["verify"], ns.dry_run)
         if rc != 0:
             return rc
 
-    _log(
-        "摘要: target=aws config=%s sync_mirror=%s db_migrate=%s restart=%s verify=%s dry_run=%s"
-        % (
-            cfg_path.name,
-            not ns.rsync_no_delete,
-            _should_run_db_migrate(ns.db),
-            not ns.no_start,
-            do_verify,
-            ns.dry_run,
+    if not aws_quiet:
+        _log(
+            "摘要: target=aws config=%s sync_mirror=%s db_migrate=%s remote_pip=%s restart=%s verify=%s dry_run=%s"
+            % (
+                cfg_path.name,
+                not ns.rsync_no_delete,
+                _should_run_db_migrate(ns.db),
+                _should_run_remote_pip(),
+                not ns.no_start,
+                do_verify,
+                ns.dry_run,
+            )
         )
-    )
+        du.hr()
+        du.step(du.I_DONE, "AWS 部署流水线已结束（请根据上方 ✅/⚠️ 确认各步结果）")
+    elif not do_verify:
+        print("%s AWS 部署完成（未执行 HTTP 验证；可设 HZTECH_POST_DEPLOY_VERIFY=1）" % du.I_OK)
     return 0
 
 
@@ -267,12 +541,9 @@ def run_local(ns: argparse.Namespace) -> int:
 
     if ns.db_reset:
         if os.environ.get("HZTECH_ALLOW_DB_RESET") != "1":
-            print(
-                "错误: --db-reset 需同时设置环境变量 HZTECH_ALLOW_DB_RESET=1",
-                file=sys.stderr,
-            )
+            du.err("--db-reset 需同时设置环境变量 HZTECH_ALLOW_DB_RESET=1")
             return 2
-        print("错误: 数据库破坏性重建尚未实现。", file=sys.stderr)
+        du.err("数据库破坏性重建尚未实现。")
         return 3
 
     skip_build = ns.skip_build
@@ -292,76 +563,142 @@ def run_local(ns: argparse.Namespace) -> int:
         bset = set()
 
     will_db = _should_run_db_migrate(ns.db)
-    print("==============================================")
-    print("  本地部署（orchestrator）")
-    print(
-        "  DB 后端=%s  初始化迁移(init_db)=%s"
-        % (os.environ.get("HZTECH_DB_BACKEND", "postgresql"), "是" if will_db else "否（默认）")
+    T = du.DEPLOY_STAGE_TOTAL_LOCAL
+    du.title_staged(
+        1,
+        T,
+        du.I_ROCKET,
+        "本地开发流水线",
+        sub="共 %d 个阶段；完成后将启动 run_local.sh（除非指定 --no-start）" % T,
     )
     print(
-        "  构建: %s  flutter-mode=%s  (Web 产物仍为 release)"
-        % (",".join(sorted(bset)) if bset else "(跳过)", ns.flutter_mode)
-    )
-    print(
-        "  端口 API=%s Web静态=%s WEB_STATIC=%s"
+        "   %s 数据库: %s　｜　init_db=%s"
         % (
+            du.I_DB,
+            os.environ.get("HZTECH_DB_BACKEND", "postgresql"),
+            "是" if will_db else "否（默认）",
+        )
+    )
+    print(
+        "   %s 构建: %s　｜　flutter-mode=%s（Web 始终 release）"
+        % (
+            du.I_PACKAGE,
+            ",".join(sorted(bset)) if bset else "（跳过）",
+            ns.flutter_mode,
+        )
+    )
+    print(
+        "   %s 端口 API=%s　Web 静态=%s　WEB_STATIC=%s"
+        % (
+            du.I_LINK,
             os.environ.get("HZTECH_LOCAL_API_PORT"),
             os.environ.get("HZTECH_LOCAL_WEB_PORT"),
             os.environ.get("HZTECH_LOCAL_WEB_STATIC"),
         )
     )
-    print("==============================================")
+    du.hr()
 
+    pip_cmd = ["bash", str(PROJECT_ROOT / "baasapi" / "install_python_deps.sh")]
     if not skip_pip:
-        cmd = ["bash", str(PROJECT_ROOT / "baasapi" / "install_python_deps.sh")]
         if ns.dry_run:
-            _log("dry-run: %s" % cmd)
+            du.stage_step(2, T, du.I_TIME, "[dry-run] 将执行 install_python_deps.sh…")
+            _log("dry-run: %s" % pip_cmd)
         else:
-            r = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
+            du.stage_step(2, T, du.I_TIME, "安装本机 Python 依赖（install_python_deps.sh）…")
+            r = subprocess.run(pip_cmd, cwd=str(PROJECT_ROOT))
             if r.returncode != 0:
                 return int(r.returncode)
+            du.ok("本机依赖就绪")
+    else:
+        du.stage_step(2, T, du.I_SKIP, "跳过：--skip-pip 或 HZTECH_SKIP_PIP_INSTALL")
 
     if ns.flutter_clean:
+        du.stage_step(3, T, du.I_TIME, "清理 Flutter 构建缓存（flutter clean）…")
         rc = _run_flutter_clean(ns.dry_run)
         if rc != 0:
             return rc
+        du.ok("flutter clean 已完成")
+    else:
+        du.stage_step(3, T, du.I_SKIP, "跳过：未指定 --flutter-clean")
 
-    if not skip_build:
+    if not skip_build and bset:
+        du.stage_step(
+            4,
+            T,
+            du.I_PACKAGE,
+            "Flutter 构建（%s）…" % ",".join(sorted(bset)),
+        )
         if "android" in bset:
+            du.step(
+                du.I_PHONE,
+                "构建 Android（%s）…"
+                % ("Release" if ns.flutter_mode == "release" else "Debug"),
+            )
             if ns.flutter_mode == "release":
                 rc = _run_sm(["build"], ns.dry_run)
             else:
                 rc = _run_sm(["build-debug"], ns.dry_run)
             if rc != 0:
                 return rc
+            du.ok("APK 构建完成")
         if "ios" in bset:
             if not _ios_build_allowed():
-                _log("跳过 iOS（HZTECH_SKIP_IOS_BUILD 未设为 0/false/no）")
+                du.skip("跳过 iOS（HZTECH_SKIP_IOS_BUILD 未设为 0）")
             else:
+                du.step(du.I_APPLE, "构建 iOS IPA…")
                 rc = _run_sm(["build-ios"], ns.dry_run)
                 if rc != 0:
                     return rc
+                du.ok("IPA 构建完成")
         if "web" in bset:
             if ns.flutter_mode == "debug":
-                _log("提示: Web 暂仅 release 构建")
+                du.tip("Web 暂仅 release 构建")
+            du.step(du.I_GLOBE, "构建 Flutter Web…")
             rc = _run_sm(["build-web"], ns.dry_run)
             if rc != 0:
-                _log("Web 构建失败")
+                du.warn("Web 构建失败")
+            else:
+                du.ok("Web 构建完成")
+    else:
+        du.stage_step(
+            4,
+            T,
+            du.I_SKIP,
+            "跳过：--skip-build 或当前无可构建目标（android/ios/web）",
+        )
 
-    if _should_run_db_migrate(ns.db):
+    du.stage_step(5, T, du.I_CLIP, "文件同步：无需 rsync（本地 workspace）")
+
+    if will_db:
+        du.stage_step(6, T, du.I_DB, "本地 init_db（表结构迁移）…")
         rc = _run_local_init_db(ns.dry_run)
         if rc != 0:
             return rc
+        du.ok("init_db 已完成")
+    else:
+        du.stage_step(
+            6,
+            T,
+            du.I_SKIP,
+            "跳过：未启用数据库迁移（默认不加 --db；可设 HZTECH_DB_SYNC）",
+        )
 
     do_verify = ns.verify or _env_truthy("HZTECH_POST_DEPLOY_VERIFY")
     if do_verify:
-        print("")
-        print("=== 本地探测 ===")
+        du.stage_step(7, T, du.I_SEARCH, "本机 HTTP 健康探测（127.0.0.1 API / Web）…")
         rc = _verify_local_urls()
         if rc != 0:
             return rc
+    else:
+        du.stage_step(
+            7,
+            T,
+            du.I_SKIP,
+            "跳过：未指定 --verify 且 HZTECH_POST_DEPLOY_VERIFY 未开启",
+        )
 
     if ns.no_start:
+        du.stage_step(8, T, du.I_SKIP, "跳过启动：--no-start")
         _log(
             "摘要: target=local build=%s db_migrate=%s start=False verify=%s"
             % (
@@ -372,10 +709,13 @@ def run_local(ns: argparse.Namespace) -> int:
         )
         return 0
 
-    _log("启动: baasapi/run_local.sh")
     if ns.dry_run:
+        du.stage_step(8, T, du.I_REFRESH, "[dry-run] 将 exec baasapi/run_local.sh…")
         _log("dry-run: 未 exec run_local.sh")
         return 0
+
+    du.stage_step(8, T, du.I_REFRESH, "启动本机 BaasAPI + 静态站（run_local.sh）…")
+    _log("exec: baasapi/run_local.sh")
 
     rl = PROJECT_ROOT / "baasapi" / "run_local.sh"
     os.environ.setdefault("FLASK_DEBUG", "1")
@@ -389,7 +729,7 @@ def run_migrate_sqlite_pg(ns: argparse.Namespace) -> int:
     extra = list(ns.migrate_args or [])
     if extra and extra[0] == "--":
         extra = extra[1:]
-    cmd = [sys.executable, str(script)] + extra
+    cmd = [_baasapi_python(), str(script)] + extra
     _log("SQLite→PG: %s" % " ".join(cmd))
     r = subprocess.run(cmd, cwd=str(PROJECT_ROOT))
     return int(r.returncode or 0)
@@ -401,7 +741,7 @@ def run_verify(ns: argparse.Namespace) -> int:
         return _verify_local_urls()
     cfg_path = _resolve_config_path(ns.config)
     if not cfg_path.is_file():
-        print("错误: 未找到部署配置: %s" % cfg_path, file=sys.stderr)
+        du.err("未找到部署配置: %s" % cfg_path)
         return 1
     os.environ["DEPLOY_CONFIG"] = str(cfg_path)
     return _run_sm(["verify"], False)
@@ -433,7 +773,12 @@ def _build_parser() -> argparse.ArgumentParser:
     pm.set_defaults(func=run_migrate_sqlite_pg)
 
     aws_epilog = """
-AWS 角色默认（等同 deploy2AWS.sh）:
+直接运行本子命令默认仍含 android 构建；deploy2AWS.sh 会导出 HZTECH_SKIP_MOBILE_BUILD=1（仅 web）、
+HZTECH_DEPLOY_SKIP_APK_SYNC=1、HZTECH_DEPLOY_APK_ONLY=0；另默认 HZTECH_DEPLOY_QUIET=1（rsync/SSH/pip 少刷屏）、
+HZTECH_POST_DEPLOY_VERIFY=1（结束 HTTP 健康检查）。AWS 流水线阶段 1/9–9/9；rsync/pip 更详细: HZTECH_DEPLOY_QUIET=0。
+阶段 7 为远端 pip（默认详细 pip 日志 + 3600s 超时，HZTECH_PIP_REMOTE_TIMEOUT_SEC / 0=不限）；阶段 8 为 restart。
+卡顿排查: HZTECH_DEPLOY_DEBUG_TIMING=1；跳过远端 pip: HZTECH_SKIP_REMOTE_PIP=1。
+仅推 APK 时设 HZTECH_DEPLOY_APK_ONLY=1（双机时 rsync 到 BaasAPI 与 Flutter 静态机；阶段 7 跳过 pip、阶段 8 仅 restart-web）。
   --build android,web  --flutter-mode release  不迁移 DB  镜像 rsync  部署后重启  不探测
   配置默认 baasapi/deploy-aws.json（或环境变量 DEPLOY_CONFIG）
 """
@@ -483,6 +828,12 @@ AWS 角色默认（等同 deploy2AWS.sh）:
     aws.add_argument("--no-start", action="store_true", help="上传后不执行 restart")
     aws.add_argument("--verify", action="store_true", help="结束后 HTTP 探测（或 HZTECH_POST_DEPLOY_VERIFY=1）")
     aws.add_argument("--skip-build", action="store_true", help="跳过所有 Flutter 构建（亦认 HZTECH_SKIP_BUILD=1）")
+    aws.add_argument(
+        "--skip-mobile-build",
+        action="store_true",
+        dest="skip_mobile_build_aws",
+        help="跳过 android/ios 构建（亦认 HZTECH_SKIP_MOBILE_BUILD=1）",
+    )
     aws.add_argument(
         "--dart-define-file",
         default=None,
@@ -575,7 +926,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     ns, rest = parser.parse_known_args(argv)
     if rest:
-        print("错误: 未识别参数: %s" % rest, file=sys.stderr)
+        du.err("未识别参数: %s" % rest)
         return 2
     return int(ns.func(ns) or 0)
 

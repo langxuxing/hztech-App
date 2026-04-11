@@ -259,7 +259,7 @@ def start_kline_nightly_scheduler(
     project_root: Path,
 ) -> None:
     if (os.environ.get("HZTECH_KLINE_SYNC_DISABLED") or "").strip() == "1":
-        app_logger.info("kline_web_sync: disabled (HZTECH_KLINE_SYNC_DISABLED=1)")
+        app_logger.info("⏸️ K线 │ 已关 HZTECH_KLINE_SYNC_DISABLED=1")
         return
     try:
         hour = int((os.environ.get("HZTECH_KLINE_SYNC_HOUR_UTC") or "1").strip())
@@ -276,7 +276,7 @@ def start_kline_nightly_scheduler(
         while True:
             delay = _seconds_until_next_utc(hour, minute)
             app_logger.info(
-                "kline_web_sync: next run in %.0fs (UTC %02d:%02d)",
+                "🌙 K线 │ 下次 %.0fs │ UTC %02d:%02d",
                 delay,
                 hour,
                 minute,
@@ -284,9 +284,9 @@ def start_kline_nightly_scheduler(
             time.sleep(delay)
             try:
                 st = run_mark_1m_sync_cycle(project_root, app_logger)
-                app_logger.info("kline_web_sync: cycle %s", st)
+                app_logger.info("🌙 K线 │ 本轮 %s", st)
             except Exception as e:
-                app_logger.warning("kline_web_sync: cycle error %s", e, exc_info=True)
+                app_logger.warning("⚠️ K线 │ 本轮异常 │ %s", e, exc_info=True)
 
     t = threading.Thread(target=_loop, name="kline-nightly", daemon=True)
     t.start()

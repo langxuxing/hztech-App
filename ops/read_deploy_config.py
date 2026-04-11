@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""从 baasapi/deploy-aws.json 读取目标配置，与 baasapi/server_mgr.target_config 一致。"""
+"""从 baasapi/deploy-aws.json 读取目标配置，与 baasapi/server_mgr.target_config 一致。
+
+供 ops/pg_ows_import.py、ops/hztech_ops_menu.sh、ops/aws_ops.sh 等调用；
+非菜单子集，独立模块保留。
+"""
 from __future__ import annotations
 
 import argparse

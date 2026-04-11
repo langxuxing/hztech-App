@@ -359,7 +359,8 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _loadWebVersionHint() async {
     try {
-      final api = ApiClient(_normalizeBaseUrl(kAwsApkStorageBaseUrl));
+      // app-version 仅 BaasAPI 提供；勿用 APK 直链机（如 serve_web_static :9000）。
+      final api = ApiClient(_normalizeBaseUrl(defaultBackendUrl));
       final cfg = await api.getAppVersionConfig();
       if (!mounted || cfg == null || !cfg.success) return;
       final latest = cfg.android.latestVersion.trim();

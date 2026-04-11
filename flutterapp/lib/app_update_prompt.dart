@@ -5,7 +5,8 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'api/client.dart';
 import 'api/models.dart';
-import 'constants/app_download.dart' show kAwsApkStorageBaseUrl, kDefaultApkFileName;
+import 'constants/app_download.dart'
+    show kApkDownloadUrlPath, kAwsApkStorageBaseUrl, kDefaultApkFileName;
 import 'version_utils.dart';
 
 /// 打包 iOS 时可传入：`--dart-define=IOS_APP_STORE_URL=https://apps.apple.com/...`
@@ -33,7 +34,7 @@ Uri? _androidApkUri(String base, String fileName) {
   final b = _normalizeBase(base);
   if (b.isEmpty) return null;
   final name = fileName.trim().isEmpty ? kDefaultApkFileName : fileName.trim();
-  return Uri.parse('${b}api/download/apk/${Uri.encodeComponent(name)}');
+  return Uri.parse('$b$kApkDownloadUrlPath/${Uri.encodeComponent(name)}');
 }
 
 /// 优先使用线上公开下载域名（与登录页 APK 直链一致），避免 API 与 APK 分机部署时链到无文件的 API。

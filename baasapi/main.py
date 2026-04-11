@@ -2,8 +2,9 @@
 """
 MobileApp API 服务（部署于 AWS 等）
 - API（JSON）：App / Flutter Web 共用，路径 /api/*
-- Flutter Web 静态资源由 baasapi/serve_web_static.py 或独立 CDN 托管，不由本进程提供
-- 文件端点：GET /download/apk/<name>.apk、GET /api/download/apk/<name>.apk（后者便于 nginx 仅反代 /api/）、GET /res/bg；K 线 JSON：GET /kline/<file>.json
+- Flutter Web 静态资源由 flutterapp/web_static/serve_web_static.py（或兼容入口 baasapi/serve_web_static.py）或 CDN 托管
+- 文件端点：GET /download/apk/<name>.apk（客户端统一短链）、GET /api/download/apk/<name>.apk（nginx 仅反代 /api/ 时兼容）、GET /res/bg；K 线 JSON：GET /kline/<file>.json
+- 日志：默认 werkzeug 静默；HZTECH_API_ACCESS_LOG=1 打印关键请求（跳过 /api/health、/kline/）；LOG_LEVEL=DEBUG 打印全量请求摘要
 
 App 所需 API（与 QtraderApi.kt 一致）：
   POST /api/login                 登录，Body: {username, password}，返回 {success, token}
@@ -73,6 +74,7 @@ import strategy_efficiency as _strategy_efficiency
 import kline_web_sync as _kline_web_sync
 from accounts import AccountMgr as _account_mgr
 from exchange import okx as _okx
+from hztech_log_format import hztech_console_formatter
 from tradingbot_ctrl import (
     start as strategy_start,
     stop as strategy_stop,
@@ -147,7 +149,7 @@ def _try_acquire_background_scheduler_leader_lock() -> bool:
     无 fcntl 的平台（Windows）视为单进程开发环境，始终返回 True。
     锁目录默认 ``<repo>/.temp-cursor``，可用环境变量 ``HZTECH_BACKGROUND_SCHEDULER_LOCK_DIR`` 覆盖。
 
-    日志行首含 ``[BaasAPI]``（或环境变量 ``HZTECH_SERVICE_LOG_TAG``），与 FlutterApp 静态服务日志区分；
+    日志行首含 ``[BaasAPI]``（或 ``HZTECH_SERVICE_LOG_TAG``）、时间为 ``月-日 时:分:秒``，与 FlutterApp 静态服务日志区分；
     多 worker 时请用 ``pid``/``ppid`` 或 ``GET /api/status`` 区分。
     """
     global _BACKGROUND_SCHEDULER_LEADER_LOCK_FP
@@ -213,15 +215,8 @@ def _sync_state_snapshot() -> dict:
 
 # 调试日志：LOG_LEVEL=DEBUG 时输出请求/响应详情（便于排查“收到 HTML 而非 JSON”等）
 _LOG_LEVEL = os.environ.get("LOG_LEVEL", "").strip().upper()
-# 持仓分段调试：DEBUG_POSITIONS=1 时输出 [持仓-API] / [持仓-OKX] 等日志，便于排查界面→API→OKX 调用链
+# 持仓分段调试：DEBUG_POSITIONS=1 时输出 📍 持仓接口 / 📍 OKX 请求 等日志，便于排查界面→API→OKX
 _DEBUG_POSITIONS = os.environ.get("DEBUG_POSITIONS", "0") == "1"
-
-
-def _hztech_log_formatter(service_tag: str) -> logging.Formatter:
-    return logging.Formatter(
-        f"[{service_tag}] %(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
 
 
 def _hztech_quiet_noisy_loggers(app_debug: bool) -> None:
@@ -241,7 +236,7 @@ def _hztech_quiet_noisy_loggers(app_debug: bool) -> None:
 def apply_hztech_process_logging(service_tag: str | None = None) -> None:
     """统一控制台日志格式（行首 [BaasAPI] 等）。在 app.run 前调用，避免与 FlutterApp 日志混淆。"""
     tag = (service_tag or HZTECH_SERVICE_LOG_TAG).strip() or "BaasAPI"
-    fmt = _hztech_log_formatter(tag)
+    fmt = hztech_console_formatter(tag)
     level = logging.DEBUG if _LOG_LEVEL == "DEBUG" else logging.INFO
     root = logging.getLogger()
     root.setLevel(level)
@@ -254,53 +249,102 @@ def apply_hztech_process_logging(service_tag: str | None = None) -> None:
             h.setFormatter(fmt)
     app.logger.setLevel(level)
     wz = logging.getLogger("werkzeug")
-    wz.setLevel(level)
+    # 非 DEBUG 时压低逐请求刷屏；DEBUG 与根 logger 同级
+    wz.setLevel(level if _LOG_LEVEL == "DEBUG" else logging.WARNING)
     for h in wz.handlers:
         h.setFormatter(fmt)
     _hztech_quiet_noisy_loggers(_LOG_LEVEL == "DEBUG")
 
 
 if _LOG_LEVEL == "DEBUG":
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format=f"[{HZTECH_SERVICE_LOG_TAG}] %(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    _dbg_root = logging.getLogger()
+    if not _dbg_root.handlers:
+        _dbg_h = logging.StreamHandler()
+        _dbg_h.setFormatter(hztech_console_formatter(HZTECH_SERVICE_LOG_TAG))
+        _dbg_root.addHandler(_dbg_h)
+    _dbg_root.setLevel(logging.DEBUG)
     app.logger.setLevel(logging.DEBUG)
     logging.getLogger("werkzeug").setLevel(logging.DEBUG)
     _hztech_quiet_noisy_loggers(True)
 
 
+def _api_access_log_skip(path: str, method: str) -> bool:
+    """访问摘要模式下省略高频/探测路径。"""
+    if method == "GET" and path == "/api/health":
+        return True
+    if path.startswith("/kline/"):
+        return True
+    return False
+
+
+def _emit_baasapi_startup_summary(port: int) -> None:
+    """进程入口一行式中文摘要（图标 + 重点）。"""
+    db_b = os.environ.get("HZTECH_DB_BACKEND", "postgresql").strip() or "postgresql"
+    leader = globals().get("_BACKGROUND_SCHEDULER_IS_LEADER")
+    if leader is True:
+        lm = "🔑 定时任务　本进程为主（余额同步·月初·K 线夜间等）"
+    elif leader is False:
+        lm = "⏭️ 定时任务　本进程为副 worker（由持锁进程跑后台）"
+    else:
+        lm = "💡 定时任务　无跨进程锁或未启用后台（开发/单进程）"
+    acc = os.environ.get("HZTECH_API_ACCESS_LOG", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if acc:
+        acc_zh = "📋 已开访问摘要（HZTECH_API_ACCESS_LOG=1；略过 /api/health 与 /kline/）"
+    else:
+        acc_zh = "💡 需要时：HZTECH_API_ACCESS_LOG=1 打印请求一行（默认 werkzeug 静默）"
+    app.logger.info("🚀 BaasAPI 就绪　🔌 端口 %s", port)
+    app.logger.info("🗄️ 数据库　%s", db_b)
+    app.logger.info("%s", lm)
+    app.logger.info("%s", acc_zh)
+    if _LOG_LEVEL == "DEBUG":
+        app.logger.info("🐛 LOG_LEVEL=DEBUG　⇄ 将打印每条请求/类型摘要")
+
+
 @app.after_request
-def _log_request_if_debug(resp):
-    """LOG_LEVEL=DEBUG 时记录请求与响应摘要，便于策略管理页等接口调试。"""
-    if _LOG_LEVEL != "DEBUG":
+def _hztech_after_request_access(resp):
+    """DEBUG：全量请求行；非 DEBUG 且 HZTECH_API_ACCESS_LOG=1：关键请求一行（略过健康检查与 K 线）。"""
+    if _LOG_LEVEL == "DEBUG":
+        app.logger.debug(
+            "⇄ %s %s → %s │ %s",
+            request.method,
+            request.path,
+            resp.status_code,
+            resp.content_type or "",
+        )
+        if resp.status_code >= 400 or (
+            resp.content_type and "html" in (resp.content_type or "").lower()
+        ):
+            try:
+                data = resp.get_data()
+                snippet = (
+                    data.decode("utf-8", errors="replace")[:400]
+                    if isinstance(data, bytes)
+                    else str(data)[:400]
+                )
+                resp.set_data(data)
+                if snippet.strip().startswith("<"):
+                    app.logger.debug("⚠️ 响应为 HTML（勿当 JSON）│ %s", snippet[:200])
+            except Exception:
+                pass
         return resp
-    app.logger.debug(
-        "%s %s -> %s Content-Type: %s",
+    if os.environ.get("HZTECH_API_ACCESS_LOG", "").strip().lower() not in (
+        "1",
+        "true",
+        "yes",
+    ):
+        return resp
+    if _api_access_log_skip(request.path, request.method):
+        return resp
+    app.logger.info(
+        "📥 %s %s → %s",
         request.method,
         request.path,
         resp.status_code,
-        resp.content_type or "",
     )
-    if resp.status_code >= 400 or (
-        resp.content_type and "html" in (resp.content_type or "").lower()
-    ):
-        try:
-            data = resp.get_data()
-            snippet = (
-                data.decode("utf-8", errors="replace")[:400]
-                if isinstance(data, bytes)
-                else str(data)[:400]
-            )
-            resp.set_data(data)
-            if snippet.strip().startswith("<"):
-                app.logger.debug(
-                    "response 为 HTML 片段（客户端若当 JSON 解析会报错）: %s",
-                    snippet[:200],
-                )
-        except Exception:
-            pass
     return resp
 
 
@@ -342,7 +386,7 @@ def _cors_preflight():
         return app.make_response(("", 204))
 
 
-# 项目根目录（部署根，如 /home/ec2-user/hztechapp）
+# 项目根目录（部署根，如 /home/ec2-user/hztechapp；此为目录名，PostgreSQL 库名一般为 hztech）
 PROJECT_ROOT = Path(
     os.environ.get("MOBILEAPP_ROOT", Path(__file__).resolve().parent.parent)
 )
@@ -679,11 +723,9 @@ def _job_fetch_account_and_save_snapshots() -> None:
             _db, _okx, _DEFAULT_STRATEGY_EFFICIENCY_INST_ID
         )
         if _mb_err:
-            app.logger.debug(
-                "market_daily_bars 未补齐昨日: %s", _mb_err
-            )
+            app.logger.debug("📊 日线未齐 │ %s", _mb_err)
     except Exception as _e_mdb:
-        app.logger.warning("market_daily_bars ensure 异常: %s", _e_mdb)
+        app.logger.warning("⚠️ 日线补齐异常 │ %s", _e_mdb)
 
     _sync_mark_completed(None)
 
@@ -700,17 +742,12 @@ def _start_account_snapshot_timer() -> None:
         time.sleep(30)
         while True:
             try:
-                app.logger.debug(
-                    "账户信息同步器：周期开始 pid=%s thread=%s",
-                    os.getpid(),
-                    threading.current_thread().name,
-                )
+                app.logger.debug("🔄 账户同步·开始 │ pid=%s", os.getpid())
                 _job_fetch_account_and_save_snapshots()
                 app.logger.info(
-                    "账户信息同步器：周期完成（间隔=%ss）pid=%s thread=%s",
+                    "✅ 账户同步·完成 │ %ss │ pid=%s",
                     _ACCOUNT_SYNC_INTERVAL_SEC,
                     os.getpid(),
-                    threading.current_thread().name,
                 )
             except Exception as e:
                 _sync_mark_completed(str(e))
@@ -771,10 +808,7 @@ def _bootstrap_account_month_balance_baseline_if_needed_on_startup() -> None:
         ):
             return
         ym = datetime.now(timezone.utc).strftime("%Y-%m")
-        app.logger.info(
-            "account_month_balance_baseline：当月 %s 数据缺失，启动后补写一次",
-            ym,
-        )
+        app.logger.info("📅 月初基线 │ 当月 %s 缺数·启动补写", ym)
         _account_mgr.run_account_month_balance_baseline_rollover(_db, app.logger)
         _month_balance_baseline_last_run_ym = ym
     except Exception as e:
@@ -827,7 +861,7 @@ def root_index():
         {
             "service": "hztech-api",
             "health": "/api/health",
-            "hint": "Flutter Web 请使用 baasapi/serve_web_static.py 或独立静态托管",
+            "hint": "Flutter Web 请使用 flutterapp/web_static/serve_web_static.py 或独立静态托管",
         }
     )
 
@@ -932,7 +966,7 @@ def api_login():
                 extra={"reason": "missing_username_or_password"},
             )
         except Exception:
-            app.logger.warning("login_fail 写日志失败", exc_info=True)
+            app.logger.warning("⚠️ 登录失败日志落库失败", exc_info=True)
         return jsonify({"success": False, "message": "请输入用户名和密码"}), 400
     if not _check_password(username, password):
         try:
@@ -940,7 +974,7 @@ def api_login():
                 "WARN", "login_fail", source="login", extra={"username": username}
             )
         except Exception:
-            app.logger.warning("login_fail 写日志失败", exc_info=True)
+            app.logger.warning("⚠️ 登录失败日志落库失败", exc_info=True)
         return jsonify({"success": False, "message": "用户名或密码错误"}), 401
     token = _issue_token(username)
     if isinstance(token, bytes):
@@ -950,7 +984,7 @@ def api_login():
             "INFO", "login_ok", source="login", extra={"username": username}
         )
     except Exception:
-        app.logger.warning("login_ok 写日志失败（不影响登录）", exc_info=True)
+        app.logger.warning("⚠️ 登录成功日志落库失败（不影响登录）", exc_info=True)
     role = _db.user_get_role(username)
     linked = (
         _db.user_get_linked_account_ids(username) if role == "customer" else []
@@ -1843,7 +1877,7 @@ def api_bot_positions(bot_id):
     if denied:
         return denied
     if _DEBUG_POSITIONS:
-        app.logger.info("[持仓-API] 收到请求 bot_id=%s", bot_id)
+        app.logger.info("📍 持仓接口 │ %s", bot_id)
     # #region agent log
     _debug_log(
         "main.py:api_bot_positions:entry",
@@ -1876,7 +1910,7 @@ def api_bot_positions(bot_id):
     )
     # #endregion
     app.logger.debug(
-        "positions bot_id=%s config=%s",
+        "📍 持仓 │ %s · cfg=%s",
         bot_id,
         config_path.name if config_path else None,
     )
@@ -1903,10 +1937,7 @@ def api_bot_positions(bot_id):
     )
     # #endregion
     if not positions and positions_error:
-        app.logger.info(
-            "positions bot_id=%s result empty (see OKX logs above if auth/network issue)",
-            bot_id,
-        )
+        app.logger.info("⚠️ 持仓空 │ %s │ 查 OKX/网络", bot_id)
     payload: dict = {
         "success": True,
         "bot_id": bot_id,
@@ -2666,8 +2697,7 @@ if _BACKGROUND_SCHEDULERS_ENABLED:
     _BACKGROUND_SCHEDULER_IS_LEADER = _bg_leader_ok
     if _bg_leader_ok:
         app.logger.info(
-            "后台定时任务 leader（API 服务）：pid=%s ppid=%s（账户同步/月初/K 线）；"
-            "排查多实例: pgrep -af 'baasapi/main.py'；gunicorn 查 -w；FLASK_DEBUG=1 时注意重载子进程",
+            "🔑 定时·主 │ pid=%s ppid=%s │ 余额·月初·K线",
             os.getpid(),
             os.getppid(),
         )
@@ -2681,7 +2711,7 @@ if _BACKGROUND_SCHEDULERS_ENABLED:
         _kline_web_sync.start_kline_nightly_scheduler(app.logger, PROJECT_ROOT)
     else:
         app.logger.info(
-            "后台定时任务由其他进程持有锁，本 worker 跳过：pid=%s ppid=%s",
+            "⏭ 定时·副 │ 锁占用·跳过 │ pid=%s ppid=%s",
             os.getpid(),
             os.getppid(),
         )
@@ -2738,10 +2768,7 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, _app_on_stop_signal)
     # 端口由环境变量 PORT 指定（默认 9001，与 Flutter API 预设一致）
     port = int(os.environ.get("PORT", 9001))
-    app.logger.info(
-        "%s 启动 listen=0.0.0.0:%s FLASK_DEBUG=%s",
-        HZTECH_SERVICE_LOG_TAG,
-        port,
-        os.environ.get("FLASK_DEBUG", "0"),
-    )
+    _emit_baasapi_startup_summary(port)
+    if os.environ.get("FLASK_DEBUG", "0") == "1":
+        app.logger.info("🐛 FLASK_DEBUG=1　热重载与详细栈（生产勿开）")
     app.run(host="0.0.0.0", port=port, debug=os.environ.get("FLASK_DEBUG", "0") == "1")

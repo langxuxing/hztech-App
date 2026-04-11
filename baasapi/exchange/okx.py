@@ -58,6 +58,39 @@ _OKX_BALANCE_CACHE: dict[str, tuple[float, dict]] = {}
 _OKX_POSITIONS_CACHE: dict[str, tuple[float, tuple[list, str | None]]] = {}
 
 
+def _okx_req_log_path(sign_path: str, max_len: int = 56) -> str:
+    """控制台日志用：去掉过长 query，避免 bills-archive 刷屏。"""
+    if not sign_path:
+        return "?"
+    base = sign_path.split("?", 1)[0]
+    if len(base) > max_len:
+        return base[: max_len - 1] + "…"
+    if "?" in sign_path:
+        return base + "?…"
+    return base
+
+
+def _okx_exc_short(e: BaseException) -> str:
+    s = str(e).strip()
+    if isinstance(e, requests.exceptions.ReadTimeout) or "Read timed out" in s:
+        return "读超时"
+    if isinstance(
+        e, requests.exceptions.ConnectTimeout
+    ) or "ConnectTimeout" in type(e).__name__:
+        return "连接超时"
+    if "Connection refused" in s:
+        return "连接被拒"
+    if "Name or service not known" in s or "nodename nor servname" in s.lower():
+        return "DNS 失败"
+    if "Failed to establish a new connection" in s:
+        return "建连失败"
+    if "pool is full" in s.lower():
+        return "连接池满"
+    if len(s) > 88:
+        return s[:85] + "…"
+    return s
+
+
 def _okx_live_cache_key(config_path: Path | None) -> str | None:
     if config_path is None:
         return None
@@ -100,10 +133,10 @@ def _okx_requests_get_ssl_retries(
                 continue
     if last_err:
         logger.debug(
-            "OKX GET SSL/连接失败（已重试 %d 次）: %s -> %s",
+            "🔌 OKX GET 失败·已重试%d次 │ %s │ %s",
             _OKX_SSL_RETRY_ATTEMPTS,
-            url[:160],
-            last_err,
+            url[:100],
+            _okx_exc_short(last_err) if last_err else "?",
         )
     return None
 
@@ -360,8 +393,8 @@ def okx_public_get(
                 ra = r.headers.get("Retry-After")
                 sleep_s = _okx_retry_sleep_seconds(ra, attempt + 1)
                 logger.warning(
-                    "OKX public GET 429 %s，%.2fs 后重试 (%d/%d)",
-                    path[:120],
+                    "⚠️ OKX 公开 429 │ %s │ %.2fs 后重试 %d/%d",
+                    _okx_req_log_path(path, 72),
                     sleep_s,
                     attempt + 1,
                     _OKX_HTTP429_MAX_ATTEMPTS,
@@ -380,7 +413,11 @@ def okx_public_get(
         try:
             data = r.json()
         except (json.JSONDecodeError, ValueError) as e:
-            logger.warning("OKX public GET error: %s -> %s", path[:120], e)
+            logger.warning(
+                "⚠️ OKX 公开 │ %s │ %s",
+                _okx_req_log_path(path, 72),
+                _okx_exc_short(e),
+            )
             return None, str(e) or "invalid JSON"
         if isinstance(data, dict) and data.get("code") != "0":
             return None, _okx_business_error_detail(data)
@@ -629,13 +666,15 @@ def okx_request(
     config_name = path.name if path else "default"
     if _DEBUG_POSITIONS:
         logger.info(
-            "[持仓-OKX] 准备请求 OKX: %s %s config=%s",
-            method, request_path, config_name,
+            "📍 OKX 请求 │ %s %s · %s",
+            method,
+            _okx_req_log_path(request_path, 48),
+            config_name,
         )
     cfg = load_okx_config(path) if path else None
     if not cfg:
         if _DEBUG_POSITIONS and path:
-            logger.warning("[持仓-OKX] 配置文件不存在或格式无效: %s", path)
+            logger.warning("⚠️ OKX 配置无效 │ %s", path)
         return (None, "OKX 配置文件不存在或格式无效")
     key = cfg.get("key") or ""
     secret = cfg.get("secret") or ""
@@ -703,10 +742,10 @@ def okx_request(
                             time.sleep(0.35 * (ssl_attempt + 1))
                             continue
                         logger.warning(
-                            "OKX request network error after retries: %s %s -> %s",
+                            "⚠️ OKX 网络·已重试 │ %s %s │ %s",
                             m,
-                            sign_path,
-                            e,
+                            _okx_req_log_path(sign_path),
+                            _okx_exc_short(e),
                         )
                         return (None, str(e) or "SSL/connection failed")
                 if resp is None:
@@ -725,7 +764,12 @@ def okx_request(
                 try:
                     data = resp.json()
                 except (json.JSONDecodeError, ValueError) as e:
-                    logger.warning("OKX JSON parse: %s %s -> %s", m, sign_path, e)
+                    logger.warning(
+                        "⚠️ OKX JSON │ %s %s │ %s",
+                        m,
+                        _okx_req_log_path(sign_path),
+                        _okx_exc_short(e),
+                    )
                     return (None, str(e) or "invalid JSON")
                 if isinstance(data, dict) and str(data.get("code", "")).strip() == "50102":
                     _invalidate_okx_server_time_offset()
@@ -734,16 +778,19 @@ def okx_request(
                 if isinstance(data, dict) and data.get("code") != "0":
                     if _DEBUG_POSITIONS:
                         logger.info(
-                            "[持仓-OKX] OKX 响应: %s %s code=%s",
+                            "📥 OKX │ %s %s · code=%s",
                             m,
-                            sign_path,
+                            _okx_req_log_path(sign_path),
                             data.get("code"),
                         )
                     return (None, _okx_business_error_detail(data))
                 if _DEBUG_POSITIONS:
                     code = data.get("code") if isinstance(data, dict) else "N/A"
                     logger.info(
-                        "[持仓-OKX] OKX 响应: %s %s code=%s", m, sign_path, code
+                        "📥 OKX │ %s %s · code=%s",
+                        m,
+                        _okx_req_log_path(sign_path),
+                        code,
                     )
                 return (data, None)
             if resp is not None and resp.status_code == 429 and (
@@ -752,9 +799,9 @@ def okx_request(
                 ra = resp.headers.get("Retry-After")
                 sleep_s = _okx_retry_sleep_seconds(ra, attempt_429 + 1)
                 logger.warning(
-                    "OKX 私有请求 429 %s %s config=%s，%.2fs 后重试 (%d/%d)",
+                    "⚠️ OKX 429 │ %s %s · %s │ %.2fs 后 %d/%d",
                     m,
-                    sign_path,
+                    _okx_req_log_path(sign_path),
                     config_name,
                     sleep_s,
                     attempt_429 + 1,
@@ -776,24 +823,16 @@ def okx_request(
                 egress = get_public_egress_ip()
             raw_log = err_body or "(无响应体)"
             logger.warning(
-                "OKX请求失败 %s %s config=%s | HTTP=%s | code=%r | msg=%r%s",
+                "⚠️ OKX │ %s %s · %s │ HTTP %s · %s · %s%s",
                 m,
-                sign_path,
+                _okx_req_log_path(sign_path),
                 config_name,
                 resp.status_code,
                 primary_code,
-                show_msg or "(空)",
-                (
-                    f" | egress={egress or '未知'}"
-                    if is_1010
-                    else ""
-                ),
+                (show_msg or "—")[:80],
+                (f" │ 出口 {egress or '?'}" if is_1010 else ""),
             )
-            logger.debug(
-                "OKX请求失败 响应体 config=%s: %s",
-                config_name,
-                raw_log,
-            )
+            logger.debug("🔍 OKX 响应体 │ %s │ %s", config_name, raw_log[:400])
             reason = show_msg or "(OKX 响应体未解析出 msg)"
             hint = _okx_error_code_hint(primary_code)
             if hint and not (show_msg or "").strip():
@@ -808,7 +847,12 @@ def okx_request(
         try:
             data = resp.json()
         except (json.JSONDecodeError, ValueError) as e:
-            logger.warning("OKX JSON parse: %s %s -> %s", m, sign_path, e)
+            logger.warning(
+                "⚠️ OKX JSON │ %s %s │ %s",
+                m,
+                _okx_req_log_path(sign_path),
+                _okx_exc_short(e),
+            )
             return (None, str(e) or "invalid JSON")
         if isinstance(data, dict) and str(data.get("code", "")).strip() == "50102":
             return (None, _okx_business_error_detail(data))
@@ -817,11 +861,19 @@ def okx_request(
         if _DEBUG_POSITIONS:
             code = data.get("code") if isinstance(data, dict) else "N/A"
             logger.info(
-                "[持仓-OKX] OKX 响应: %s %s code=%s", m, sign_path, code
+                "📥 OKX │ %s %s · code=%s",
+                m,
+                _okx_req_log_path(sign_path),
+                code,
             )
         return (data, None)
     except (requests.RequestException, json.JSONDecodeError, ValueError) as e:
-        logger.warning("OKX request error: %s %s -> %s", m, sign_path, e)
+        logger.warning(
+            "⚠️ OKX │ %s %s │ %s",
+            m,
+            _okx_req_log_path(sign_path),
+            _okx_exc_short(e),
+        )
         return (None, str(e) or "request failed")
 
 
@@ -1004,14 +1056,11 @@ def okx_fetch_balance(config_path: Path | None = None) -> dict | None:
                 _OKX_BALANCE_CACHE[cache_key] = (time.monotonic(), out)
         return out
     cfg_name = path.name if path else "default"
-    logger.warning(
-        "OKX fetch_balance [%s]: /api/v5/account/balance 未返回有效数据",
-        cfg_name,
-    )
+    logger.warning("⚠️ 余额 │ %s │ 无有效数据", cfg_name)
     logger.debug(
-        "OKX fetch_balance detail [%s]: %s",
+        "🔍 余额 │ %s │ %s",
         cfg_name,
-        err_detail or "请检查 API 权限、网络与配置",
+        (err_detail or "查权限/网络/配置")[:200],
     )
     return None
 
@@ -1422,7 +1471,7 @@ def okx_fetch_positions(config_path: Path | None = None) -> tuple[list[dict], st
     """
     path = _resolve_path(config_path)
     if _DEBUG_POSITIONS and path:
-        logger.info("[持仓] 开始拉取 OKX 持仓 config=%s", path.name)
+        logger.info("📍 拉持仓 │ %s", path.name)
     cfg = load_okx_config(path) if path else None
     if not path or not cfg or not (cfg.get("key") and cfg.get("secret")):
         return ([], "OKX 配置文件不存在或格式无效")

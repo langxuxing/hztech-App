@@ -27,6 +27,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from hztech_log_format import short_network_err_text
+
 from .account_key_util import (
     account_row_is_enabled as _account_row_is_enabled_util,
     load_account_list as _load_account_list_util,
@@ -321,10 +323,7 @@ def run_account_month_balance_baseline_rollover(
         aid = str(row.get("account_id") or "").strip()
         path = resolve_okx_config_path(aid)
         if not path:
-            log.debug(
-                "account_month_balance_baseline 跳过: %s 无密钥文件",
-                _fmt_log_account_id(aid),
-            )
+            log.debug("⏭ %s │ 月初基线·无密钥", _fmt_log_account_id(aid))
             continue
         live = okx_mod.okx_fetch_balance(config_path=path)
         if not live:
@@ -344,7 +343,7 @@ def run_account_month_balance_baseline_rollover(
             aid, ym, total_eq, ts, initial_balance=cash_bal
         )
         log.info(
-            "account_month_balance_baseline: %s ym=%s equity=%s cash_bal=%s avail=%s used=%s",
+            "📅 月初基线 │ %s %s │ 权%d 资%d 可用%d 占%d",
             _fmt_log_account_id(aid),
             ym,
             int(round(total_eq)),
@@ -378,10 +377,7 @@ def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None 
         initial = float(meta["initial_capital"]) if meta else _initial_capital(row)
 
         if not path:
-            log.debug(
-                "账户快照跳过: %s 无密钥文件",
-                _fmt_log_account_id(aid),
-            )
+            log.debug("⏭ %s │ 无密钥", _fmt_log_account_id(aid))
             continue
 
         live = okx_mod.okx_fetch_balance(config_path=path)
@@ -414,7 +410,7 @@ def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None 
         )
 
         log.debug(
-            "账户快照: %s \t权益:=%d \t资产:=%d \t可用:=%d \t占用:=%d",
+            "💰 %s │ 权%d·资%d·可用%d·占%d",
             _fmt_log_account_id(aid),
             int(round(total_eq)),
             int(round(cash_bal)),
@@ -441,9 +437,9 @@ def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None 
                         accounts_adp.add(aid)
         except Exception as e:
             log.warning(
-                "balance_snapshots_bills_backfill_failed: %s %s",
+                "⚠️ 💰 账单回填 │ %s │ %s",
                 _fmt_log_account_id(aid),
-                e,
+                short_network_err_text(e),
             )
 
     if accounts_adp:
@@ -495,7 +491,11 @@ def backfill_account_snapshots_from_okx_bills(
     if err and not rows:
         return 0, err or "bills-archive 无数据"
     if err:
-        log.warning("bills-archive: %s %s", _fmt_log_account_id(aid), err)
+        log.warning(
+            "⚠️ 📄 账单补全 │ %s │ %s",
+            _fmt_log_account_id(aid),
+            short_network_err_text(err),
+        )
 
     by_day: dict = {}
     for r in rows:
@@ -632,7 +632,7 @@ def refresh_balance_snapshot_one(
     )
 
     log.info(
-        "balance_snapshot_one_ok: %s equity=%s cash_bal=%s avail=%s used=%s",
+        "💰 单点 │ %s │ 权%d 资%d 可用%d 占%d",
         _fmt_log_account_id(aid),
         int(round(total_eq)),
         int(round(cash_bal)),
@@ -645,9 +645,9 @@ def refresh_balance_snapshot_one(
         )
     except Exception as e:
         log.warning(
-            "balance_snapshot_bills_backfill_failed: %s %s",
+            "⚠️ 📄 单点账单 │ %s │ %s",
             _fmt_log_account_id(aid),
-            e,
+            short_network_err_text(e),
         )
         n_b = 0
     if n_b > 0:
@@ -683,7 +683,7 @@ def rebuild_account_daily_performance_safe(
             ids, _account_benchmark_inst_map()
         )
     except Exception as ex:
-        log.warning("account_daily_performance 重建失败: %s", ex)
+        log.warning("⚠️ 📊 日表现重建 │ %s", ex)
         try:
             db_module.log_insert(
                 "WARN",
@@ -713,10 +713,7 @@ def refresh_all_positions_history(
         aid = str(row.get("account_id") or "").strip()
         path = resolve_okx_config_path(aid)
         if not path:
-            log.debug(
-                "持仓历史跳过: %s 无密钥文件",
-                _fmt_log_account_id(aid),
-            )
+            log.debug("⏭ %s │ 无密钥", _fmt_log_account_id(aid))
             continue
 
         min_ut = _positions_history_min_u_time_ms_for_incremental(db_module, aid)
@@ -735,7 +732,7 @@ def refresh_all_positions_history(
             continue
         n = db_module.account_positions_history_insert_batch(aid, hist, ts)
         log.debug(
-            "持仓历史: %s \t读取行:=%d \t写入行：=%d",
+            "📜 %s │ 拉%d·新%d",
             _fmt_log_account_id(aid),
             len(hist),
             n,
@@ -751,7 +748,7 @@ def refresh_all_positions_history(
             all_ids, _account_benchmark_inst_map()
         )
     except Exception as ex:
-        log.warning("account_daily_performance 重建失败: %s", ex)
+        log.warning("⚠️ 📊 日表现重建 │ %s", ex)
         db_module.log_insert(
             "WARN",
             "account_daily_performance_rebuild_failed",
@@ -799,7 +796,7 @@ def refresh_positions_history_one(
         return True, "无新历史仓位数据"
     n = db_module.account_positions_history_insert_batch(aid, hist, ts)
     log.info(
-        "positions_history_one_ok: %s api_rows=%d inserted=%d",
+        "📜 单户 │ %s │ 拉%d·新%d",
         _fmt_log_account_id(aid),
         len(hist),
         n,
@@ -809,7 +806,7 @@ def refresh_positions_history_one(
             [aid], _account_benchmark_inst_map()
         )
     except Exception as ex:
-        log.warning("account_daily_performance 单账户重建失败 %s: %s", aid, ex)
+        log.warning("⚠️ 📊 日表现 │ %s │ %s", aid, ex)
     return True, f"已写入 {n} 条新记录"
 
 
@@ -921,10 +918,7 @@ def refresh_all_open_positions_snapshots(
         aid = str(row.get("account_id") or "").strip()
         path = resolve_okx_config_path(aid)
         if not path:
-            log.debug(
-                "持仓快照跳过: %s 无密钥文件",
-                _fmt_log_account_id(aid),
-            )
+            log.debug("⏭ %s │ 无密钥", _fmt_log_account_id(aid))
             continue
         positions, err = okx_mod.okx_fetch_positions(config_path=path)
         if err:
@@ -943,7 +937,7 @@ def refresh_all_open_positions_snapshots(
         sum_short = sum(float(g.get("short_pos_size") or 0) for g in agg)
         n_legs = sum(int(g.get("open_leg_count") or 0) for g in agg)
         log.debug(
-            "当前持仓: %s \t产品：=%d \t仓位腿：=%d \t多:=%.6g \t空:=%.6g \t写入行：=%d",
+            "📍 %s │ 合约%d 腿%d 多%.6g 空%.6g +%d",
             _fmt_log_account_id(aid),
             len(agg),
             n_legs,
@@ -985,7 +979,7 @@ def refresh_open_positions_snapshot_one(
     n = db_module.account_open_positions_snapshots_insert_batch(aid, ts, agg)
     n_legs = sum(int(g.get("open_leg_count") or 0) for g in agg)
     log.info(
-        "open_positions_snapshot_one_ok: %s products=%d legs=%d rows=%d",
+        "📍 单户持仓 │ %s │ 合约%d 腿%d +%d",
         _fmt_log_account_id(aid),
         len(agg),
         n_legs,

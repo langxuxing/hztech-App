@@ -2,7 +2,9 @@
 # -*- coding: utf-8 -*-
 """经 SSH 在 BaasAPI 主机（aws-alpha）上对本地 PostgreSQL 做只读自检。
 
-与 ops/pg_verify_aws_alpha.sh 同源约定：远端 Postgres 监听 127.0.0.1，本机通过 ssh 在远端执行 psql。
+数据库自检脚本。亦可通过：./ops/gp_ops.sh test-aws 或 ./ops/hztech_ops_menu.sh 选 7
+
+远端 Postgres 监听 127.0.0.1，经 SSH 在 BaasAPI 机上执行 psql（较旧版 shell 快检信息更全）。
 
 SSH / 部署：
   默认读取 baasapi/deploy-aws.json（与 ops/read_deploy_config.py --role baasapi 一致）。
@@ -17,6 +19,7 @@ Schema：
   HZTECH_POSTGRES_SCHEMA（默认 flutterapp）
 
 用法：
+  ./ops/gp_ops.sh test-aws
   python3 ops/test_aws_postgres.py
   python3 ops/test_aws_postgres.py --role baasapi
   HZTECH_REMOTE_PG_PASSWORD='...' python3 ops/test_aws_postgres.py

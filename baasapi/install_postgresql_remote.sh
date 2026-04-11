@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # 通过 SSH 在远端主机安装并初始化 PostgreSQL（默认目标：~/.ssh/config 中的 Host aws-alpha）。
 # 运维约定：aws-alpha 即 BaasAPI 所在 EC2，公网 IP 与 baasapi/deploy-aws.json 中 baasapi.host 一致（当前 54.66.108.150）。
-# 将本机 PostgreSQL 备份导入此机：../ops/pg_dump_to_aws_alpha.sh（远端仅监听 127.0.0.1，经 SSH 管道导入）。
-# 导入后验证：../ops/pg_verify_aws_alpha.sh（经 SSH 执行远端 psql）。
+# 约定：PostgreSQL 数据库名 hztech，schema flutterapp，用户 hztech（与 database_config.example.json 一致）。
+#   EC2 项目目录名常为 hztechapp（remote_path），与数据库名无关。
+# 将本机 PostgreSQL 备份导入此机：../ops/gp_ops.sh 或 ../ops/pg_ows_import.py（远端仅监听 127.0.0.1，经 SSH 管道导入）。
+# 导入后验证：../ops/gp_ops.sh test-aws，或 ./ops/hztech_ops_menu.sh 选 7。
 # 支持 Amazon Linux 2023 / Amazon Linux 2（yum/dnf）与 Debian/Ubuntu（apt）。
 #
 # 用法：

@@ -27,13 +27,27 @@ else
 fi
 unset _DB_JSON _DB_SQLITE_TMPL
 
-# 与当前 python3 一致安装依赖（与 deploy2Local 共用 install_python_deps.sh）
+_hztech_resolve_python() {
+  if [[ -n "${HZTECH_PYTHON:-}" && -x "${HZTECH_PYTHON}" ]]; then
+    printf '%s' "${HZTECH_PYTHON}"
+    return
+  fi
+  if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
+    printf '%s' "$SCRIPT_DIR/.venv/bin/python"
+    return
+  fi
+  command -v python3
+}
+_PY="$(_hztech_resolve_python)"
+
+# 与 install_python_deps.sh 安装的 venv / 当前解释器一致（与 deploy2Local 共用）
 case "${HZTECH_SKIP_PIP_INSTALL:-}" in
 1 | true | yes) ;;
 *)
-  if ! python3 -c "import flask, jwt, requests, ccxt" 2>/dev/null; then
+  if ! "$_PY" -c "import flask, jwt, requests, ccxt" 2>/dev/null; then
     echo "检测到缺少 BaasAPI 运行时依赖，正在安装 baasapi/requirements.txt ..."
     "$SCRIPT_DIR/install_python_deps.sh" || exit 1
+    _PY="$(_hztech_resolve_python)"
   fi
   ;;
 esac
@@ -80,7 +94,7 @@ if [[ "$WEB_STATIC" != "1" ]]; then
   echo "  停止: Ctrl+C"
   echo "=============================================="
   echo ""
-  exec env PORT="$API_PORT" python3 baasapi/main.py
+  exec env PORT="$API_PORT" "$_PY" baasapi/main.py
 fi
 
 _API_PID=""
@@ -110,10 +124,10 @@ echo "  停止: Ctrl+C (会结束 API 与 Web 两个进程)"
 echo "=============================================="
 echo ""
 
-env PORT="$API_PORT" python3 baasapi/main.py &
+env PORT="$API_PORT" "$_PY" baasapi/main.py &
 _API_PID=$!
 
-env HZTECH_WEB_ROOT="$WEB_ROOT" PORT="$WEB_PORT" python3 baasapi/serve_web_static.py &
+env HZTECH_WEB_ROOT="$WEB_ROOT" PORT="$WEB_PORT" "$_PY" baasapi/serve_web_static.py &
 _WEB_PID=$!
 
 set +e

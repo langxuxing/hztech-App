@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # 两台 AWS 服务（baasapi / flutterapp）远程启停与 HTTP 状态探测。
+# 运维菜单（本脚本的 status；含 PG 自检项）：ops/hztech_ops_menu.sh
 # 配置：baasapi/deploy-aws.json（与 server_mgr 一致）
 # 启动 API 时会传入 HZTECH_CORS_ORIGINS（默认同 deploy-aws.json 里 Flutter 公网 URL），避免双机 Web 跨域被浏览器拦截。
 #
@@ -70,11 +71,31 @@ _start_api() {
   _ssh_api "RPATH=${_qrp}; PORT=${_qpt}; HZTECH_CORS_ORIGINS=${_qcors}; export RPATH PORT HZTECH_CORS_ORIGINS; bash -s" <<'R'
 set -euo pipefail
 cd "$RPATH"
+if [[ ! -f baasapi/main.py ]]; then
+  echo "❌ 未找到 baasapi/main.py（当前: $PWD）。本脚本只负责启停，不会同步代码。" >&2
+  echo "   请先对 BaasAPI 主机做一次完整部署或 rsync（例如仓库根目录 deploy2AWS.sh / baasapi 编排同步）。" >&2
+  exit 1
+fi
 mkdir -p apk baasapi/sqlite
+touch server.log
+_log0=$(wc -l < server.log | awk '{print $1}')
 export HZTECH_TRADINGBOT_CTRL_DIR="${HZTECH_TRADINGBOT_CTRL_DIR:-/home/ec2-user/Alpha}"
 export HZTECH_TRADINGBOT_ACCOUNT_LIST_SOURCE="${HZTECH_TRADINGBOT_ACCOUNT_LIST_SOURCE:-database}"
 MOBILEAPP_ROOT="$RPATH" PORT="$PORT" nohup python3 baasapi/main.py >> server.log 2>&1 &
-sleep 2
+sleep 1
+_new=$(tail -n +"$((_log0 + 1))" server.log 2>/dev/null || true)
+if echo "$_new" | grep -qiE "can't open file|No such file or directory|ModuleNotFoundError|SyntaxError:"; then
+  echo "❌ BaasAPI 启动失败（本次 server.log 新增内容）：" >&2
+  echo "$_new" | tail -n 25 >&2
+  exit 1
+fi
+_listening() { ss -tlnp 2>/dev/null | grep -q ":${PORT} " || netstat -tlnp 2>/dev/null | grep -q ":${PORT} "; }
+if ! _listening; then sleep 2; fi
+if ! _listening; then
+  echo "❌ BaasAPI 未在 :${PORT} 监听。最近 server.log：" >&2
+  tail -n 25 server.log >&2
+  exit 1
+fi
 echo "📋 远端快照（监听 + 最近日志）"
 ss -tlnp 2>/dev/null | grep ":${PORT} " || netstat -tlnp 2>/dev/null | grep ":${PORT} " || true
 tail -n 8 server.log
@@ -88,11 +109,31 @@ _start_web() {
   _ssh_web "RPATH=${_qrp}; PORT=${_qpt}; export RPATH PORT; bash -s" <<'R'
 set -euo pipefail
 cd "$RPATH"
-mkdir -p apk res
-rm -rf baasapi/sqlite
+if [[ ! -f flutterapp/web_static/serve_web_static.py ]]; then
+  echo "❌ 未找到 flutterapp/web_static/serve_web_static.py（当前: $PWD）。本脚本只负责启停，不会同步代码。" >&2
+  echo "   请先对 Flutter 静态主机做一次完整部署或 rsync。" >&2
+  exit 1
+fi
+mkdir -p apk res flutterapp/web_static
+rm -rf baasapi
+touch web_static.log
+_wlog0=$(wc -l < web_static.log | awk '{print $1}')
 HZTECH_WEB_ROOT="$RPATH/flutterapp/build/web" PORT="$PORT" \
-  nohup python3 baasapi/serve_web_static.py >> web_static.log 2>&1 &
-sleep 2
+  nohup python3 flutterapp/web_static/serve_web_static.py >> web_static.log 2>&1 &
+sleep 1
+_wnew=$(tail -n +"$((_wlog0 + 1))" web_static.log 2>/dev/null || true)
+if echo "$_wnew" | grep -qiE "can't open file|No such file or directory|ModuleNotFoundError|SyntaxError:"; then
+  echo "❌ Flutter 静态进程启动失败（本次 web_static.log 新增内容）：" >&2
+  echo "$_wnew" | tail -n 25 >&2
+  exit 1
+fi
+_wlisten() { ss -tlnp 2>/dev/null | grep -q ":${PORT} " || netstat -tlnp 2>/dev/null | grep -q ":${PORT} "; }
+if ! _wlisten; then sleep 2; fi
+if ! _wlisten; then
+  echo "❌ Flutter 静态未在 :${PORT} 监听。最近 web_static.log：" >&2
+  tail -n 25 web_static.log >&2
+  exit 1
+fi
 echo "📋 远端快照（监听 + 最近日志）"
 ss -tlnp 2>/dev/null | grep ":${PORT} " || netstat -tlnp 2>/dev/null | grep ":${PORT} " || true
 tail -n 8 web_static.log

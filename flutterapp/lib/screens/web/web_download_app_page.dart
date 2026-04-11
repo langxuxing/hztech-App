@@ -53,7 +53,7 @@ class _WebDownloadAppPageState extends State<WebDownloadAppPage> {
     if (raw == null || raw.isEmpty) return null;
     final u = raw.startsWith('http') ? raw : 'http://$raw';
     final base = u.endsWith('/') ? u : '$u/';
-    final path = 'api/download/apk/${Uri.encodeComponent(_apkFileName)}';
+    final path = '$kApkDownloadUrlPath/${Uri.encodeComponent(_apkFileName)}';
     return Uri.parse('$base$path');
   }
 

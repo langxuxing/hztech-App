@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*-
 """本地 PostgreSQL 连通性自检（与 baasapi 的 database_config / 环境变量约定一致）。
 
+数据库自检脚本。亦可通过：./ops/gp_ops.sh test-local 或 ./ops/hztech_ops_menu.sh 选 6
+
 优先级：
   1. 环境变量 DATABASE_URL
   2. baasapi/database_config.json（若存在）
@@ -9,6 +11,7 @@
   4. postgresql://hztech:Alpha@127.0.0.1:5432/hztech
 
 用法：
+  ./ops/gp_ops.sh test-local
   python3 ops/test_local_postgres.py
   DATABASE_URL=postgresql://u:p@host:5432/db python3 ops/test_local_postgres.py
 

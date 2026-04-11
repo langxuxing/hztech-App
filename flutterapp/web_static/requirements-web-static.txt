@@ -1,0 +1,2 @@
+# Flutter Web 静态机（如 aws-defi）仅需 Flask；勿同步整包 baasapi/requirements.txt
+flask>=3.0.0
