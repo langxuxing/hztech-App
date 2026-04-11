@@ -26,6 +26,26 @@ case "${1:-}" in
     log "action=checkhealth HZTECH_ACCOUNT_ID=${HZTECH_ACCOUNT_ID:-}"
     exec "$PY" "$DIR/mock_bot_ctl.py" checkhealth
     ;;
+  status)
+    log "action=status HZTECH_ACCOUNT_ID=${HZTECH_ACCOUNT_ID:-}"
+    exec "$PY" "$DIR/mock_bot_ctl.py" status
+    ;;
+  --season)
+    case "${2:-}" in
+      start)
+        log "action=season-start HZTECH_ACCOUNT_ID=${HZTECH_ACCOUNT_ID:-}"
+        exec "$PY" "$DIR/mock_bot_ctl.py" season-start
+        ;;
+      stop)
+        log "action=season-stop HZTECH_ACCOUNT_ID=${HZTECH_ACCOUNT_ID:-}"
+        exec "$PY" "$DIR/mock_bot_ctl.py" season-stop
+        ;;
+      *)
+        echo "usage: $0 --season start|stop" >&2
+        exit 1
+        ;;
+    esac
+    ;;
   season-start)
     log "action=season-start HZTECH_ACCOUNT_ID=${HZTECH_ACCOUNT_ID:-}"
     exec "$PY" "$DIR/mock_bot_ctl.py" season-start
@@ -35,7 +55,7 @@ case "${1:-}" in
     exec "$PY" "$DIR/mock_bot_ctl.py" season-stop
     ;;
   *)
-    echo "usage: $0 start|stop|restart|checkhealth|season-start|season-stop" >&2
+    echo "usage: $0 start|stop|restart|checkhealth|status|--season start|stop|season-start|season-stop" >&2
     exit 1
     ;;
 esac

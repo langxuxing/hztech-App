@@ -127,25 +127,51 @@ class _TradingBotControlState extends State<TradingBotControl> {
   Map<String, List<StrategyEvent>> _eventsByBot = {};
   bool _loading = true;
   String? _error;
-  String? _loadingBotId;
+  /// 仅「启动」圆钮显示加载；与 Web 语义一致：启动过程中界面可按运行中展示，且「停止」可点。
+  String? _startingBotId;
+  String? _stoppingBotId;
   Timer? _runtimeTickTimer;
+  Timer? _statusPollTimer;
+
+  void _patchBotRuntimeStatus(String botId, String apiStatus) {
+    final running = apiStatus == 'running';
+    final idx = _list.indexWhere((b) => b.tradingbotId == botId);
+    if (idx < 0) return;
+    final cur = _list[idx];
+    _list = List<UnifiedTradingBot>.from(_list);
+    _list[idx] = UnifiedTradingBot(
+      tradingbotId: cur.tradingbotId,
+      tradingbotName: cur.tradingbotName,
+      exchangeAccount: cur.exchangeAccount,
+      symbol: cur.symbol,
+      strategyName: cur.strategyName,
+      status: apiStatus,
+      isRunning: running,
+      canControl: cur.canControl,
+      isTest: cur.isTest,
+    );
+  }
+
+  bool _isBotRunning(UnifiedTradingBot b) =>
+      b.status == 'running' || b.isRunning == true;
 
   void _scheduleRuntimeTick() {
     _runtimeTickTimer?.cancel();
-    final anyRunning = _list.any(
-      (b) => b.status == 'running' || b.isRunning == true,
-    );
+    final anyRunning = _list.any(_isBotRunning);
     if (!anyRunning || !mounted) return;
-    _runtimeTickTimer = Timer.periodic(PollIntervals.mediumPoll, (_) {
+    // 本地重绘「已运行」时长（与 Web 卡片在动画帧上重算类似）；接口轮询仍用 [PollIntervals.mediumPoll]。
+    _runtimeTickTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() {});
     });
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  Future<void> _load({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
@@ -172,10 +198,12 @@ class _TradingBotControlState extends State<TradingBotControl> {
         });
         _scheduleRuntimeTick();
       } catch (_) {
-        // 列表已显示，事件失败时保留空映射
+        // 列表已显示，事件失败时保留旧映射；仍按当前 _list 启停时长 tick。
+        _scheduleRuntimeTick();
       }
     } catch (e) {
       if (!mounted) return;
+      if (silent) return;
       setState(() {
         _error = e.toString();
         _loading = false;
@@ -185,8 +213,7 @@ class _TradingBotControlState extends State<TradingBotControl> {
 
   /// 与 Web 端一致：停止前二次确认。
   void _onTapStop(UnifiedTradingBot bot) {
-    final running = bot.status == 'running' || bot.isRunning == true;
-    if (!running) return;
+    if (!_isBotRunning(bot)) return;
     showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -214,8 +241,7 @@ class _TradingBotControlState extends State<TradingBotControl> {
   }
 
   void _onTapStart(UnifiedTradingBot bot) {
-    final running = bot.status == 'running' || bot.isRunning == true;
-    if (running) return;
+    if (_isBotRunning(bot)) return;
     showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -245,50 +271,73 @@ class _TradingBotControlState extends State<TradingBotControl> {
   }
 
   Future<void> _doStart(UnifiedTradingBot bot) async {
-    setState(() => _loadingBotId = bot.tradingbotId);
+    setState(() {
+      _startingBotId = bot.tradingbotId;
+      _patchBotRuntimeStatus(bot.tradingbotId, 'running');
+    });
+    _scheduleRuntimeTick();
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
       final api = ApiClient(baseUrl, token: token);
       final resp = await api.startBot(bot.tradingbotId);
       if (!mounted) return;
-      setState(() => _loadingBotId = null);
+      final st = resp.status;
+      setState(() {
+        _startingBotId = null;
+        if (resp.success) {
+          final eff = (st != null && st.isNotEmpty) ? st : 'running';
+          _patchBotRuntimeStatus(bot.tradingbotId, eff);
+        }
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(resp.success ? '启动成功' : (resp.message ?? '启动失败')),
         ),
       );
-      if (resp.success) _load();
+      await _load(silent: true);
     } catch (e) {
       if (!mounted) return;
-      setState(() => _loadingBotId = null);
+      setState(() => _startingBotId = null);
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('请求失败: $e')));
+      await _load(silent: true);
     }
   }
 
   Future<void> _doStop(UnifiedTradingBot bot) async {
-    setState(() => _loadingBotId = bot.tradingbotId);
+    setState(() {
+      _startingBotId = null;
+      _stoppingBotId = bot.tradingbotId;
+    });
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
       final api = ApiClient(baseUrl, token: token);
       final resp = await api.stopBot(bot.tradingbotId);
       if (!mounted) return;
-      setState(() => _loadingBotId = null);
+      final st = resp.status;
+      setState(() {
+        _stoppingBotId = null;
+        if (resp.success) {
+          final eff = (st != null && st.isNotEmpty) ? st : 'stopped';
+          _patchBotRuntimeStatus(bot.tradingbotId, eff);
+        }
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(resp.success ? '停止成功' : (resp.message ?? '停止失败')),
         ),
       );
-      if (resp.success) _load();
+      await _load(silent: true);
     } catch (e) {
       if (!mounted) return;
-      setState(() => _loadingBotId = null);
+      setState(() => _stoppingBotId = null);
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('请求失败: $e')));
+      await _load(silent: true);
     }
   }
 
@@ -304,11 +353,16 @@ class _TradingBotControlState extends State<TradingBotControl> {
   void initState() {
     super.initState();
     _load();
+    _statusPollTimer = Timer.periodic(PollIntervals.mediumPoll, (_) {
+      if (!mounted) return;
+      _load(silent: true);
+    });
   }
 
   @override
   void dispose() {
     _runtimeTickTimer?.cancel();
+    _statusPollTimer?.cancel();
     super.dispose();
   }
 
@@ -333,7 +387,7 @@ class _TradingBotControlState extends State<TradingBotControl> {
             ),
       body: WaterBackground(
         child: RefreshIndicator(
-          onRefresh: _load,
+          onRefresh: () => _load(),
           child: _loading && _list.isEmpty
               ? const Center(child: CircularProgressIndicator())
               : _error != null && _list.isEmpty
@@ -378,8 +432,7 @@ class _TradingBotControlState extends State<TradingBotControl> {
                   itemCount: _list.length,
                   itemBuilder: (context, i) {
                     final bot = _list[i];
-                    final running =
-                        bot.status == 'running' || bot.isRunning == true;
+                    final running = _isBotRunning(bot);
                     final events = _eventsByBot[bot.tradingbotId] ?? [];
                     final robot = _robotRuntime(events, running);
                     final metaStyle =
@@ -575,34 +628,56 @@ class _TradingBotControlState extends State<TradingBotControl> {
     );
   }
 
-  /// 与 [WebTradingBotControlScreen] 机器人区一致：独立「启动」「停止」两键；进行中两键均显示加载且不可点。
-  /// 右侧竖向排列。
+  /// 与 [WebTradingBotControlScreen] 机器人区一致：独立「启动」「停止」；启动请求中仅启动钮转圈，「运行中」态下停止可点。
   Widget _buildStrategyStartStopColumn(UnifiedTradingBot bot) {
-    final running = bot.status == 'running' || bot.isRunning == true;
-    final busy = _loadingBotId == bot.tradingbotId;
+    final running = _isBotRunning(bot);
+    final starting = _startingBotId == bot.tradingbotId;
+    final stopping = _stoppingBotId == bot.tradingbotId;
     const size = 48.0;
     const iconSize = 26.0;
-    return Row(
+    return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        _strategyCircleAction(
-          size: size,
-          iconSize: iconSize,
-          accent: AppFinanceStyle.textProfit,
-          icon: Icons.play_circle_outline,
-          busy: busy,
-          enabled: !busy && !running,
-          onTap: () => _onTapStart(bot),
-        ),
-        const SizedBox(width: 12),
-        _strategyCircleAction(
-          size: size,
-          iconSize: iconSize,
-          accent: AppFinanceStyle.textLoss,
-          icon: Icons.stop_circle_outlined,
-          busy: busy,
-          enabled: !busy && running,
-          onTap: () => _onTapStop(bot),
+        if (starting) ...[
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: const LinearProgressIndicator(minHeight: 3),
+          ),
+          const SizedBox(height: 10),
+        ] else if (running) ...[
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              minHeight: 3,
+              backgroundColor: Colors.white.withValues(alpha: 0.06),
+              color: AppFinanceStyle.valueColor.withValues(alpha: 0.45),
+            ),
+          ),
+          const SizedBox(height: 10),
+        ],
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _strategyCircleAction(
+              size: size,
+              iconSize: iconSize,
+              accent: AppFinanceStyle.textProfit,
+              icon: Icons.play_circle_outline,
+              busy: starting,
+              enabled: !starting && !stopping && !running,
+              onTap: () => _onTapStart(bot),
+            ),
+            const SizedBox(width: 12),
+            _strategyCircleAction(
+              size: size,
+              iconSize: iconSize,
+              accent: AppFinanceStyle.textLoss,
+              icon: Icons.stop_circle_outlined,
+              busy: stopping,
+              enabled: !stopping && running,
+              onTap: () => _onTapStop(bot),
+            ),
+          ],
         ),
       ],
     );
@@ -655,60 +730,118 @@ class _TradingBotControlState extends State<TradingBotControl> {
   }
 }
 
-/// 右上角运行状态角标（与 Web 卡片区语义一致）。
-class _RunStatusChip extends StatelessWidget {
+/// 右上角运行状态角标（与 Web 卡片区语义一致）；运行中带呼吸灯动画。
+class _RunStatusChip extends StatefulWidget {
   const _RunStatusChip({required this.running, required this.errored});
 
   final bool running;
   final bool errored;
 
+  @override
+  State<_RunStatusChip> createState() => _RunStatusChipState();
+}
+
+class _RunStatusChipState extends State<_RunStatusChip>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2200),
+    );
+    _syncPulse();
+  }
+
+  @override
+  void didUpdateWidget(covariant _RunStatusChip oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncPulse();
+  }
+
+  void _syncPulse() {
+    if (widget.running) {
+      if (!_pulse.isAnimating) {
+        _pulse.repeat(reverse: true);
+      }
+    } else {
+      _pulse.stop();
+      _pulse.reset();
+    }
+  }
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
   Color get _accent {
-    if (errored) return AppFinanceStyle.textLoss;
-    if (running) return AppFinanceStyle.textProfit;
+    if (widget.errored) return AppFinanceStyle.textLoss;
+    if (widget.running) return AppFinanceStyle.textProfit;
     return AppFinanceStyle.textDefault;
   }
 
   String get _label {
-    if (errored) return '异常';
-    if (running) return '运行中';
+    if (widget.errored) return '异常';
+    if (widget.running) return '运行中';
     return '已停止';
   }
 
   @override
   Widget build(BuildContext context) {
     final accent = _accent;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(999),
-        color: accent.withValues(alpha: 0.16),
-        border: Border.all(color: accent.withValues(alpha: 0.5)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (running) ...[
-            Container(
-              width: 7,
-              height: 7,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: AppFinanceStyle.textProfit.withValues(alpha: 0.85),
-              ),
-            ),
-            const SizedBox(width: 6),
-          ],
-          Text(
-            _label,
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
-              color: accent,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 0.35,
-              fontSize: 12,
-            ),
+    return AnimatedBuilder(
+      animation: _pulse,
+      builder: (context, _) {
+        final dotAlpha = widget.running
+            ? (0.45 + 0.45 * _pulse.value).clamp(0.0, 1.0)
+            : 0.85;
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(999),
+            color: accent.withValues(alpha: 0.16),
+            border: Border.all(color: accent.withValues(alpha: 0.5)),
           ),
-        ],
-      ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (widget.running) ...[
+                Container(
+                  width: 7,
+                  height: 7,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: AppFinanceStyle.textProfit.withValues(alpha: dotAlpha),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppFinanceStyle.textProfit.withValues(
+                          alpha: 0.35 * (widget.running ? _pulse.value : 0),
+                        ),
+                        blurRadius: 6,
+                        spreadRadius: 0,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 6),
+              ],
+              Text(
+                _label,
+                style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: accent,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.35,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

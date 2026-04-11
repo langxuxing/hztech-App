@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../api/client.dart';
@@ -32,6 +34,7 @@ class _WebTradingBotControlScreenState
   String? _loadingBotId;
   String? _seasonLoadingBotId;
   bool _bulkBusy = false;
+  Timer? _statusPollTimer;
 
   static void _logControl(String icon, String action, UnifiedTradingBot bot, {
     required bool success,
@@ -46,19 +49,30 @@ class _WebTradingBotControlScreenState
 
   void _patchBotRuntimeStatus(String botId, String apiStatus) {
     final running = apiStatus == 'running';
-    final idx = _botsSnapshot.indexWhere((b) => b.tradingbotId == botId);
-    if (idx < 0) return;
-    final b = _botsSnapshot[idx];
+    var idx = _botsSnapshot.indexWhere((b) => b.tradingbotId == botId);
+    if (idx < 0) {
+      UnifiedTradingBot? fromShared;
+      for (final s in widget.sharedBots) {
+        if (s.tradingbotId == botId) {
+          fromShared = s;
+          break;
+        }
+      }
+      if (fromShared == null) return;
+      _botsSnapshot = [..._botsSnapshot, fromShared];
+      idx = _botsSnapshot.length - 1;
+    }
+    final cur = _botsSnapshot[idx];
     _botsSnapshot[idx] = UnifiedTradingBot(
-      tradingbotId: b.tradingbotId,
-      tradingbotName: b.tradingbotName,
-      exchangeAccount: b.exchangeAccount,
-      symbol: b.symbol,
-      strategyName: b.strategyName,
+      tradingbotId: cur.tradingbotId,
+      tradingbotName: cur.tradingbotName,
+      exchangeAccount: cur.exchangeAccount,
+      symbol: cur.symbol,
+      strategyName: cur.strategyName,
       status: apiStatus,
       isRunning: running,
-      canControl: b.canControl,
-      isTest: b.isTest,
+      canControl: cur.canControl,
+      isTest: cur.isTest,
     );
   }
 
@@ -226,11 +240,13 @@ class _WebTradingBotControlScreenState
     );
   }
 
-  Future<void> _load() async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+  Future<void> _load({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
     try {
       final baseUrl = await _prefs.backendBaseUrl;
       final token = await _prefs.authToken;
@@ -284,6 +300,7 @@ class _WebTradingBotControlScreenState
       });
     } catch (e) {
       if (!mounted) return;
+      if (silent) return;
       setState(() {
         _error = e.toString();
         _loading = false;
@@ -312,8 +329,9 @@ class _WebTradingBotControlScreenState
       final st = resp.status;
       setState(() {
         _loadingBotId = null;
-        if (resp.success && st != null && st.isNotEmpty) {
-          _patchBotRuntimeStatus(bot.tradingbotId, st);
+        if (resp.success) {
+          final eff = (st != null && st.isNotEmpty) ? st : 'running';
+          _patchBotRuntimeStatus(bot.tradingbotId, eff);
         }
       });
       _logControl('▶️', '策略启动', bot, success: resp.success, detail: resp.message);
@@ -322,7 +340,7 @@ class _WebTradingBotControlScreenState
           content: Text(resp.success ? '启动成功' : (resp.message ?? '启动失败')),
         ),
       );
-      if (resp.success) _load();
+      if (resp.success) _load(silent: true);
     } catch (e) {
       if (!mounted) return;
       setState(() => _loadingBotId = null);
@@ -343,8 +361,9 @@ class _WebTradingBotControlScreenState
       final st = resp.status;
       setState(() {
         _loadingBotId = null;
-        if (resp.success && st != null && st.isNotEmpty) {
-          _patchBotRuntimeStatus(bot.tradingbotId, st);
+        if (resp.success) {
+          final eff = (st != null && st.isNotEmpty) ? st : 'stopped';
+          _patchBotRuntimeStatus(bot.tradingbotId, eff);
         }
       });
       _logControl('⏹️', '策略停止', bot, success: resp.success, detail: resp.message);
@@ -353,7 +372,7 @@ class _WebTradingBotControlScreenState
           content: Text(resp.success ? '停止成功' : (resp.message ?? '停止失败')),
         ),
       );
-      if (resp.success) _load();
+      if (resp.success) _load(silent: true);
     } catch (e) {
       if (!mounted) return;
       setState(() => _loadingBotId = null);
@@ -374,8 +393,9 @@ class _WebTradingBotControlScreenState
       final st = resp.status;
       setState(() {
         _loadingBotId = null;
-        if (resp.success && st != null && st.isNotEmpty) {
-          _patchBotRuntimeStatus(bot.tradingbotId, st);
+        if (resp.success) {
+          final eff = (st != null && st.isNotEmpty) ? st : 'running';
+          _patchBotRuntimeStatus(bot.tradingbotId, eff);
         }
       });
       _logControl('🔄', '策略重启', bot, success: resp.success, detail: resp.message);
@@ -384,7 +404,7 @@ class _WebTradingBotControlScreenState
           content: Text(resp.success ? '重启已执行' : (resp.message ?? '重启失败')),
         ),
       );
-      if (resp.success) _load();
+      if (resp.success) _load(silent: true);
     } catch (e) {
       if (!mounted) return;
       setState(() => _loadingBotId = null);
@@ -523,7 +543,7 @@ class _WebTradingBotControlScreenState
           content: Text(resp.success ? '赛季已启动' : (resp.message ?? '赛季启动失败')),
         ),
       );
-      if (resp.success) _load();
+      if (resp.success) _load(silent: true);
     } catch (e) {
       if (!mounted) return;
       setState(() => _seasonLoadingBotId = null);
@@ -554,7 +574,7 @@ class _WebTradingBotControlScreenState
           content: Text(resp.success ? '赛季已停止' : (resp.message ?? '赛季停止失败')),
         ),
       );
-      if (resp.success) _load();
+      if (resp.success) _load(silent: true);
     } catch (e) {
       if (!mounted) return;
       setState(() => _seasonLoadingBotId = null);
@@ -727,7 +747,7 @@ class _WebTradingBotControlScreenState
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('批量启动完成：成功 $ok / ${targets.length}')),
     );
-    _load();
+    _load(silent: true);
   }
 
   Future<void> _bulkStopAll() async {
@@ -787,7 +807,7 @@ class _WebTradingBotControlScreenState
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('批量停止完成：成功 $ok / ${targets.length}')),
     );
-    _load();
+    _load(silent: true);
   }
 
   @override
@@ -795,6 +815,16 @@ class _WebTradingBotControlScreenState
     super.initState();
     _botsSnapshot = List<UnifiedTradingBot>.from(widget.sharedBots);
     _load();
+    _statusPollTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!mounted) return;
+      _load(silent: true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _statusPollTimer?.cancel();
+    super.dispose();
   }
 
   void _openAccount(AccountProfit a) {
@@ -821,7 +851,7 @@ class _WebTradingBotControlScreenState
           fit: StackFit.expand,
           children: [
             RefreshIndicator(
-              onRefresh: _load,
+              onRefresh: () => _load(),
               child: _loading && _accounts.isEmpty
                   ? const Center(child: CircularProgressIndicator())
                   : _error != null && _accounts.isEmpty
@@ -850,7 +880,7 @@ class _WebTradingBotControlScreenState
                       physics: const AlwaysScrollableScrollPhysics(),
                       slivers: [
                         SliverPadding(
-                          padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
+                          padding: const EdgeInsets.fromLTRB(16, 20, 16, 12),
                           sliver: SliverToBoxAdapter(
                             child: _GlobalBotStatsBar(
                               total: stats.total,
@@ -860,6 +890,7 @@ class _WebTradingBotControlScreenState
                               bulkBusy: _bulkBusy,
                               onBulkStart: _bulkStartAll,
                               onBulkStop: _bulkStopAll,
+                              onRefreshStatus: () => _load(silent: true),
                             ),
                           ),
                         ),
@@ -879,7 +910,7 @@ class _WebTradingBotControlScreenState
                           )
                         else
                           SliverPadding(
-                            padding: const EdgeInsets.fromLTRB(24, 0, 24, 0),
+                            padding: const EdgeInsets.fromLTRB(14, 0, 14, 0),
                             sliver: Builder(
                               builder: (context) {
                                 final w = MediaQuery.sizeOf(context).width;
@@ -893,9 +924,9 @@ class _WebTradingBotControlScreenState
                                   gridDelegate:
                                       SliverGridDelegateWithFixedCrossAxisCount(
                                         crossAxisCount: cross,
-                                        mainAxisSpacing: 28,
-                                        crossAxisSpacing: 28,
-                                        // 卡片高度 = 格宽 / childAspectRatio；比值 ÷1.2 即高度 +20%
+                                        mainAxisSpacing: 8,
+                                        crossAxisSpacing: 8,
+                                        // 卡片高度 = 格宽 / childAspectRatio；÷1.2 相对基准 0.91/0.78 高度约 +20%
                                         childAspectRatio: cross >= 3
                                             ? 0.91 / 1.2
                                             : 0.78 / 1.2,
@@ -961,7 +992,7 @@ class _WebTradingBotControlScreenState
                             ),
                           ),
                         const SliverPadding(
-                          padding: EdgeInsets.only(bottom: 48),
+                          padding: EdgeInsets.only(bottom: 32),
                         ),
                       ],
                     ),
@@ -1009,6 +1040,7 @@ class _GlobalBotStatsBar extends StatelessWidget {
     required this.bulkBusy,
     required this.onBulkStart,
     required this.onBulkStop,
+    required this.onRefreshStatus,
   });
 
   final int total;
@@ -1018,6 +1050,7 @@ class _GlobalBotStatsBar extends StatelessWidget {
   final bool bulkBusy;
   final VoidCallback onBulkStart;
   final VoidCallback onBulkStop;
+  final VoidCallback onRefreshStatus;
 
   @override
   Widget build(BuildContext context) {
@@ -1061,6 +1094,20 @@ class _GlobalBotStatsBar extends StatelessWidget {
             color: bulkBusy ? null : AppFinanceStyle.textLoss,
           ),
           label: const Text('全部停止'),
+        ),
+        const SizedBox(width: 10),
+        FilledButton.tonalIcon(
+          onPressed: bulkBusy ? null : onRefreshStatus,
+          style: FilledButton.styleFrom(
+            foregroundColor: const Color(0xFFB9B5D9),
+            backgroundColor: const Color(0xFFB9B5D9).withValues(alpha: 0.14),
+          ),
+          icon: Icon(
+            Icons.sync_rounded,
+            size: 20,
+            color: bulkBusy ? null : const Color(0xFFB9B5D9),
+          ),
+          label: const Text('刷新状态'),
         ),
       ],
     );
@@ -1405,7 +1452,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
       animation: _pulse,
       builder: (context, _) {
         return FinanceCard(
-          padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,

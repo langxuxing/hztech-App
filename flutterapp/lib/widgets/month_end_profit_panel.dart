@@ -398,6 +398,9 @@ class MonthEndValueBarPanel extends StatefulWidget {
     /// 若非空且能解析出当月数据，按日柱使用 account_daily_performance（与 [dailyPerformancePick] 成对）。
     this.dailyPerformanceRows,
     this.dailyPerformancePick,
+
+    /// 按日柱图（[useDailyBarsForEndMonth]）时：左轴刻度与横向网格步长（USDT）；null 为自动。
+    this.dailyBarsLeftAxisInterval,
   });
 
   final List<BotProfitSnapshot> snapshots;
@@ -421,6 +424,9 @@ class MonthEndValueBarPanel extends StatefulWidget {
 
   final List<DailyRealizedPnlDayRow>? dailyPerformanceRows;
   final double? Function(DailyRealizedPnlDayRow row)? dailyPerformancePick;
+
+  /// 按日柱图左轴刻度间隔（如 10）；null 为 fl_chart 默认自动。
+  final double? dailyBarsLeftAxisInterval;
 
   @override
   State<MonthEndValueBarPanel> createState() => _MonthEndValueBarPanelState();
@@ -651,6 +657,7 @@ class _MonthEndValueBarPanelState extends State<MonthEndValueBarPanel> {
                 gridData: FlGridData(
                   show: true,
                   drawVerticalLine: false,
+                  horizontalInterval: widget.dailyBarsLeftAxisInterval,
                   getDrawingHorizontalLine: (v) => FlLine(
                     color: Colors.white.withValues(alpha: 0.06),
                     strokeWidth: 1,
@@ -669,15 +676,24 @@ class _MonthEndValueBarPanelState extends State<MonthEndValueBarPanel> {
                     sideTitles: SideTitles(
                       showTitles: true,
                       reservedSize: widget.compact ? 32 : 40,
-                      getTitlesWidget: (v, m) => Text(
-                        formatUiInteger(v),
-                        style: TextStyle(
-                          color: AppFinanceStyle.labelColor.withValues(
-                            alpha: 0.85,
+                      interval: widget.dailyBarsLeftAxisInterval,
+                      getTitlesWidget: (v, m) {
+                        final step = widget.dailyBarsLeftAxisInterval;
+                        if (step != null && step > 0) {
+                          if ((v - (v / step).round() * step).abs() > 1e-2) {
+                            return const SizedBox.shrink();
+                          }
+                        }
+                        return Text(
+                          formatUiInteger(v),
+                          style: TextStyle(
+                            color: AppFinanceStyle.labelColor.withValues(
+                              alpha: 0.85,
+                            ),
+                            fontSize: widget.compact ? 8 : 10,
                           ),
-                          fontSize: widget.compact ? 8 : 10,
-                        ),
-                      ),
+                        );
+                      },
                     ),
                   ),
                   bottomTitles: AxisTitles(
@@ -922,6 +938,9 @@ class MonthEndValueCalendarPanel extends StatefulWidget {
     /// 若非空且能解析出当月数据，日历使用 account_daily_performance（与 [dailyPerformancePick] 成对）。
     this.dailyPerformanceRows,
     this.dailyPerformancePick,
+
+    /// 为 true 时日变动为 0 的日期按「无数据」格展示（不显示盈亏色与金额）。
+    this.hideZeroDailyValues = false,
   });
 
   final List<BotProfitSnapshot> snapshots;
@@ -940,6 +959,8 @@ class MonthEndValueCalendarPanel extends StatefulWidget {
 
   final List<DailyRealizedPnlDayRow>? dailyPerformanceRows;
   final double? Function(DailyRealizedPnlDayRow row)? dailyPerformancePick;
+
+  final bool hideZeroDailyValues;
 
   @override
   State<MonthEndValueCalendarPanel> createState() =>
@@ -1013,9 +1034,14 @@ class _MonthEndValueCalendarPanelState
             widget.dailyPerformancePick!,
           )
         : <int, double>{};
-    final daily = perfMap.isNotEmpty
+    var daily = perfMap.isNotEmpty
         ? perfMap
         : _dailyDeltaForMonth(sorted, focus, widget.valueAt, fallback);
+    if (widget.hideZeroDailyValues) {
+      daily = Map<int, double>.fromEntries(
+        daily.entries.where((e) => e.value.abs() >= 1e-9),
+      );
+    }
     final showEmpty = daily.isEmpty && monthly.isEmpty;
     final titleStyle = widget.compact
         ? (Theme.of(context).textTheme.titleMedium ?? const TextStyle())
@@ -1147,6 +1173,7 @@ class _MonthEndValueCalendarPanelState
                       compact: widget.compact,
                       headerFontSize: widget.compact ? 10 : 12,
                       rowSpacing: rs,
+                      hideZeroDailyValues: widget.hideZeroDailyValues,
                     ),
                   );
                   if (widget.centerCalendarGridInExpanded) {
@@ -1174,6 +1201,7 @@ class _MonthEndValueCalendarPanelState
                   compact: widget.compact,
                   headerFontSize: widget.compact ? 10 : 12,
                   rowSpacing: widget.compact ? 1.5 : 3,
+                  hideZeroDailyValues: widget.hideZeroDailyValues,
                 ),
               ),
             ),
@@ -1202,6 +1230,7 @@ class _CalendarGrid extends StatelessWidget {
     this.compact = false,
     this.headerFontSize = 12,
     this.rowSpacing = 3,
+    this.hideZeroDailyValues = false,
   });
 
   final int year;
@@ -1211,6 +1240,7 @@ class _CalendarGrid extends StatelessWidget {
   final bool compact;
   final double headerFontSize;
   final double rowSpacing;
+  final bool hideZeroDailyValues;
 
   @override
   Widget build(BuildContext context) {
@@ -1268,7 +1298,8 @@ class _CalendarGrid extends StatelessWidget {
 
   Widget _dayCell(BuildContext context, int day) {
     final pnl = dailyPnL[day];
-    final has = pnl != null;
+    final has = pnl != null &&
+        !(hideZeroDailyValues && pnl.abs() < 1e-9);
     final borderColor = !has
         ? Colors.white.withValues(alpha: 0.06)
         : (pnl >= 0 ? AppFinanceStyle.chartProfit : _kCalendarDayLossAccent);

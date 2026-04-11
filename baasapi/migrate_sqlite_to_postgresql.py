@@ -100,7 +100,7 @@ _CONFLICT_SPECS: list[tuple[str, str | None]] = [
     ("account_month_balance_baseline", "ON CONFLICT (account_id, year_month) DO UPDATE SET initial_equity = EXCLUDED.initial_equity, initial_balance = EXCLUDED.initial_balance, recorded_at = EXCLUDED.recorded_at"),
     ("account_positions_history", "ON CONFLICT (account_id, okx_pos_id, u_time_ms) DO NOTHING"),
     ("account_open_positions_snapshots", None),
-    ("account_daily_performance", "ON CONFLICT (account_id, day) DO UPDATE SET net_realized_pnl = EXCLUDED.net_realized_pnl, close_pos_count = EXCLUDED.close_pos_count, equlity_changed = EXCLUDED.equlity_changed, balance_changed = EXCLUDED.balance_changed, pnl_pct = EXCLUDED.pnl_pct, instrument_id = EXCLUDED.instrument_id, market_truevolatility = EXCLUDED.market_truevolatility, efficiency_ratio = EXCLUDED.efficiency_ratio, updated_at = EXCLUDED.updated_at"),
+    ("account_daily_performance", "ON CONFLICT (account_id, day) DO UPDATE SET net_realized_pnl = EXCLUDED.net_realized_pnl, close_pos_count = EXCLUDED.close_pos_count, equlity_changed = EXCLUDED.equlity_changed, balance_changed = EXCLUDED.balance_changed, balance_changed_pct = EXCLUDED.balance_changed_pct, equity_changed_pct = EXCLUDED.equity_changed_pct, pnl_pct = EXCLUDED.pnl_pct, instrument_id = EXCLUDED.instrument_id, market_truevolatility = EXCLUDED.market_truevolatility, efficiency_ratio = EXCLUDED.efficiency_ratio, updated_at = EXCLUDED.updated_at"),
     ("market_daily_bars", 'ON CONFLICT (inst_id, day) DO UPDATE SET "open" = EXCLUDED."open", "high" = EXCLUDED."high", "low" = EXCLUDED."low", "close" = EXCLUDED."close", tr = EXCLUDED.tr, updated_at = EXCLUDED.updated_at'),
 ]
 

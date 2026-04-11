@@ -17,6 +17,23 @@ case "${1:-}" in
   checkhealth)
     exec "$PY" "$DIR/mock_bot_ctl.py" checkhealth
     ;;
+  status)
+    exec "$PY" "$DIR/mock_bot_ctl.py" status
+    ;;
+  --season)
+    case "${2:-}" in
+      start)
+        exec "$PY" "$DIR/mock_bot_ctl.py" season-start
+        ;;
+      stop)
+        exec "$PY" "$DIR/mock_bot_ctl.py" season-stop
+        ;;
+      *)
+        echo "usage: $0 --season start|stop" >&2
+        exit 1
+        ;;
+    esac
+    ;;
   season-start)
     exec "$PY" "$DIR/mock_bot_ctl.py" season-start
     ;;
@@ -24,7 +41,7 @@ case "${1:-}" in
     exec "$PY" "$DIR/mock_bot_ctl.py" season-stop
     ;;
   *)
-    echo "usage: $0 start|stop|restart|checkhealth|season-start|season-stop" >&2
+    echo "usage: $0 start|stop|restart|checkhealth|status|--season start|stop|season-start|season-stop" >&2
     exit 1
     ;;
 esac

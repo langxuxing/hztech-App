@@ -57,11 +57,9 @@ enum AppUserRole {
   /// 已绑定账户的 OKX 密钥 JSON 上传与测连（Web 侧栏「账户配置」）
   bool get canConfigureLinkedOkxKeys => this == AppUserRole.customer;
 
-  /// Web「收网测试」页：交易员、管理员、策略分析师（与后端一致；客户无）
+  /// Web「收网测试」页：管理员、策略分析师（与后端一致；交易员与客户无）
   bool get canViewAutoNettingTest =>
-      this == AppUserRole.strategyAnalyst ||
-      this == AppUserRole.trader ||
-      this == AppUserRole.admin;
+      this == AppUserRole.strategyAnalyst || this == AppUserRole.admin;
 
   /// Web「绩效对比表」：多账户持仓与月度平仓对比（策略分析师、交易员、管理员；与客户无关）
   bool get canViewAccountPerformanceComparison =>

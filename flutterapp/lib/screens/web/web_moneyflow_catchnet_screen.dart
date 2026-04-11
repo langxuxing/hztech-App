@@ -6,7 +6,7 @@ import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
 import '../../widgets/water_background.dart';
 
-/// Web：资金流收网（仅策略分析师；后端目前为记录桩，可后续对接实盘）。
+/// Web：资金流收网（管理员与策略分析师；后端目前为记录桩，可后续对接实盘）。
 class WebMoneyflowCatchnetScreen extends StatefulWidget {
   const WebMoneyflowCatchnetScreen({
     super.key,

@@ -77,8 +77,8 @@ def test_season_start_stop_mock_script():
 
     aid = "pytest_tradingbot_season_dev"
     script = am.ACCOUNTS_DIR / "tradingbot_ctrl" / "moneyflow_test_001.sh"
-    assert tc.run_shell_season_action(aid, script, "season-start").get("ok")
-    assert tc.run_shell_season_action(aid, script, "season-stop").get("ok")
+    assert tc.run_shell_season_action(aid, script, "start").get("ok")
+    assert tc.run_shell_season_action(aid, script, "stop").get("ok")
 
 
 def test_all_dev_mock_scripts_usage():

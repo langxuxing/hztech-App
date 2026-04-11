@@ -164,7 +164,7 @@ class SnapshotPercentLineChart extends StatelessWidget {
     var monthLineDenomForTip = 0.0;
     final pick = series == SnapshotReturnSeries.equity
         ? (BotProfitSnapshot s) => s.equityUsdt
-        : (BotProfitSnapshot s) => s.currentBalance;
+        : (BotProfitSnapshot s) => s.cashBalance ?? s.currentBalance;
 
     if (monthMode) {
       final y = focusedMonth!.year;
@@ -239,7 +239,7 @@ class SnapshotPercentLineChart extends StatelessWidget {
         final s = sorted[i];
         final profit = series == SnapshotReturnSeries.equity
             ? (s.equityUsdt - denom)
-            : (s.currentBalance - denom);
+            : ((s.cashBalance ?? s.currentBalance) - denom);
         spots.add(FlSpot(i.toDouble(), profit));
         if (profit < minY) minY = profit;
         if (profit > maxY) maxY = profit;
@@ -264,6 +264,8 @@ class SnapshotPercentLineChart extends StatelessWidget {
     }
     final pad = (maxY - minY).abs() * 0.08 + 1.0;
     final lineColor = _snapshotTrendLineColor(spots);
+    final cashMonthGrid =
+        monthMode && series == SnapshotReturnSeries.cash;
 
     final monthPointCount = monthMode
         ? (spots.isEmpty ? 0 : (spots.last.x.round() + 1))
@@ -281,7 +283,15 @@ class SnapshotPercentLineChart extends StatelessWidget {
         maxX: xSpan,
         minY: minY - pad,
         maxY: maxY + pad,
-        gridData: const FlGridData(show: false),
+        gridData: FlGridData(
+          show: cashMonthGrid,
+          drawVerticalLine: false,
+          horizontalInterval: cashMonthGrid ? 100 : null,
+          getDrawingHorizontalLine: (v) => FlLine(
+            color: Colors.white.withValues(alpha: 0.07),
+            strokeWidth: 1,
+          ),
+        ),
         lineTouchData: LineTouchData(
           enabled: true,
           touchTooltipData: LineTouchTooltipData(
@@ -347,9 +357,17 @@ class SnapshotPercentLineChart extends StatelessWidget {
           leftTitles: AxisTitles(
             sideTitles: SideTitles(
               showTitles: monthMode,
-              reservedSize: compact ? 30 : 36,
-              interval: 1,
+              reservedSize: compact ? 34 : 40,
+              interval: monthMode
+                  ? (series == SnapshotReturnSeries.cash ? 100 : 10)
+                  : null,
               getTitlesWidget: (v, meta) {
+                if (cashMonthGrid) {
+                  const step = 100.0;
+                  if ((v - (v / step).round() * step).abs() > 1e-2) {
+                    return const SizedBox.shrink();
+                  }
+                }
                 return Text(
                   formatUiInteger(v),
                   style: TextStyle(

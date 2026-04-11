@@ -10,7 +10,7 @@ App 所需 API（与 QtraderApi.kt 一致）：
   POST /api/login                 登录，Body: {username, password}，返回 {success, token}
   GET  /api/account-profit        账户盈亏（需 Bearer token）
   GET  /api/tradingbots           交易账户列表（需 Bearer token）
-  POST /api/tradingbots/{id}/start|stop|restart|season-start|season-stop（需 Bearer token；season-start 先写 account_season 再按需启动策略进程，再执行赛季脚本；season-stop 仅结束赛季记录，不强制 stop 进程；stop 会写当前未结赛季止期及期末权益/现金）
+  POST /api/tradingbots/{id}/start|stop|restart|season-start|season-stop（需 Bearer token；start 支持 ?force=true 先停再起；赛季脚本侧为 `--season start|stop`；status 子命令供运行态 JSON；season-start 先写 account_season 再按需启动策略进程，再执行赛季脚本；season-stop 仅结束赛季记录，不强制 stop 进程；stop 会写当前未结赛季止期及期末权益/现金）
   GET  /api/tradingbots/{id}/pending-orders | /ticker  当前委托、行情（不入库；id 可为 Account_List 的 account_id）
   GET  /api/tradingbots/{id}/profit-history  收益曲线快照（?limit=&since=，默认近 45 天、最多 15000 条）
   GET  /api/tradingbots/{id}/strategy-daily-efficiency  策略效能：现金/权益收益率%、能效、ATR14 与阈值（?inst_id=&days=）
@@ -22,7 +22,7 @@ App 所需 API（与 QtraderApi.kt 一致）：
   POST /api/users                 新建用户（仅管理员）Body: {username, password, role?, linked_account_ids?, full_name?, phone?}
   DELETE /api/users/<id>          删除用户（仅管理员，不可删自己）
   PATCH /api/users/<id>           更新角色/客户绑定/全名/手机（仅管理员）
-  POST /api/strategy-analyst/auto-net-test  自动收网测试桩（交易员/管理员/策略分析师，客户不可用）
+  POST /api/strategy-analyst/auto-net-test  自动收网测试桩（管理员/策略分析师；交易员与客户不可用）
   GET  /api/me                    当前用户 role、linked_account_ids
   GET  /api/health                服务存活（无需登录，供负载均衡探测）
   GET  /api/app-version           移动端版本策略（无需登录；HZTECH_APP_* 环境变量）
@@ -34,7 +34,7 @@ App 所需 API（与 QtraderApi.kt 一致）：
   POST /api/tradingbots/{id}/open-positions-snapshot/sync  立即拉取 OKX 当前持仓写入 account_open_positions_snapshots（仅管理员）
   POST /api/admin/balance-snapshots/sync  全量余额快照同步（与定时任务相同；仅管理员）
   POST /api/admin/balance-snapshots/recompute-profit  按 initial_capital 重算全表 equity_profit_*（权益）与 balance_profit_*（资产余额）（仅管理员）
-  POST /api/admin/balance-snapshots/backfill-bills  按 OKX bills-archive 为各启用账户补全缺日 account_balance_snapshots，并在有插入时重算 account_daily_performance（仅管理员）
+  POST /api/admin/balance-snapshots/backfill-bills  按 OKX bills-archive 为各启用账户补全缺日 account_balance_snapshots；有插入时仅重算北京「当天」account_daily_performance（仅管理员）
   GET|POST|PUT|DELETE /api/admin/accounts  Account_List.json + account_list 库表同步（仅管理员）
   POST /api/admin/accounts/{id}/test-connection  测连 OKX + 检查 SWAP/双向持仓/50x 杠杆（仅管理员）；Body 可选 {"auto_configure": true} 在测连成功后调用 OKX 设双向持仓/全仓/多空杠杆后复测
   GET  /api/me/customer-accounts  客户已绑定账户列表与密钥文件是否存在（仅客户）
@@ -63,6 +63,7 @@ except ImportError:
     fcntl = None  # Windows：无 flock，按单进程处理
 
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from functools import wraps
 import jwt
@@ -136,6 +137,11 @@ _account_snapshot_timer_lock = threading.Lock()
 _month_balance_baseline_timer_started = False
 _month_balance_baseline_timer_lock = threading.Lock()
 _month_balance_baseline_last_run_ym: str | None = None
+
+# 北京日历：最近一次成功执行 account_daily_performance 按日界完整重算的「昨天」YYYY-MM-DD（= beijing_calendar_yesterday_ymd 当时的值）
+_adp_yesterday_finalize_last_yesterday: str | None = None
+_adp_yesterday_finalize_timer_started = False
+_adp_yesterday_finalize_timer_lock = threading.Lock()
 
 # gunicorn 等多 worker 时仅一个进程启动后台定时器；持有锁的进程须保持文件打开直至退出
 _BACKGROUND_SCHEDULER_LEADER_LOCK_FP: object | None = None
@@ -610,11 +616,13 @@ def _okx_account_test_http_response(account_id: str):
     return jsonify(resp), status
 
 
-def _require_trader_admin_or_analyst():
-    """收网测试等：客户不可调用。"""
-    if _is_trader() or _is_admin() or _is_strategy_analyst():
+def _require_admin_or_strategy_analyst():
+    """收网测试：仅管理员与策略分析师。"""
+    if _is_admin() or _is_strategy_analyst():
         return None
-    return jsonify({"success": False, "message": "客户无权使用此功能"}), 403
+    return jsonify(
+        {"success": False, "message": "仅管理员与策略分析师可使用收网测试"},
+    ), 403
 
 
 def _customer_bot_forbidden(bot_id: str):
@@ -678,10 +686,10 @@ def _live_equity_cash_for_bot(bot_id: str) -> tuple[float, float]:
 
 # 账户信息同步器：从 OKX 交易所读取账户信息并写入数据库
 def _job_fetch_account_and_save_snapshots() -> None:
-    """定时任务：Account_List 账户写入 account_balance_snapshots（含节流后的 bills-archive 缺日补全、
-    必要时对部分账户重算 account_daily_performance）、account_open_positions_snapshots、
-    account_positions_history（OKX positions-history；周期末在 AccountMgr 内按历史重算全账户 account_daily_performance）；
-    周期由 HZTECH_ACCOUNT_SYNC_INTERVAL_SEC 控制（默认 300 秒）。"""
+    """定时任务：Account_List 账户写入 account_balance_snapshots（含节流后的 bills-archive 缺日补全）、
+    account_open_positions_snapshots、account_positions_history（OKX positions-history 增量）；
+    周期末仅 UPSERT 北京「当天」account_daily_performance 临时行（SOD 口径快照差 + 当日平仓；不删历史日）。
+    北京「昨天」完整按日界重算由独立凌晨定时器执行。周期由 HZTECH_ACCOUNT_SYNC_INTERVAL_SEC 控制（默认 300 秒）。"""
     try:
         _account_mgr.refresh_all_balance_snapshots(_db, app.logger)
         _sync_record_step("balance_snapshots", True, None)
@@ -726,6 +734,30 @@ def _job_fetch_account_and_save_snapshots() -> None:
             app.logger.debug("📊 日线未齐 │ %s", _mb_err)
     except Exception as _e_mdb:
         app.logger.warning("⚠️ 日线补齐异常 │ %s", _e_mdb)
+
+    try:
+        _all_adp_ids = [
+            str(b["account_id"] or "").strip()
+            for b in _account_mgr.list_account_basics(enabled_only=False)
+            if str(b.get("account_id") or "").strip()
+        ]
+        if _all_adp_ids:
+            _account_mgr.refresh_account_daily_performance_today_provisional_safe(
+                _db,
+                _all_adp_ids,
+                app.logger,
+            )
+    except Exception as _e_adp:
+        app.logger.warning("⚠️ 日绩效·当日刷写 │ %s", _e_adp)
+        try:
+            _db.log_insert(
+                "WARN",
+                "account_daily_performance_today_refresh_failed",
+                source="timer",
+                extra={"error": str(_e_adp)},
+            )
+        except Exception:
+            pass
 
     _sync_mark_completed(None)
 
@@ -795,6 +827,69 @@ def _start_account_month_balance_baseline_timer() -> None:
 
     t = threading.Thread(target=_loop, daemon=True)
     t.start()
+
+
+def _start_account_adp_yesterday_finalize_timer() -> None:
+    """独立线程：在北京「凌晨」对「日历昨天」account_daily_performance 做完整按日界重算（与 5 分钟同步的当日临时 UPSERT 分离）。
+
+    默认 0<=北京时<5 为执行窗口；若进程曾错过窗口，日间发现 ``last`` 仍落后于 ``昨天`` 则补跑一次，避免旧逻辑里
+    ``hour>=6`` 与错误状态组合导致永不固化的问题。
+    """
+    global _adp_yesterday_finalize_timer_started
+    with _adp_yesterday_finalize_timer_lock:
+        if _adp_yesterday_finalize_timer_started:
+            return
+        _adp_yesterday_finalize_timer_started = True
+
+    def _loop() -> None:
+        global _adp_yesterday_finalize_last_yesterday
+        time.sleep(25)
+        while True:
+            try:
+                bj = datetime.now(ZoneInfo("Asia/Shanghai"))
+                yd = _db.beijing_calendar_yesterday_ymd()
+                if _adp_yesterday_finalize_last_yesterday == yd:
+                    time.sleep(60)
+                    continue
+                in_dawn = 0 <= bj.hour < 5
+                last = _adp_yesterday_finalize_last_yesterday
+                eligible = in_dawn or last is None or last < yd
+                if not eligible:
+                    time.sleep(60)
+                    continue
+                ids = [
+                    str(b["account_id"] or "").strip()
+                    for b in _account_mgr.list_account_basics(enabled_only=False)
+                    if str(b.get("account_id") or "").strip()
+                ]
+                ok = False
+                if ids:
+                    ok = _account_mgr.rebuild_account_daily_performance_days_safe(
+                        _db, ids, [yd], app.logger
+                    )
+                else:
+                    app.logger.debug(
+                        "📊 日绩效·昨日固化 │ 跳过：无 account_id │ 北京昨日 %s",
+                        yd,
+                    )
+                if ok:
+                    _adp_yesterday_finalize_last_yesterday = yd
+                    app.logger.info(
+                        "📊 日绩效·昨日固化 │ 北京昨日 %s │ 本地时 %02d:%02d",
+                        yd,
+                        bj.hour,
+                        bj.minute,
+                    )
+            except Exception as e:
+                _db.log_insert(
+                    "WARN",
+                    "account_adp_yesterday_finalize_timer_error",
+                    source="timer",
+                    extra={"error": str(e)},
+                )
+            time.sleep(60)
+
+    threading.Thread(target=_loop, daemon=True, name="adp_yesterday_finalize").start()
 
 
 def _bootstrap_account_month_balance_baseline_if_needed_on_startup() -> None:
@@ -921,7 +1016,8 @@ def api_status():
         "后台线程按 HZTECH_ACCOUNT_SYNC_INTERVAL_SEC（默认 300 秒＝5 分钟）从 OKX 拉取 "
         "权益、资产余额(cashBal)、可用保证金、占用写入 account_balance_snapshots，当前持仓聚合写入 "
         "account_open_positions_snapshots，并拉取 positions-history 写入 account_positions_history；"
-        "同一周期内会根据 account_positions_history 重算各账户 account_daily_performance（日已实现盈亏等）。"
+        "同一周期末仅 UPSERT 北京「当天」account_daily_performance 临时行（当日平仓 + 日内快照 SOD→当前）；"
+        "「昨天」及历史完整按日界重算由独立凌晨线程执行，不每轮全删历史日。"
         "进程启动后约 30 秒首次执行一轮。"
     )
     multi_hint = (
@@ -1132,8 +1228,8 @@ def api_users_patch(user_id: int):
 @app.route("/api/strategy-analyst/auto-net-test", methods=["POST"])
 @require_auth
 def api_strategy_analyst_auto_net_test():
-    """自动收网测试桩：仅记录请求；交易员/管理员/策略分析师可调用。"""
-    denied = _require_trader_admin_or_analyst()
+    """自动收网测试桩：仅记录请求；管理员与策略分析师可调用。"""
+    denied = _require_admin_or_strategy_analyst()
     if denied:
         return denied
     data = request.get_json(silent=True) or {}
@@ -1219,15 +1315,25 @@ def api_tradingbots():
     )
 
 
-def _bot_op_response(resp: dict, bot_id: str) -> dict:
-    """将 bot_ctrl 返回转为 App BotOperationResponse 格式。"""
+def _bot_op_response(
+    resp: dict, bot_id: str, *, force_status: str | None = None
+) -> dict:
+    """将 bot_ctrl 返回转为 App BotOperationResponse 格式。
+
+    force_status: 成功时固定返回的 status（如策略 stop 成功一律 stopped），避免
+    响应里误带 pids 字段时被推断为仍在运行。
+    """
     ok = resp.get("ok", False)
     pids = resp.get("pids") or []
+    if force_status and ok:
+        status = force_status
+    else:
+        status = "running" if ok and pids else "stopped"
     return {
         "success": ok,
         "message": resp.get("message") or resp.get("error"),
         "tradingbot_id": bot_id,
-        "status": "running" if ok and pids else "stopped",
+        "status": status,
     }
 
 
@@ -1285,7 +1391,9 @@ def api_bot_start(bot_id):
         return denied
     if not _bot_is_controllable(bot_id):
         return jsonify({"success": False, "message": "未知 bot_id"}), 404
-    resp = strategy_start(bot_id)
+    force_raw = (request.args.get("force") or "").strip().lower()
+    force = force_raw in ("1", "true", "yes", "on")
+    resp = strategy_start(bot_id, force=force)
     user = getattr(g, "current_username", None)
     dr = resp.get("message") or resp.get("error") or ""
     detail = str(dr) if dr else None
@@ -1350,7 +1458,7 @@ def api_bot_stop(bot_id):
         _db.tradingbot_mgr_session_stop(bot_id, ts, ts)
         final_eq, final_cash = _live_equity_cash_for_bot(bot_id)
         _db.account_season_update_on_stop(bot_id, ts, final_eq, final_cash)
-    return jsonify(_bot_op_response(resp, bot_id))
+    return jsonify(_bot_op_response(resp, bot_id, force_status="stopped"))
 
 
 @app.route("/api/tradingbots/<bot_id>/restart", methods=["POST"])
@@ -1402,7 +1510,7 @@ def api_bot_season_start(bot_id):
 
     start_resp = None
     if not strategy_is_running(bot_id):
-        start_resp = strategy_start(bot_id)
+        start_resp = strategy_start(bot_id, force=False)
         dr = start_resp.get("message") or start_resp.get("error") or ""
         _audit_bot_control_action(
             _BOT_CTRL_ICONS["start"],
@@ -1837,6 +1945,7 @@ def api_bot_daily_realized_pnl(bot_id):
             r["equlity_changed"] = p.get("equlity_changed")
             r["balance_changed"] = p.get("balance_changed")
             r["balance_changed_pct"] = p.get("balance_changed_pct")
+            r["equity_changed_pct"] = p.get("equity_changed_pct")
             r["pnl_pct"] = p.get("pnl_pct")
             r["instrument_id"] = p.get("instrument_id")
             r["market_truevolatility"] = p.get("market_truevolatility")
@@ -2156,7 +2265,7 @@ def api_admin_balance_snapshots_backfill_bills():
     """对 Account_List 启用账户：用 OKX 近 3 月账单中的 USDT 余额补全缺日快照（不覆盖已有日期）。
 
     可选 JSON Body：``{"days": 40}``，将回看自然日数限制在 7～92（默认 40，约覆盖近一月）。
-    若有新插入行，会对相应账户执行 ``account_daily_performance`` 重建（与 positions-history 汇总口径一致）。
+    若有新插入行，会对相应账户仅临时 UPSERT 北京「当天」的 ``account_daily_performance`` 行。
     """
     denied = _require_admin()
     if denied:
@@ -2190,8 +2299,10 @@ def api_admin_balance_snapshots_backfill_bills():
         if n or msg:
             details.append({"account_id": aid, "inserted": n, "message": msg})
     if accounts_adp:
-        _account_mgr.rebuild_account_daily_performance_safe(
-            _db, accounts_adp, app.logger
+        _account_mgr.refresh_account_daily_performance_today_provisional_safe(
+            _db,
+            accounts_adp,
+            app.logger,
         )
     return jsonify(
         {
@@ -2437,6 +2548,12 @@ def api_strategy_start():
         request.args.get("bot_id")
         or (request.get_json(silent=True) or {}).get("bot_id")
     ) or ""
+    body = request.get_json(silent=True) or {}
+    force_raw = (request.args.get("force") or body.get("force") or "").strip()
+    if isinstance(force_raw, bool):
+        force = force_raw
+    else:
+        force = str(force_raw).lower() in ("1", "true", "yes", "on")
     if not _bot_is_controllable(bot_id):
         return (
             jsonify(
@@ -2447,7 +2564,7 @@ def api_strategy_start():
             ),
             400,
         )
-    resp = strategy_start(bot_id)
+    resp = strategy_start(bot_id, force=force)
     _db.strategy_event_insert(bot_id, "start", "manual", None)
     return jsonify(resp)
 
@@ -2697,12 +2814,13 @@ if _BACKGROUND_SCHEDULERS_ENABLED:
     _BACKGROUND_SCHEDULER_IS_LEADER = _bg_leader_ok
     if _bg_leader_ok:
         app.logger.info(
-            "🔑 定时·主 │ pid=%s ppid=%s │ 余额·月初·K线",
+            "🔑 定时·主 │ pid=%s ppid=%s │ 余额·月初·日绩效昨日·K线",
             os.getpid(),
             os.getppid(),
         )
         _start_account_snapshot_timer()
         _start_account_month_balance_baseline_timer()
+        _start_account_adp_yesterday_finalize_timer()
         threading.Thread(
             target=_bootstrap_account_month_balance_baseline_if_needed_on_startup,
             name="account_month_balance_baseline_bootstrap",

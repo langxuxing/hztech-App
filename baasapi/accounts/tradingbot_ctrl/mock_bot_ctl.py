@@ -6,7 +6,8 @@
   start         前台常驻（exec），供 tradingbot_ctrl 跟踪 PID；写日志
   stop          结束进程（读 .pid），写日志
   restart       先 stop 再 exec start
-  checkhealth   打印 JSON：运行状态、未结束赛季等；写日志
+  status        与 checkhealth 相同：stdout 打印 JSON（策略运行态、未结赛季等）
+  checkhealth   同 status
   season-start  日志 + JSON（account_season 由服务端 POST /season-start 在脚本成功后写入）
   season-stop   日志 + JSON（停赛写库由服务端 POST /season-stop 完成）
 
@@ -360,7 +361,7 @@ def cmd_season_stop() -> int:
 def main() -> None:
     if len(sys.argv) < 2:
         print(
-            "usage: mock_bot_ctl.py start|stop|restart|checkhealth|season-start|season-stop",
+            "usage: mock_bot_ctl.py start|stop|restart|status|checkhealth|season-start|season-stop",
             file=sys.stderr,
         )
         sys.exit(1)

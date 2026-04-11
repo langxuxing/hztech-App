@@ -335,7 +335,7 @@ class TestUsersApi:
 
 
 class TestStrategyAnalystAutoNet:
-    """POST /api/strategy-analyst/auto-net-test（非客户）"""
+    """POST /api/strategy-analyst/auto-net-test（管理员与策略分析师）"""
 
     def test_auto_net_ok_for_analyst(self, client, analyst_headers):
         r = client.post(
@@ -348,14 +348,24 @@ class TestStrategyAnalystAutoNet:
         data = r.get_json()
         assert data.get("success") is True
 
-    def test_auto_net_ok_for_trader(self, client, trader_headers):
+    def test_auto_net_ok_for_admin(self, client, auth_headers):
+        r = client.post(
+            "/api/strategy-analyst/auto-net-test",
+            headers=auth_headers,
+            json={},
+            content_type="application/json",
+        )
+        assert r.status_code == 200
+        assert r.get_json().get("success") is True
+
+    def test_auto_net_forbidden_for_trader(self, client, trader_headers):
         r = client.post(
             "/api/strategy-analyst/auto-net-test",
             headers=trader_headers,
             json={},
             content_type="application/json",
         )
-        assert r.status_code == 200
+        assert r.status_code == 403
 
     def test_auto_net_forbidden_for_customer(self, client):
         import hashlib

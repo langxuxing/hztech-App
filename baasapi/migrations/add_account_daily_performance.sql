@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS account_daily_performance (
     equlity_changed REAL,
     balance_changed REAL,
     balance_changed_pct REAL,
+    equity_changed_pct REAL,
     pnl_pct REAL,
     instrument_id TEXT NOT NULL DEFAULT '',
     market_truevolatility REAL,

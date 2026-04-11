@@ -317,6 +317,14 @@ class _AccountsListState extends State<AccountsList> {
     if (oldWidget.periodicRefreshActive != widget.periodicRefreshActive) {
       _syncPositionsRefreshTimer();
     }
+    // [MainScreen] 用 IndexedStack 保留子树状态；离开再进入「账户总览」时恢复默认权益口径。
+    if (!oldWidget.periodicRefreshActive && widget.periodicRefreshActive) {
+      if (_basis != _AccountsListBasis.equity) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) setState(() => _basis = _AccountsListBasis.equity);
+        });
+      }
+    }
   }
 
   @override
@@ -442,8 +450,8 @@ class _AccountsListState extends State<AccountsList> {
                                 ? _aggregateTotalEquity
                                 : _aggregateTotalCash;
                             final pctLabel = _basis == _AccountsListBasis.equity
-                                ? '平均收益率'
-                                : '平均现金收益率';
+                                ? '权益收益率'
+                                : '现金收益率';
                             return Row(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
@@ -536,7 +544,9 @@ class _AccountsListState extends State<AccountsList> {
                                               context,
                                             ).textTheme.titleLarge?.fontSize ??
                                             22) ;
-                                    final upl = _floatingForAccount(a);
+                                    final upl = _basis == _AccountsListBasis.cash
+                                        ? _floatingForAccount(a)
+                                        : 0.0;
                                     final pctEquity = a.profitPercent;
                                     final pctCash = a.cashProfitPercent;
                                     final pct = _basis == _AccountsListBasis.equity
@@ -553,7 +563,7 @@ class _AccountsListState extends State<AccountsList> {
                                     final returnLabel =
                                         _basis == _AccountsListBasis.equity
                                         ? '收益率'
-                                        : '现金收益率';
+                                        : '收益率';
                                     TextStyle metricValue(Color c) =>
                                         (Theme.of(
                                                   context,
@@ -596,93 +606,98 @@ class _AccountsListState extends State<AccountsList> {
                                             crossAxisAlignment:
                                                 CrossAxisAlignment.end,
                                             children: [
-                                            Column(
-                                              children: [
-                                                Text(
-                                                  '月初',
-                                                  style: rowLabelStyle,
-                                                ),
-                                                const SizedBox(height: 8),
-                                                Text(
-                                                  formatUiInteger(
-                                                    a.initialBalance,
+                                              Column(
+                                                children: [
+                                                  Text(
+                                                    '月初',
+                                                    style: rowLabelStyle,
                                                   ),
-                                                  style: metricValue(
-                                                    AppFinanceStyle
-                                                        .profitGreenEnd,
+                                                  const SizedBox(height: 8),
+                                                  Text(
+                                                    formatUiInteger(
+                                                      a.initialBalance,
+                                                    ),
+                                                    style: metricValue(
+                                                      AppFinanceStyle
+                                                          .profitGreenEnd,
+                                                    ),
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
                                                   ),
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                ),
-                                              ],
-                                            ),
-                                            Column(
-                                              children: [
-                                                Text(
-                                                  currentLabel,
-                                                  style: rowLabelStyle,
-                                                ),
-                                                const SizedBox(height: 8),
-                                                Text(
-                                                  formatUiInteger(currentValue),
-                                                  style: metricValue(
-                                                    AppFinanceStyle
-                                                        .profitGreenEnd,
+                                                ],
+                                              ),
+                                              Column(
+                                                children: [
+                                                  Text(
+                                                    currentLabel,
+                                                    style: rowLabelStyle,
                                                   ),
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
+                                                  const SizedBox(height: 8),
+                                                  Text(
+                                                    formatUiInteger(
+                                                        currentValue),
+                                                    style: metricValue(
+                                                      AppFinanceStyle
+                                                          .profitGreenEnd,
+                                                    ),
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                  ),
+                                                ],
+                                              ),
+                                              if (_basis ==
+                                                  _AccountsListBasis.cash)
+                                                Column(
+                                                  children: [
+                                                    Text(
+                                                      '浮亏',
+                                                      style: rowLabelStyle,
+                                                    ),
+                                                    const SizedBox(height: 8),
+                                                    Text(
+                                                      formatUiSignedInteger(
+                                                          upl),
+                                                      style: metricValue(
+                                                        upl >= 0
+                                                            ? AppFinanceStyle
+                                                                .profitGreenEnd
+                                                            : AppFinanceStyle
+                                                                .textLoss,
+                                                      ),
+                                                      textAlign:
+                                                          TextAlign.right,
+                                                      maxLines: 1,
+                                                      overflow:
+                                                          TextOverflow.ellipsis,
+                                                    ),
+                                                  ],
                                                 ),
-                                              ],
-                                            ),
-                                            Column(
-                                              children: [
-                                                Text(
-                                                  '浮亏',
-                                                  style: rowLabelStyle,
-                                                ),
-                                                const SizedBox(height: 8),
-                                                Text(
-                                                  formatUiSignedInteger(upl),
-                                                  style: metricValue(
-                                                    upl >= 0
-                                                        ? AppFinanceStyle
+                                              Column(
+                                                children: [
+                                                  Text(
+                                                    returnLabel,
+                                                    style: rowLabelStyle,
+                                                  ),
+                                                  const SizedBox(height: 8),
+                                                  Text(
+                                                    formatUiPercentLabel(pct),
+                                                    style: metricValue(
+                                                      pct >= 0
+                                                          ? AppFinanceStyle
                                                               .profitGreenEnd
-                                                        : AppFinanceStyle
+                                                          : AppFinanceStyle
                                                               .textLoss,
+                                                    ),
+                                                    textAlign: TextAlign.right,
+                                                    maxLines: 1,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
                                                   ),
-                                                  textAlign: TextAlign.right,
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                ),
-                                              ],
-                                            ),
-                                            Column(
-                                              children: [
-                                                Text(
-                                                  returnLabel,
-                                                  style: rowLabelStyle,
-                                                ),
-                                                const SizedBox(height: 8),
-                                                Text(
-                                                  formatUiPercentLabel(pct),
-                                                  style: metricValue(
-                                                    pct >= 0
-                                                        ? AppFinanceStyle
-                                                              .profitGreenEnd
-                                                        : AppFinanceStyle
-                                                              .textLoss,
-                                                  ),
-                                                  textAlign: TextAlign.right,
-                                                  maxLines: 1,
-                                                  overflow:
-                                                      TextOverflow.ellipsis,
-                                                ),
-                                              ],
-                                            ),
-                                          ],
+                                                ],
+                                              ),
+                                            ],
                                         ),
                                         ],
                                       ),

@@ -10,11 +10,11 @@ positions / profit-history / ticker / pending-orders 等通过本模块解析密
 - account_balance_snapshots：cash_balance=USDT 资产余额(cashBal)，available_margin=可用保证金(availEq)，used_margin=占用；equity_usdt=权益
 - （已弃用 tradingbots.json；盈亏快照以 account_balance_snapshots 为准）
 - OKX 当前持仓（每合约一行：多/空各计一条仓位腿 open_leg_count，张数与分项/合计未实现盈亏，多/空加权预估强平价 liqPx）→ account_open_positions_snapshots
-- 定时余额写入后：按账户节流（默认至多每小时）检测近 92 日 UTC 是否缺日，若有则调 OKX bills-archive（USDT bal）补全 account_balance_snapshots；权益按最近快照 equity/可用保证金 比例估算；补全插入后重算相关账户的 account_daily_performance
+- 定时余额写入后：按账户节流（默认至多每小时）检测近 92 日 UTC 是否缺日，若有则调 OKX bills-archive（USDT bal）补全 account_balance_snapshots；权益按最近快照 equity/可用保证金 比例估算；日绩效 account_daily_performance 由 main 周期末尾仅重算「北京当天」、凌晨任务固化「昨天」，不全表重建
 - 多时点快照经 strategy_efficiency.daily_cash_delta_by_utc_day 汇总为 UTC 自然日现金增量，再算现金收益率%、策略能效
 - OKX 历史仓位 → account_positions_history（SWAP+FUTURES 合并去重，深分页；自库内最大 uTime 起向前重叠 60s 增量拉取；
   统计口径与接口一致：时间用 uTime 平仓/更新时刻，非 cTime；净盈亏优先 realizedPnl）；
-  再汇总写入 account_daily_performance（按北京时间日历日平仓净盈亏、权益口径日收益率%、对标 TR 近似映射）
+  日绩效由 db.account_daily_performance_rebuild_days_for_accounts 按北京日增量写入（main 定时统一刷当天；历史行可手工修正不被每轮全删）
 - 各账户静态字段（与 SQLite account_list 同步）；UTC 每月 1 日 00:10 定时任务写入 account_month_balance_baseline（不再由余额同步顺带插入）
 """
 from __future__ import annotations
@@ -360,15 +360,13 @@ def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None 
     应在定时器内调用（建议每 5 分钟）。
 
     每个成功拉取余额的账户：至多每小时检测近 92 个 UTC 自然日是否缺快照行；有缺则调
-    bills-archive 补全。若某账户本次补全有新插入，周期末会对这些账户重算
-    account_daily_performance（同一周期内后续 refresh_all_positions_history 仍会全量重建 ADP，结果一致）。
+    bills-archive 补全。日绩效「当天」由 main 账户同步周期末尾统一重算。
     """
     log = logger or logging.getLogger(__name__)
     import exchange.okx as okx_mod
 
     sync_account_list_from_json(db_module)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    accounts_adp: set[str] = set()
 
     for row in iter_okx_accounts(enabled_only=True):
         aid = str(row.get("account_id") or "").strip()
@@ -433,8 +431,6 @@ def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None 
                     n_b, _bf = backfill_account_snapshots_from_okx_bills(
                         db_module, aid, log, days=_BILLS_BACKFILL_LOOKBACK_DAYS
                     )
-                    if n_b > 0:
-                        accounts_adp.add(aid)
         except Exception as e:
             log.warning(
                 "⚠️ 💰 账单回填 │ %s │ %s",
@@ -442,8 +438,7 @@ def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None 
                 short_network_err_text(e),
             )
 
-    if accounts_adp:
-        rebuild_account_daily_performance_safe(db_module, sorted(accounts_adp), log)
+    # 日绩效仅「当天」由 main._job_fetch_account_and_save_snapshots 末尾统一重算，避免此处重复
 
 
 def backfill_account_snapshots_from_okx_bills(
@@ -651,10 +646,14 @@ def refresh_balance_snapshot_one(
         )
         n_b = 0
     if n_b > 0:
-        rebuild_account_daily_performance_safe(db_module, [aid], log)
+        refresh_account_daily_performance_today_provisional_safe(
+            db_module,
+            [aid],
+            log,
+        )
         return True, (
             "已写入 account_balance_snapshots；OKX 账单已补全 "
-            f"{n_b} 个缺日并已重算 account_daily_performance"
+            f"{n_b} 个缺日并已临时刷写当日 account_daily_performance"
         )
     return True, "已写入 account_balance_snapshots"
 
@@ -673,7 +672,10 @@ def rebuild_account_daily_performance_safe(
     account_ids: list[str],
     logger: logging.Logger | None = None,
 ) -> None:
-    """按 account_positions_history 重算给定账户的 account_daily_performance；失败仅记录日志。"""
+    """全量重算给定账户的 account_daily_performance（DELETE 该户全部 ADP 后重建）；失败仅记录日志。
+
+    日常定时任务请用 rebuild_account_daily_performance_days_safe 只更新当天/昨天。
+    """
     log = logger or logging.getLogger(__name__)
     ids = [str(i).strip() for i in (account_ids or []) if str(i).strip()]
     if not ids:
@@ -695,14 +697,73 @@ def rebuild_account_daily_performance_safe(
             pass
 
 
+def refresh_account_daily_performance_today_provisional_safe(
+    db_module: Any,
+    account_ids: list[str],
+    logger: logging.Logger | None = None,
+) -> None:
+    """北京「当天」日绩效临时刷写：UPSERT；日界前最后一笔 + 日内快照（SOD 口径）与当日平仓聚合；不删历史日。失败仅记日志。"""
+    log = logger or logging.getLogger(__name__)
+    ids = [str(i).strip() for i in (account_ids or []) if str(i).strip()]
+    if not ids:
+        return
+    try:
+        db_module.account_daily_performance_refresh_today_provisional_for_accounts(
+            ids,
+            db_module.beijing_calendar_today_ymd(),
+            _account_benchmark_inst_map(),
+        )
+    except Exception as ex:
+        log.warning("⚠️ 📊 日表现当日临时刷写 │ %s", ex)
+        try:
+            db_module.log_insert(
+                "WARN",
+                "account_daily_performance_provisional_refresh_failed",
+                source="account_mgr",
+                extra={"error": str(ex), "account_ids": ids[:30]},
+            )
+        except Exception:
+            pass
+
+
+def rebuild_account_daily_performance_days_safe(
+    db_module: Any,
+    account_ids: list[str],
+    beijing_days: list[str],
+    logger: logging.Logger | None = None,
+) -> bool:
+    """仅重算指定北京日的 account_daily_performance 行；失败仅记录日志。成功返回 True（供凌晨定时器决定是否推进游标）。"""
+    log = logger or logging.getLogger(__name__)
+    ids = [str(i).strip() for i in (account_ids or []) if str(i).strip()]
+    if not ids or not beijing_days:
+        return False
+    try:
+        db_module.account_daily_performance_rebuild_days_for_accounts(
+            ids, beijing_days, _account_benchmark_inst_map()
+        )
+        return True
+    except Exception as ex:
+        log.warning("⚠️ 📊 日表现按日重建 │ %s", ex)
+        try:
+            db_module.log_insert(
+                "WARN",
+                "account_daily_performance_rebuild_days_failed",
+                source="account_mgr",
+                extra={"error": str(ex), "account_ids": ids[:30], "days": beijing_days[:16]},
+            )
+        except Exception:
+            pass
+        return False
+
+
 def refresh_all_positions_history(
     db_module: Any, logger: logging.Logger | None = None
 ) -> None:
     """
     拉取 Account_List 中已启用（enbaled=true）OKX 账户的 positions-history：
-    SWAP + FUTURES 合并去重、深分页写入 account_positions_history；
-    最后按账户重算 account_daily_performance。
-    与 refresh_all_snapshots 同周期调用即可（建议每 5 分钟）。
+    SWAP + FUTURES 合并去重、深分页写入 account_positions_history。
+    日绩效「当天」由 main 账户同步任务末尾统一重算，本函数不再全表重建 ADP。
+    与 refresh_all_balance_snapshots 同周期调用即可（建议每 5 分钟）。
     """
     log = logger or logging.getLogger(__name__)
     import exchange.okx as okx_mod
@@ -738,24 +799,6 @@ def refresh_all_positions_history(
             n,
         )
 
-    try:
-        all_ids = [
-            str(b["account_id"] or "").strip()
-            for b in list_account_basics(enabled_only=False)
-            if str(b.get("account_id") or "").strip()
-        ]
-        db_module.account_daily_performance_rebuild_for_accounts(
-            all_ids, _account_benchmark_inst_map()
-        )
-    except Exception as ex:
-        log.warning("⚠️ 📊 日表现重建 │ %s", ex)
-        db_module.log_insert(
-            "WARN",
-            "account_daily_performance_rebuild_failed",
-            source="account_mgr",
-            extra={"error": str(ex)},
-        )
-
 
 def refresh_positions_history_one(
     db_module: Any, account_id: str, logger: logging.Logger | None = None
@@ -787,12 +830,11 @@ def refresh_positions_history_one(
         )
         return False, err
     if not hist:
-        try:
-            db_module.account_daily_performance_rebuild_for_accounts(
-                [aid], _account_benchmark_inst_map()
-            )
-        except Exception:
-            pass
+        refresh_account_daily_performance_today_provisional_safe(
+            db_module,
+            [aid],
+            log,
+        )
         return True, "无新历史仓位数据"
     n = db_module.account_positions_history_insert_batch(aid, hist, ts)
     log.info(
@@ -801,12 +843,11 @@ def refresh_positions_history_one(
         len(hist),
         n,
     )
-    try:
-        db_module.account_daily_performance_rebuild_for_accounts(
-            [aid], _account_benchmark_inst_map()
-        )
-    except Exception as ex:
-        log.warning("⚠️ 📊 日表现 │ %s │ %s", aid, ex)
+    refresh_account_daily_performance_today_provisional_safe(
+        db_module,
+        [aid],
+        log,
+    )
     return True, f"已写入 {n} 条新记录"
 
 

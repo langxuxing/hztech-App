@@ -82,7 +82,8 @@ class _AccountProfitScreenState extends State<AccountProfitScreen>
   List<OkxPosition> _positions = [];
   String? _positionsLoadError;
   static const String _defaultBotId = 'simpleserver';
-  static const double _kUnifiedChartBandHeight = 210;
+  /// 在 147 基础上再缩小 30%（≈103），与日历/柱卡整体高度一致下调。
+  static const double _kUnifiedChartBandHeight = 147.0 * 0.7;
   static const double _kLineBarHeightFactor = 0.7;
 
   /// 移动端日历 [gridMaxHeight]：与 [MonthEndValueCalendarPanel.compact] 行距一致，
@@ -98,7 +99,8 @@ class _AccountProfitScreenState extends State<AccountProfitScreen>
     final baseCell = ((lineBarPlotHeight - overhead) / rows).clamp(22.0, 40.0);
     final tallCell = baseCell * 2;
     final raw = headerH + rowSpacing + rows * (tallCell + rowSpacing);
-    return raw.clamp(160.0, 240.0);
+    // 在既有缩放上再缩小 30%，与 [_kUnifiedChartBandHeight] 同步收紧。
+    return ((raw * 0.7).clamp(112.0, 168.0) * 0.7).clamp(70.0, 118.0);
   }
 
   DateTime? _cashMetricsMonth;
@@ -762,64 +764,76 @@ class _AccountProfitScreenState extends State<AccountProfitScreen>
     );
   }
 
-  Widget _buildBotSelector() {
+  Widget _buildBotSelector({bool forAppBar = false}) {
     final list = _effectiveBots;
     if (list.isEmpty) return const SizedBox.shrink();
     // 交易员/管理员：无论 1 个或多个交易账户都使用 DropdownButton；客户仅用只读展示
+    final mq = MediaQuery.of(context).size.width;
+    final card = _glassCard(
+      Padding(
+        padding: EdgeInsets.symmetric(
+          horizontal: forAppBar ? 6 : 4,
+          vertical: forAppBar ? 2 : 4,
+        ),
+        child: Builder(
+          builder: (context) {
+            final heading =
+                AppFinanceStyle.accountProfitOverviewHeadingStyle(context);
+            final menuStyle = forAppBar
+                ? heading.copyWith(fontSize: (heading.fontSize ?? 16) - 1)
+                : heading;
+            return DropdownButton<String>(
+              value: _selectedBotId ?? list.first.tradingbotId,
+              isExpanded: true,
+              padding: EdgeInsets.zero,
+              isDense: forAppBar,
+              iconSize: forAppBar ? 22 : 28,
+              itemHeight: forAppBar ? 44 : 52,
+              underline: const SizedBox.shrink(),
+              icon: Icon(
+                Icons.arrow_drop_down,
+                color: menuStyle.color,
+                size: forAppBar ? 22 : 28,
+              ),
+              dropdownColor: AppFinanceStyle.cardBackground.withValues(
+                alpha: 0.98,
+              ),
+              style: menuStyle,
+              items: list
+                  .map(
+                    (b) => DropdownMenuItem<String>(
+                      value: b.tradingbotId,
+                      child: Text(
+                        b.tradingbotName ?? b.tradingbotId,
+                        style: menuStyle,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (v) {
+                if (v != null) _loadForBot(v);
+              },
+            );
+          },
+        ),
+      ),
+      padding: EdgeInsets.symmetric(
+        horizontal: forAppBar ? 8 : 12,
+        vertical: forAppBar ? 4 : 8,
+      ),
+    );
     return Align(
-      alignment: Alignment.centerLeft,
+      alignment: Alignment.centerRight,
       child: ConstrainedBox(
         constraints: BoxConstraints(
-          maxWidth: (MediaQuery.of(context).size.width * 0.45).clamp(
-            160.0,
-            280.0,
+          maxWidth: (mq * (forAppBar ? 0.52 : 0.45)).clamp(
+            forAppBar ? 140.0 : 160.0,
+            forAppBar ? 300.0 : 280.0,
           ),
-          minHeight: kMinInteractiveDimension,
+          minHeight: forAppBar ? 40 : kMinInteractiveDimension,
         ),
-        child: _glassCard(
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-            child: Builder(
-              builder: (context) {
-                final heading =
-                    AppFinanceStyle.accountProfitOverviewHeadingStyle(context);
-                return DropdownButton<String>(
-                  value: _selectedBotId ?? list.first.tradingbotId,
-                  isExpanded: true,
-                  padding: EdgeInsets.zero,
-                  iconSize: 28,
-                  itemHeight: 52,
-                  underline: const SizedBox.shrink(),
-                  icon: Icon(
-                    Icons.arrow_drop_down,
-                    color: heading.color,
-                    size: 28,
-                  ),
-                  dropdownColor: AppFinanceStyle.cardBackground.withValues(
-                    alpha: 0.98,
-                  ),
-                  style: heading,
-                  items: list
-                      .map(
-                        (b) => DropdownMenuItem<String>(
-                          value: b.tradingbotId,
-                          child: Text(
-                            b.tradingbotName ?? b.tradingbotId,
-                            style: heading,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ),
-                      )
-                      .toList(),
-                  onChanged: (v) {
-                    if (v != null) _loadForBot(v);
-                  },
-                );
-              },
-            ),
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        ),
+        child: card,
       ),
     );
   }
@@ -847,13 +861,12 @@ class _AccountProfitScreenState extends State<AccountProfitScreen>
               ),
             ),
           ),
-        if (_appUserRole != AppUserRole.customer &&
-            _effectiveBots.isNotEmpty) ...[
-          _buildBotSelector(),
-          const SizedBox(height: 20),
-        ] else if ((_appUserRole == AppUserRole.customer &&
+        // 客户：只读账户条。交易员/管理员仅在「无下拉数据源」时用只读条（有 _effectiveBots 时只用 AppBar 下拉）。
+        if ((_appUserRole == AppUserRole.customer &&
                 _effectiveBots.isNotEmpty) ||
-            _selectedAccount != null) ...[
+            (_selectedAccount != null &&
+                (_appUserRole == AppUserRole.customer ||
+                    _effectiveBots.isEmpty))) ...[
           _buildNoDropdownAccountField(),
           const SizedBox(height: 20),
         ],
@@ -926,14 +939,17 @@ class _AccountProfitScreenState extends State<AccountProfitScreen>
             snapshots: L.snap,
             title: '',
             description: '',
-            valueAt: (s) => s.currentBalance,
+            valueAt: (s) => s.cashBalance ?? s.currentBalance,
             emptyMessage: '暂无历史快照，无法统计月度现金余额',
             showMonthNavigator: false,
             focusedMonth: L.month,
             onFocusedMonthChanged: L.setCashMonth,
             gridMaxHeight: L.calendarGridH,
             compact: true,
+            hideZeroDailyValues: true,
           ),
+          // 原 6 → 约缩小 70% 内边距，日历更贴近卡片边缘
+          padding: const EdgeInsets.all(2),
         ),
       ],
     );
@@ -976,7 +992,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen>
             snapshots: L.snap,
             title: '',
             description: '',
-            valueAt: (s) => s.currentBalance,
+            valueAt: (s) => s.cashBalance ?? s.currentBalance,
             emptyMessage: '暂无历史快照，无法统计月度现金余额',
             showMonthNavigator: false,
             selectedEndMonth: L.month,
@@ -985,6 +1001,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen>
             maxBars: 8,
             useDailyBarsForEndMonth: true,
             compact: true,
+            dailyBarsLeftAxisInterval: 10,
           ),
         ),
       ],
@@ -1091,6 +1108,15 @@ class _AccountProfitScreenState extends State<AccountProfitScreen>
             fontWeight: FontWeight.w600,
           ),
         ),
+        actions: [
+          if (_appUserRole != AppUserRole.customer && _effectiveBots.isNotEmpty)
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: _buildBotSelector(forAppBar: true),
+              ),
+            ),
+        ],
         backgroundColor: AppFinanceStyle.backgroundDark,
         foregroundColor: AppFinanceStyle.valueColor,
         surfaceTintColor: Colors.transparent,

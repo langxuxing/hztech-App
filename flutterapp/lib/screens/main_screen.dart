@@ -81,7 +81,7 @@ class _MainScreenState extends State<MainScreen> {
   /// 管理员：无「策略启停」Tab。
   bool get _isAdmin => _role == AppUserRole.admin;
 
-  /// 策略分析师：与管理员类似无「策略启停」；自动收网测试在 Web 侧栏。
+  /// 策略分析师：与管理员类似无「策略启停」；自动收网测试在 Web 侧栏（交易员无）。
   bool get _isStrategyAnalyst => _role == AppUserRole.strategyAnalyst;
 
   List<({String label, IconData icon})> get _tabs {

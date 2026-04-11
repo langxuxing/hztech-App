@@ -171,7 +171,7 @@ class AccountProfit {
     this.cashBalance,
     this.availableMargin,
     this.usedMargin,
-  }) : balanceUsdt = balanceUsdt ?? currentBalance,
+  }) : balanceUsdt = balanceUsdt ?? cashBalance ?? 0.0,
        botId = botId ?? '';
 
   factory AccountProfit.fromJson(Map<String, dynamic> json) {
@@ -391,6 +391,7 @@ class DailyRealizedPnlDayRow {
     this.equlityChanged,
     this.balanceChanged,
     this.balanceChangedPct,
+    this.equityChangedPct,
     this.pnlPct,
     this.instrumentId,
     this.marketTruevolatility,
@@ -404,6 +405,7 @@ class DailyRealizedPnlDayRow {
   final double? equlityChanged;
   final double? balanceChanged;
   final double? balanceChangedPct;
+  final double? equityChangedPct;
   final double? pnlPct;
   final String? instrumentId;
   final double? marketTruevolatility;
@@ -425,6 +427,7 @@ class DailyRealizedPnlDayRow {
       equlityChanged: (eqRaw as num?)?.toDouble(),
       balanceChanged: (balRaw as num?)?.toDouble(),
       balanceChangedPct: (json['balance_changed_pct'] as num?)?.toDouble(),
+      equityChangedPct: (json['equity_changed_pct'] as num?)?.toDouble(),
       pnlPct: (json['pnl_pct'] as num?)?.toDouble(),
       instrumentId: instRaw as String?,
       marketTruevolatility: (mtvRaw as num?)?.toDouble(),

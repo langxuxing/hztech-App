@@ -211,7 +211,7 @@ class ApiClient {
     }
   }
 
-  /// POST /api/strategy-analyst/auto-net-test（交易员/管理员/策略分析师）
+  /// POST /api/strategy-analyst/auto-net-test（管理员/策略分析师）
   Future<String> postStrategyAnalystAutoNetTest({String? botId}) async {
     final uri = Uri.parse('${_normalizedBase}api/strategy-analyst/auto-net-test');
     final body = <String, dynamic>{};

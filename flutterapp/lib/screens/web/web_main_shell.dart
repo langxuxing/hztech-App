@@ -37,7 +37,7 @@ class _NavItem {
 /// 浏览器端主导航：侧栏 / 抽屉 + 多 Tab，与移动端 [MainScreen] 分流。
 /// 客户（customer）：仅「账户详情」全宽单页，无侧栏；更多菜单含 OKX 账户配置与退出登录。
 /// 其他角色侧栏顺序：主页 → 仪表盘 → 账户收益 → 策略启停 → 策略能效 → 绩效对比表 → 赛季与历史仓位
-/// → 收网测试（交易员/管理员/策略分析师）→ 账户配置（客户 OKX JSON，仅非 Web 客户壳）→ 账户管理 / 用户管理（管理员）→ 下载 → 设置。
+/// → 收网测试（管理员/策略分析师）→ 账户配置（客户 OKX JSON，仅非 Web 客户壳）→ 账户管理 / 用户管理（管理员）→ 下载 → 设置。
 class WebMainShell extends StatefulWidget {
   const WebMainShell({super.key, this.onLogout});
 

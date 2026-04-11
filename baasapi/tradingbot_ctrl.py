@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """交易机器人进程管控：
 - 旧版：baasapi/simpleserver-lhg.py、simpleserver-hztech.py（nohup python3）
-- Account_List：script_file 指向 accounts 下可解析的 .sh，通过 `bash script start|stop` 启停，
-  并写入 accounts/.bot_run/<account_id>.pid 跟踪 PID。
+- Account_List：script_file 指向 accounts 下可解析的 .sh，通过 `bash script start|stop|restart|status`
+  与 `bash script --season start|stop` 管控；PID 写入 accounts/.bot_run/<account_id>.pid。
 
 环境变量：
 - MOBILEAPP_ROOT：部署根目录（与 _project_root 一致）。
@@ -22,6 +22,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import time
@@ -223,14 +224,17 @@ def _find_pids_shell(account_id: str) -> list[int]:
     return alive
 
 
-def start_shell_bot(account_id: str, script_abs: Path) -> dict:
-    """`bash script start`，PID 写入 accounts/.bot_run。"""
+def start_shell_bot(account_id: str, script_abs: Path, *, force: bool = False) -> dict:
+    """`bash script start`，PID 写入 accounts/.bot_run。force=True 时先 stop 再启动。"""
     root = _project_root()
     if not script_abs.is_file():
         return {"ok": False, "error": f"脚本不存在: {script_abs}"}
 
     pf = _pid_file(account_id)
     existing = _find_pids_shell(account_id)
+    if existing and force:
+        stop_shell_bot(account_id, script_abs)
+        existing = _find_pids_shell(account_id)
     if existing:
         return {"ok": False, "error": "进程已在运行", "pids": existing}
 
@@ -348,11 +352,53 @@ def stop_shell_bot(account_id: str, script_abs: Path) -> dict:
     return {"ok": True, "message": "策略已停止", "killed": killed}
 
 
-def start(bot_id: str) -> dict:
-    """启动指定 bot 进程。"""
+def shell_script_status_json(account_id: str, script_abs: Path) -> dict | None:
+    """执行 `bash script status`，解析 stdout：JSON 或单行 running|stopped（失败返回 None）。"""
+    root = _project_root()
+    if not script_abs.is_file():
+        return None
+    env = os.environ.copy()
+    env["HZTECH_ACCOUNT_ID"] = account_id
+    try:
+        r = subprocess.run(
+            ["bash", str(script_abs), "status"],
+            cwd=str(root),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=45,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    text = (r.stdout or "").strip()
+    if not text and r.stderr:
+        text = (r.stderr or "").strip()
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        for line in reversed(text.splitlines()):
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError:
+                continue
+    line = text.strip().splitlines()[-1].strip().lower() if text else ""
+    if line == "running":
+        return {"ok": True, "running": True}
+    if line == "stopped":
+        return {"ok": True, "running": False}
+    return None
+
+
+def start(bot_id: str, *, force: bool = False) -> dict:
+    """启动指定 bot 进程。force=True 时对已在运行进程先 stop 再拉起。"""
     shell_map = load_account_shell_map()
     if bot_id in shell_map:
-        return start_shell_bot(bot_id, shell_map[bot_id])
+        return start_shell_bot(bot_id, shell_map[bot_id], force=force)
 
     if bot_id not in BOT_SCRIPTS:
         return {"ok": False, "error": f"未知 bot_id: {bot_id}"}
@@ -362,7 +408,12 @@ def start(bot_id: str) -> dict:
         return {"ok": False, "error": f"脚本不存在: {script}"}
     pids = _find_pids(bot_id)
     if pids:
-        return {"ok": False, "error": "进程已在运行", "pids": pids}
+        if force:
+            stop(bot_id)
+            time.sleep(0.5)
+            pids = _find_pids(bot_id)
+        if pids:
+            return {"ok": False, "error": "进程已在运行", "pids": pids}
     try:
         rel_script = BOT_SCRIPTS[bot_id]
         log_path = root / _log_name(bot_id)
@@ -421,16 +472,19 @@ def restart(bot_id: str) -> dict:
     return start(bot_id)
 
 
-def run_shell_season_action(account_id: str, script_abs: Path, action: str) -> dict:
-    """同步执行 `bash script season-start|season-stop`（日志/JSON；赛季写库由 API 侧 account_season_* 完成）。"""
+def run_shell_season_action(account_id: str, script_abs: Path, season_sub: str) -> dict:
+    """同步执行 `bash script --season start|stop`（日志/JSON；赛季写库由 API 侧 account_season_* 完成）。"""
     root = _project_root()
     if not script_abs.is_file():
         return {"ok": False, "error": f"脚本不存在: {script_abs}"}
+    sub = (season_sub or "").strip().lower()
+    if sub not in ("start", "stop"):
+        return {"ok": False, "error": f"无效赛季子命令: {season_sub!r}"}
     env = os.environ.copy()
     env["HZTECH_ACCOUNT_ID"] = account_id
     try:
         r = subprocess.run(
-            ["bash", str(script_abs), action],
+            ["bash", str(script_abs), "--season", sub],
             cwd=str(root),
             env=env,
             capture_output=True,
@@ -448,10 +502,10 @@ def run_shell_season_action(account_id: str, script_abs: Path, action: str) -> d
 
 
 def season_start(bot_id: str) -> dict:
-    """盈利赛季开启：需 Account_List 中 script 支持子命令 season-start。"""
+    """盈利赛季开启：需 script 支持 `--season start`（兼容旧 season-start）。"""
     shell_map = load_account_shell_map()
     if bot_id in shell_map:
-        return run_shell_season_action(bot_id, shell_map[bot_id], "season-start")
+        return run_shell_season_action(bot_id, shell_map[bot_id], "start")
     if bot_id in BOT_SCRIPTS:
         return {
             "ok": False,
@@ -461,10 +515,10 @@ def season_start(bot_id: str) -> dict:
 
 
 def season_stop(bot_id: str) -> dict:
-    """盈利赛季结束：需 script 支持 season-stop。"""
+    """盈利赛季结束：需 script 支持 `--season stop`（兼容旧 season-stop）。"""
     shell_map = load_account_shell_map()
     if bot_id in shell_map:
-        return run_shell_season_action(bot_id, shell_map[bot_id], "season-stop")
+        return run_shell_season_action(bot_id, shell_map[bot_id], "stop")
     if bot_id in BOT_SCRIPTS:
         return {
             "ok": False,
@@ -474,25 +528,35 @@ def season_stop(bot_id: str) -> dict:
 
 
 def status() -> dict:
-    """查询各 bot 运行状态。返回 { "bots": { bot_id: { "running": bool, "pids": [...] } }, "ok": True }。"""
+    """查询各 bot 运行状态。返回 bots[bot_id] 含 running:bool、status:\"running\"|\"stopped\"、pids 等。"""
     bots_status: dict = {}
     for bid in BOT_SCRIPTS:
         pids = _find_pids(bid)
         script = _script_path(bid)
+        running = len(pids) > 0
         bots_status[bid] = {
-            "running": len(pids) > 0,
+            "running": running,
+            "status": "running" if running else "stopped",
             "pids": pids,
             "script_exists": script.exists() if script else False,
             "script_path": str(script) if script else "",
         }
     for aid, script in load_account_shell_map().items():
         pids = _find_pids_shell(aid)
-        bots_status[aid] = {
-            "running": len(pids) > 0,
+        running_pid = len(pids) > 0
+        row: dict = {
+            "running": running_pid,
             "pids": pids,
             "script_exists": script.is_file(),
             "script_path": str(script),
         }
+        rep = shell_script_status_json(aid, script)
+        if isinstance(rep, dict):
+            row["status_script"] = rep
+            if "running" in rep:
+                row["running"] = bool(rep.get("running"))
+        row["status"] = "running" if row["running"] else "stopped"
+        bots_status[aid] = row
     return {
         "ok": True,
         "bots": bots_status,
