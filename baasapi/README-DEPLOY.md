@@ -59,7 +59,7 @@ python3 baasapi/server_mgr.py deploy --build
 
 3. **若进程没起来**  
    看日志：`cat /home/ec2-user/hztechapp/server.log`、`web_static.log`。若是 `_sqlite3` 等错误，按下一节处理。然后重新执行：  
-   `cd /home/ec2-user/hztechapp && bash baasapi/install_on_aws.sh`
+   `cd /home/ec2-user/hztechapp && bash aws-ops/code/install_on_aws.sh`
 
 ## 若出现 No module named '_sqlite3'
 
@@ -75,12 +75,12 @@ python3 baasapi/server_mgr.py deploy --build
 若在 EC2 上直接克隆或拷贝了项目，可在服务器上执行一次依赖安装并启动：
 
 ```bash
-cd /home/ec2-user/hztechapp && bash baasapi/install_on_aws.sh
+cd /home/ec2-user/hztechapp && bash aws-ops/code/install_on_aws.sh
 ```
 
 会安装依赖、创建 `apk` 等目录，并后台启动 **BaasAPI**（`main.py`）与 **FlutterApp 静态**（`serve_web_static.py`）两个进程（单机示例）。
 
-**PostgreSQL（生产）**：数据库名 **`hztech`**，schema **`flutterapp`**，用户 **`hztech`**（密码与 `database_config.example.json` 或环境变量一致）。首次在 EC2 上建库：`bash baasapi/install_postgresql_remote.sh`（默认即 `HZTECH_PG_DB=hztech`）。从本机导入数据：`./ops/gp_ops.sh` 或 `python3 ops/pg_ows_import.py`。说明：路径里的 **`hztechapp` 是 EC2 上的项目目录名**（`remote_path`），**不是** PostgreSQL 库名。
+**PostgreSQL（生产）**：数据库名 **`hztech`**，schema **`flutterapp`**，用户 **`hztech`**（密码与 `database_config.example.json` 或环境变量一致）。首次在 EC2 上建库：`bash aws-ops/database/install_postgresql_remote.sh`（默认即 `HZTECH_PG_DB=hztech`）。从本机导入数据：`./aws-ops/database/pg_ops.sh` 或 `python3 aws-ops/database/pg_ows_import.py`。说明：路径里的 **`hztechapp` 是 EC2 上的项目目录名**（`remote_path`），**不是** PostgreSQL 库名。
 
 ## 部署后测试
 

@@ -34,7 +34,7 @@ App 所需 API（与 QtraderApi.kt 一致）：
   POST /api/tradingbots/{id}/open-positions-snapshot/sync  立即拉取 OKX 当前持仓写入 account_open_positions_snapshots（仅管理员）
   POST /api/admin/balance-snapshots/sync  全量余额快照同步（与定时任务相同；仅管理员）
   POST /api/admin/balance-snapshots/recompute-profit  按 initial_capital 重算全表 equity_profit_*（权益）与 balance_profit_*（资产余额）（仅管理员）
-  POST /api/admin/balance-snapshots/backfill-bills  按 OKX bills-archive 为各启用账户补全缺日 account_balance_snapshots；有插入时仅重算北京「当天」account_daily_performance（仅管理员）
+  POST /api/admin/balance-snapshots/backfill-bills  按 OKX bills-archive 补全缺日 account_balance_snapshots（仅管理员；不由账户同步定时器执行；亦可 ``baasapi/pg_data_fill.py`` / ``aws-ops/code/balance_snapshots_bills_backfill.sh``）
   GET|POST|PUT|DELETE /api/admin/accounts  Account_List.json + account_list 库表同步（仅管理员）
   POST /api/admin/accounts/{id}/test-connection  测连 OKX + 检查 SWAP/双向持仓/50x 杠杆（仅管理员）；Body 可选 {"auto_configure": true} 在测连成功后调用 OKX 设双向持仓/全仓/多空杠杆后复测
   GET  /api/me/customer-accounts  客户已绑定账户列表与密钥文件是否存在（仅客户）
@@ -52,6 +52,7 @@ import hashlib
 import json
 import logging
 import os
+import random
 import signal
 import sys
 import time
@@ -73,6 +74,7 @@ import db as _db
 import account_list_store as _account_list_store
 import strategy_efficiency as _strategy_efficiency
 import kline_web_sync as _kline_web_sync
+import pg_data_fill as _pg_data_fill
 from accounts import AccountMgr as _account_mgr
 from exchange import okx as _okx
 from hztech_log_format import hztech_console_formatter
@@ -122,13 +124,13 @@ app = Flask(__name__)
 # 本进程仅承担 API（及 /kline、/download 等）；后台定时任务（账户同步、月初、K 线夜间）由本进程在 leader 锁下启动
 _BACKGROUND_SCHEDULERS_ENABLED = True
 
-# Account_List → account_balance_snapshots / account_open_positions_snapshots / account_positions_history 同步周期（秒），默认 300（5 分钟）
+# Account_List → account_balance_snapshots / account_open_positions_snapshots / account_positions_history 同步周期（秒），默认 600（10 分钟）
 try:
     _ACCOUNT_SYNC_INTERVAL_SEC = int(
-        os.environ.get("HZTECH_ACCOUNT_SYNC_INTERVAL_SEC", "300").strip()
+        os.environ.get("HZTECH_ACCOUNT_SYNC_INTERVAL_SEC", "600").strip()
     )
 except ValueError:
-    _ACCOUNT_SYNC_INTERVAL_SEC = 300
+    _ACCOUNT_SYNC_INTERVAL_SEC = 600
 _ACCOUNT_SYNC_INTERVAL_SEC = max(30, min(_ACCOUNT_SYNC_INTERVAL_SEC, 86400))
 
 # 账户同步定时任务只启动一次，避免开发模式下重复 import / 重复注册导致同一周期跑两遍、日志交错
@@ -138,8 +140,8 @@ _month_balance_baseline_timer_started = False
 _month_balance_baseline_timer_lock = threading.Lock()
 _month_balance_baseline_last_run_ym: str | None = None
 
-# 北京日历：最近一次成功执行 account_daily_performance 按日界完整重算的「昨天」YYYY-MM-DD（= beijing_calendar_yesterday_ymd 当时的值）
-_adp_yesterday_finalize_last_yesterday: str | None = None
+# 北京日历：已对「昨天」做过 account_daily_performance 固化写入的日期键（YYYY-MM-DD = 当天北京日）
+_adp_yesterday_finalize_last_bj_today: str | None = None
 _adp_yesterday_finalize_timer_started = False
 _adp_yesterday_finalize_timer_lock = threading.Lock()
 
@@ -686,10 +688,13 @@ def _live_equity_cash_for_bot(bot_id: str) -> tuple[float, float]:
 
 # 账户信息同步器：从 OKX 交易所读取账户信息并写入数据库
 def _job_fetch_account_and_save_snapshots() -> None:
-    """定时任务：Account_List 账户写入 account_balance_snapshots（含节流后的 bills-archive 缺日补全）、
+    """定时任务：Account_List 账户写入 account_balance_snapshots、
     account_open_positions_snapshots、account_positions_history（OKX positions-history 增量）；
-    周期末仅 UPSERT 北京「当天」account_daily_performance 临时行（SOD 口径快照差 + 当日平仓；不删历史日）。
-    北京「昨天」完整按日界重算由独立凌晨定时器执行。周期由 HZTECH_ACCOUNT_SYNC_INTERVAL_SEC 控制（默认 300 秒）。"""
+    周期末仅 UPSERT 北京「当天」account_daily_performance（当日余额快照首末 + 当日平仓；不删历史日）。
+    北京「昨天」完整按日界重算由独立凌晨定时器（北京 00:01–00:05；跨日可补跑）执行。周期由 HZTECH_ACCOUNT_SYNC_INTERVAL_SEC 控制（默认 600 秒）。"""
+    
+
+    # 账户余额同步  
     try:
         _account_mgr.refresh_all_balance_snapshots(_db, app.logger)
         _sync_record_step("balance_snapshots", True, None)
@@ -702,6 +707,7 @@ def _job_fetch_account_and_save_snapshots() -> None:
             extra={"error": str(e)},
         )
 
+    # 账户持仓历史同步
     try:
         _account_mgr.refresh_all_positions_history(_db, app.logger)
         _sync_record_step("positions_history", True, None)
@@ -714,6 +720,7 @@ def _job_fetch_account_and_save_snapshots() -> None:
             extra={"error": str(e)},
         )
 
+    # 账户当前持仓同步
     try:
         _account_mgr.refresh_all_open_positions_snapshots(_db, app.logger)
         _sync_record_step("open_positions_snapshots", True, None)
@@ -726,6 +733,7 @@ def _job_fetch_account_and_save_snapshots() -> None:
             extra={"error": str(e)},
         )
 
+    # 日线补齐
     try:
         _mb_err = _strategy_efficiency.ensure_shared_market_daily_bars(
             _db, _okx, _DEFAULT_STRATEGY_EFFICIENCY_INST_ID
@@ -735,6 +743,8 @@ def _job_fetch_account_and_save_snapshots() -> None:
     except Exception as _e_mdb:
         app.logger.warning("⚠️ 日线补齐异常 │ %s", _e_mdb)
 
+
+    # 日绩效当日刷写
     try:
         _all_adp_ids = [
             str(b["account_id"] or "").strip()
@@ -763,7 +773,7 @@ def _job_fetch_account_and_save_snapshots() -> None:
 
 
 def _start_account_snapshot_timer() -> None:
-    """后台线程：按 HZTECH_ACCOUNT_SYNC_INTERVAL_SEC（默认 300）执行 AccountMgr 快照；启动后 30 秒执行第一次。"""
+    """后台线程：按 HZTECH_ACCOUNT_SYNC_INTERVAL_SEC（默认 600）执行 AccountMgr 快照；启动后随机 30–60 秒首次执行。"""
     global _account_snapshot_timer_started
     with _account_snapshot_timer_lock:
         if _account_snapshot_timer_started:
@@ -771,7 +781,7 @@ def _start_account_snapshot_timer() -> None:
         _account_snapshot_timer_started = True
 
     def _loop() -> None:
-        time.sleep(30)
+        time.sleep(random.randint(30, 60))
         while True:
             try:
                 app.logger.debug("🔄 账户同步·开始 │ pid=%s", os.getpid())
@@ -796,7 +806,7 @@ def _start_account_snapshot_timer() -> None:
 
 
 def _start_account_month_balance_baseline_timer() -> None:
-    """UTC 每月 1 日 00:10 前后写入 account_month_balance_baseline；每分钟检查，同一自然月只跑一次。"""
+    """北京时间每月 1 日 00:10–00:15 写入 account_month_balance_baseline；每分钟检查，同一自然月只跑一次。"""
     global _month_balance_baseline_timer_started
     with _month_balance_baseline_timer_lock:
         if _month_balance_baseline_timer_started:
@@ -808,9 +818,9 @@ def _start_account_month_balance_baseline_timer() -> None:
         time.sleep(45)
         while True:
             try:
-                now = datetime.now(timezone.utc)
-                if now.day == 1 and now.hour == 0 and 10 <= now.minute <= 15:
-                    ym = now.strftime("%Y-%m")
+                bj = datetime.now(ZoneInfo("Asia/Shanghai"))
+                if bj.day == 1 and bj.hour == 0 and 10 <= bj.minute <= 15:
+                    ym = bj.strftime("%Y-%m")
                     if _month_balance_baseline_last_run_ym != ym:
                         _account_mgr.run_account_month_balance_baseline_rollover(
                             _db, app.logger
@@ -830,11 +840,8 @@ def _start_account_month_balance_baseline_timer() -> None:
 
 
 def _start_account_adp_yesterday_finalize_timer() -> None:
-    """独立线程：在北京「凌晨」对「日历昨天」account_daily_performance 做完整按日界重算（与 5 分钟同步的当日临时 UPSERT 分离）。
-
-    默认 0<=北京时<5 为执行窗口；若进程曾错过窗口，日间发现 ``last`` 仍落后于 ``昨天`` 则补跑一次，避免旧逻辑里
-    ``hour>=6`` 与错误状态组合导致永不固化的问题。
-    """
+    """北京每日 00:01–00:05：对「昨天」account_daily_performance 做完整按日界重算（与账户同步周期末的当日临时 UPSERT 分离）；每分钟检查。
+    冷启动（无标记）任意时刻可跑一次；若错过当日窗口且标记仍落后于当前北京日，则日间补跑一次。"""
     global _adp_yesterday_finalize_timer_started
     with _adp_yesterday_finalize_timer_lock:
         if _adp_yesterday_finalize_timer_started:
@@ -842,44 +849,39 @@ def _start_account_adp_yesterday_finalize_timer() -> None:
         _adp_yesterday_finalize_timer_started = True
 
     def _loop() -> None:
-        global _adp_yesterday_finalize_last_yesterday
+        global _adp_yesterday_finalize_last_bj_today
         time.sleep(25)
         while True:
             try:
                 bj = datetime.now(ZoneInfo("Asia/Shanghai"))
+                bj_today = bj.strftime("%Y-%m-%d")
+                if _adp_yesterday_finalize_last_bj_today == bj_today:
+                    time.sleep(60)
+                    continue
+                in_adp_window = bj.hour == 0 and 1 <= bj.minute <= 5
+                missed_new_bj_day = (
+                    _adp_yesterday_finalize_last_bj_today is not None
+                    and _adp_yesterday_finalize_last_bj_today < bj_today
+                )
+                if (
+                    not in_adp_window
+                    and not missed_new_bj_day
+                    and _adp_yesterday_finalize_last_bj_today is not None
+                ):
+                    time.sleep(60)
+                    continue
                 yd = _db.beijing_calendar_yesterday_ymd()
-                if _adp_yesterday_finalize_last_yesterday == yd:
-                    time.sleep(60)
-                    continue
-                in_dawn = 0 <= bj.hour < 5
-                last = _adp_yesterday_finalize_last_yesterday
-                eligible = in_dawn or last is None or last < yd
-                if not eligible:
-                    time.sleep(60)
-                    continue
                 ids = [
                     str(b["account_id"] or "").strip()
                     for b in _account_mgr.list_account_basics(enabled_only=False)
                     if str(b.get("account_id") or "").strip()
                 ]
-                ok = False
                 if ids:
-                    ok = _account_mgr.rebuild_account_daily_performance_days_safe(
+                    _account_mgr.rebuild_account_daily_performance_days_safe(
                         _db, ids, [yd], app.logger
                     )
-                else:
-                    app.logger.debug(
-                        "📊 日绩效·昨日固化 │ 跳过：无 account_id │ 北京昨日 %s",
-                        yd,
-                    )
-                if ok:
-                    _adp_yesterday_finalize_last_yesterday = yd
-                    app.logger.info(
-                        "📊 日绩效·昨日固化 │ 北京昨日 %s │ 本地时 %02d:%02d",
-                        yd,
-                        bj.hour,
-                        bj.minute,
-                    )
+                _adp_yesterday_finalize_last_bj_today = bj_today
+                app.logger.info("📊 日绩效·昨日固化 │ 北京昨日 %s", yd)
             except Exception as e:
                 _db.log_insert(
                     "WARN",
@@ -902,7 +904,7 @@ def _bootstrap_account_month_balance_baseline_if_needed_on_startup() -> None:
             _db
         ):
             return
-        ym = datetime.now(timezone.utc).strftime("%Y-%m")
+        ym = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m")
         app.logger.info("📅 月初基线 │ 当月 %s 缺数·启动补写", ym)
         _account_mgr.run_account_month_balance_baseline_rollover(_db, app.logger)
         _month_balance_baseline_last_run_ym = ym
@@ -1013,12 +1015,13 @@ def api_status():
     """已登录：进程 uptime、Account_List 定时同步各步骤结果与说明。"""
     up = int(time.monotonic() - _PROCESS_START_MONO)
     doc = (
-        "后台线程按 HZTECH_ACCOUNT_SYNC_INTERVAL_SEC（默认 300 秒＝5 分钟）从 OKX 拉取 "
+        "后台线程按 HZTECH_ACCOUNT_SYNC_INTERVAL_SEC（默认 600 秒＝10 分钟）从 OKX 拉取 "
         "权益、资产余额(cashBal)、可用保证金、占用写入 account_balance_snapshots，当前持仓聚合写入 "
         "account_open_positions_snapshots，并拉取 positions-history 写入 account_positions_history；"
-        "同一周期末仅 UPSERT 北京「当天」account_daily_performance 临时行（当日平仓 + 日内快照 SOD→当前）；"
-        "「昨天」及历史完整按日界重算由独立凌晨线程执行，不每轮全删历史日。"
-        "进程启动后约 30 秒首次执行一轮。"
+        "bills-archive 缺日补全不在此周期内，仅管理员接口、baasapi/pg_data_fill.py 或 aws-ops 远程脚本。"
+        "同一周期末仅 UPSERT 北京「当天」account_daily_performance（当日平仓 + 当日快照首末差）；"
+        "历史日不重算。北京「昨天」完整按日界固化由北京每日 00:01–00:05 的独立线程执行（可跨日补跑）。"
+        "进程启动后随机 30–60 秒首次执行一轮。"
     )
     multi_hint = (
         "若怀疑多套定时任务在跑：在服务器执行 pgrep -af 'baasapi/main.py' 看是否多个 Python 进程；"
@@ -2278,39 +2281,10 @@ def api_admin_balance_snapshots_backfill_bills():
                 days = int(body["days"])
             except (TypeError, ValueError):
                 days = 40
-    days = max(7, min(92, int(days)))
-    total = 0
-    details: list[dict] = []
-    accounts_adp: list[str] = []
-    for row in _account_mgr.list_account_basics(enabled_only=True):
-        aid = str(row.get("account_id") or "").strip()
-        if not aid:
-            continue
-        try:
-            n, msg = _account_mgr.backfill_account_snapshots_from_okx_bills(
-                _db, aid, app.logger, days=days
-            )
-        except Exception as e:
-            details.append({"account_id": aid, "inserted": 0, "message": str(e)})
-            continue
-        total += n
-        if n > 0:
-            accounts_adp.append(aid)
-        if n or msg:
-            details.append({"account_id": aid, "inserted": n, "message": msg})
-    if accounts_adp:
-        _account_mgr.refresh_account_daily_performance_today_provisional_safe(
-            _db,
-            accounts_adp,
-            app.logger,
-        )
-    return jsonify(
-        {
-            "success": True,
-            "total_inserted": total,
-            "accounts": details,
-        }
+    payload = _pg_data_fill.run_okx_bills_balance_snapshot_backfill(
+        _db, _account_mgr, app.logger, days=days
     )
+    return jsonify(payload)
 
 
 @app.route("/api/tradingbots/<bot_id>/pending-orders", methods=["GET"])
@@ -2806,8 +2780,9 @@ def api_okx_info():
     return jsonify({"ok": True, "info": info})
 
 
-# 启动 5 分钟定时器：AccountMgr 写入 account_balance_snapshots、account_open_positions_snapshots、account_positions_history，并兼容 tradingbots 盈利快照
-# 夜间：PEPE（可配置）1m 标记价格 K 线写入 flutterapp/web/kline，并由 /kline/ 提供静态 JSON
+# 启动定时器：AccountMgr 写入 account_balance_snapshots、account_open_positions_snapshots、
+# account_positions_history（bills-archive 缺日补全仅管理员 / pg_data_fill / aws-ops 脚本）
+# 夜间：PEPE（可配置）1m 标记价格 K 线写入 flutterapp/web/kline（北京约 00:07），并由 /kline/ 提供静态 JSON
 # 多 worker（gunicorn 等）下用文件锁保证仅一个进程跑后台任务，避免重复同步与日志交错
 if _BACKGROUND_SCHEDULERS_ENABLED:
     _bg_leader_ok = _try_acquire_background_scheduler_leader_lock()
@@ -2818,15 +2793,22 @@ if _BACKGROUND_SCHEDULERS_ENABLED:
             os.getpid(),
             os.getppid(),
         )
+        # 账户同步定时任务 
         _start_account_snapshot_timer()
+        # 月初基线定时任务
         _start_account_month_balance_baseline_timer()
+        # 日绩效昨日固化定时任务    
         _start_account_adp_yesterday_finalize_timer()
+        # 启动时补写月初基线（防止月初基线缺失）
         threading.Thread(
             target=_bootstrap_account_month_balance_baseline_if_needed_on_startup,
             name="account_month_balance_baseline_bootstrap",
             daemon=True,
         ).start()
+
+        # K 线夜间定时任务
         _kline_web_sync.start_kline_nightly_scheduler(app.logger, PROJECT_ROOT)
+  
     else:
         app.logger.info(
             "⏭ 定时·副 │ 锁占用·跳过 │ pid=%s ppid=%s",

@@ -5,7 +5,7 @@ PEPE 永续（可配置）1 分钟标记价格 K 线：拉取 OKX mark-price-can
 文件结构兼容 QTrader-web `kline_service._load_from_filesystem`（顶层 `data` 为 K 线数组，元素可为
 `[ts,o,h,l,c,vol]` 或含 timestamp/open 字段的字典）。
 
-定时：默认每日 UTC 01:10 执行一轮；可通过环境变量调整。
+定时：默认每日北京时间 00:07 执行一轮（落在 00:05–00:10 窗口内）；可用 HZTECH_KLINE_SYNC_HOUR_BJ / HZTECH_KLINE_SYNC_MINUTE_BJ 调整（0–23 / 0–59）。
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from exchange import okx as _okx
 
@@ -246,8 +247,9 @@ def run_mark_1m_sync_cycle(
     return stats
 
 
-def _seconds_until_next_utc(hour: int, minute: int) -> float:
-    now = datetime.now(timezone.utc)
+def _seconds_until_next_beijing(hour: int, minute: int) -> float:
+    tz = ZoneInfo("Asia/Shanghai")
+    now = datetime.now(tz)
     target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if target <= now:
         target += timedelta(days=1)
@@ -262,21 +264,21 @@ def start_kline_nightly_scheduler(
         app_logger.info("⏸️ K线 │ 已关 HZTECH_KLINE_SYNC_DISABLED=1")
         return
     try:
-        hour = int((os.environ.get("HZTECH_KLINE_SYNC_HOUR_UTC") or "1").strip())
+        hour = int((os.environ.get("HZTECH_KLINE_SYNC_HOUR_BJ") or "0").strip())
     except ValueError:
-        hour = 1
+        hour = 0
     try:
-        minute = int((os.environ.get("HZTECH_KLINE_SYNC_MINUTE_UTC") or "10").strip())
+        minute = int((os.environ.get("HZTECH_KLINE_SYNC_MINUTE_BJ") or "7").strip())
     except ValueError:
-        minute = 10
+        minute = 7
     hour = max(0, min(23, hour))
     minute = max(0, min(59, minute))
 
     def _loop() -> None:
         while True:
-            delay = _seconds_until_next_utc(hour, minute)
+            delay = _seconds_until_next_beijing(hour, minute)
             app_logger.info(
-                "🌙 K线 │ 下次 %.0fs │ UTC %02d:%02d",
+                "🌙 K线 │ 下次 %.0fs │ 北京 %02d:%02d",
                 delay,
                 hour,
                 minute,

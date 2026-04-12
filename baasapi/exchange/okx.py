@@ -1077,11 +1077,16 @@ def okx_fetch_account_bills_archive_usdt(
     返回的 ``bal`` 为账单时刻账户层 USDT 余额，与 ``/account/balance`` 的 totalEq（含浮盈）在持仓时可能不一致；
     上层可结合最近一条真实快照的 equity/cash 比例估算权益。
     """
+    # 检测开始时间是否大于结束时间
     if begin_ms > end_ms:
         return [], "begin_ms > end_ms"
+    # 计算页数
     pages = max(1, min(800, int(max_pages)))
+    # 初始化结果列表
     out: list[dict] = []
+    # 初始化已处理账单ID集合
     seen: set[str] = set()
+    # 初始化分页游标
     after: str | None = None
     for _ in range(pages):
         params: dict[str, str] = {

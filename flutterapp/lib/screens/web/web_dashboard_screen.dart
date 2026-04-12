@@ -6,6 +6,7 @@ import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
 import '../../utils/number_display_format.dart';
 import '../../widgets/equity_cash_percent_line_chart.dart';
+import '../../widgets/month_end_profit_panel.dart' show focusedMonthFromProfitSnapshots;
 import '../../widgets/water_background.dart';
 import 'web_account_profile_screen.dart';
 
@@ -519,26 +520,26 @@ class _OverviewGlassCard extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 8),
-          Expanded(
-            child: snapshots.isNotEmpty
-                ? IgnorePointer(
-                    child: SnapshotPercentLineChart(
-                      snapshots: snapshots,
-                      series: basis == _DashboardBasis.equity
-                          ? SnapshotReturnSeries.equity
-                          : SnapshotReturnSeries.cash,
-                      compact: true,
-                    ),
-                  )
-                : Center(
-                    child: Text(
-                      '暂无收益',
-                      style: AppFinanceStyle.labelTextStyle(context),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-          ),
+          if (snapshots.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Expanded(
+              child: IgnorePointer(
+                child: SnapshotPercentLineChart(
+                  snapshots: snapshots,
+                  series: basis == _DashboardBasis.equity
+                      ? SnapshotReturnSeries.equity
+                      : SnapshotReturnSeries.cash,
+                  compact: true,
+                  focusedMonth: focusedMonthFromProfitSnapshots(snapshots),
+                  monthOpenLevelHint: basis == _DashboardBasis.equity
+                      ? (account.monthInitialEquity ?? account.initialBalance)
+                      : (account.monthInitialBalance ??
+                          account.cashBalance ??
+                          account.initialBalance),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );

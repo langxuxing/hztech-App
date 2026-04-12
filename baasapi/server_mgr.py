@@ -14,7 +14,7 @@ import subprocess
 import sys
 import time
 
-# ops/read_deploy_config 等用 importlib 按路径加载本模块时，sys.path 不含 baasapi，同目录 deploy_ui 需可解析。
+# aws-ops/lib/read_deploy_config 等用 importlib 按路径加载本模块时，sys.path 不含 baasapi，同目录 deploy_ui 需可解析。
 _baasapi_dir = str(Path(__file__).resolve().parent)
 if _baasapi_dir not in sys.path:
     sys.path.insert(0, _baasapi_dir)
@@ -42,7 +42,7 @@ DEFAULT_APK_NAME_DEBUG = "hztech-app-debug.apk"
 IPA_DIR = PROJECT_ROOT / "ipa"
 DEFAULT_IPA_NAME = "禾正量化-release.ipa"
 
-# 远端启动 main.py 时注入（与 install_on_aws.sh 一致）。勿用本机 HZTECH_TRADINGBOT_CTRL_DIR，避免 Mac 路径传到 EC2。
+# 远端启动 main.py 时注入（与 aws-ops/code/install_on_aws.sh 一致）。勿用本机 HZTECH_TRADINGBOT_CTRL_DIR，避免 Mac 路径传到 EC2。
 _REMOTE_TRADINGBOT_CTRL_DIR = (
     os.environ.get("HZTECH_REMOTE_TRADINGBOT_CTRL_DIR", "/home/ec2-user/Alpha").strip()
     or "/home/ec2-user/Alpha"
@@ -459,7 +459,7 @@ def _rsync_deploy_exclude_patterns() -> list[str]:
         "baasapi/server_mgr.py",
         "baasapi/README-DEPLOY.md",
         "baasapi/test_server.sh",
-        "baasapi/install_on_aws.sh",
+        "aws-ops/code/install_on_aws.sh",
         "baasapi/run_local.sh",
         "baasapi/run_apk_debug.sh",
         "baasapi/build_and_deploy.sh",
@@ -469,7 +469,7 @@ def _rsync_deploy_exclude_patterns() -> list[str]:
         "baasapi/sqlite/*.db",
         # 不落盘：静态资源目录、本仓库运维脚本（导入库/探测等仅在开发者机器使用）
         "res",
-        "ops",
+        "aws-ops",
     ]
 
 

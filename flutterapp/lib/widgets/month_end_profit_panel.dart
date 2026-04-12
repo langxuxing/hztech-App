@@ -399,7 +399,7 @@ class MonthEndValueBarPanel extends StatefulWidget {
     this.dailyPerformanceRows,
     this.dailyPerformancePick,
 
-    /// 按日柱图（[useDailyBarsForEndMonth]）时：左轴刻度与横向网格步长（USDT）；null 为自动。
+    /// 按日柱图（[useDailyBarsForEndMonth]，日新增权益/现金）时：左轴与横网格步长（USDT）；null 为自动。Web/APK 账户收益与本月收益传 100。
     this.dailyBarsLeftAxisInterval,
   });
 
@@ -425,7 +425,7 @@ class MonthEndValueBarPanel extends StatefulWidget {
   final List<DailyRealizedPnlDayRow>? dailyPerformanceRows;
   final double? Function(DailyRealizedPnlDayRow row)? dailyPerformancePick;
 
-  /// 按日柱图左轴刻度间隔（如 10）；null 为 fl_chart 默认自动。
+  /// 按日柱图左轴刻度间隔（如 100）；null 为 fl_chart 默认自动。
   final double? dailyBarsLeftAxisInterval;
 
   @override

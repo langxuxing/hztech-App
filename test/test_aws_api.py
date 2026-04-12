@@ -3,7 +3,7 @@
 """
 AWS API 服务测试程序：对远程 API（或本地）发真实 HTTP 请求，校验各接口。
 用法：
-  ./ops/hztech_ops_menu.sh run 5           # 或菜单选 5（与 deploy-aws.json 中 baasapi 段一致）
+  ./aws-ops/aws_test.sh run 5      # 或菜单选 5（与 deploy-aws.json 中 baasapi 段一致）
   python test/test_aws_api.py
   BASE_URL=http://54.66.108.150:9001 python test/test_aws_api.py
   python test/test_aws_api.py -v
@@ -101,7 +101,7 @@ def main() -> int:
 
     failed = 0
 
-    # 0a) GET /api/health（与 ops/aws_ops.sh status api 一致，无需登录）
+    # 0a) GET /api/health（与 aws-ops/aws_ops.sh status api 一致，无需登录）
     code, body = request("GET", f"{base}/api/health")
     ok = (
         code == 200
@@ -187,7 +187,7 @@ def main() -> int:
         if failed > 0:
             print(
                 "  提示: 502/连接失败通常表示 BaasAPI 未启动或端口不对（本机 ./baasapi/run_local.sh 默认 9001；FlutterApp 多为 9000）。"
-                "到 EC2 执行: cd /home/ec2-user/hztechapp && bash baasapi/install_on_aws.sh"
+                "到 EC2 执行: cd /home/ec2-user/hztechapp && bash aws-ops/code/install_on_aws.sh"
             )
         print(f"=== 完成：{failed} 项失败 ===")
         return 1 if failed else 0
@@ -247,7 +247,7 @@ def main() -> int:
     if failed > 0:
         print(
             "\n  提示: 若为 502/连接错误，请到 EC2 检查并重启 API："
-            " cd /home/ec2-user/hztechapp && bash baasapi/install_on_aws.sh"
+            " cd /home/ec2-user/hztechapp && bash aws-ops/code/install_on_aws.sh"
         )
     print(f"\n=== 完成：{failed} 项失败 ===")
     return 1 if failed else 0

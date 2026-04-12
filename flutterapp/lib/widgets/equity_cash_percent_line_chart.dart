@@ -11,6 +11,9 @@ import 'month_end_profit_panel.dart' show dailyPerfChangeMapForMonth;
 /// 深色背景上 X 轴日期刻度（与日历无数据格同档可读性）。
 const _kChartAxisDateLabel = AppFinanceStyle.textDefault;
 
+/// 月视图下权益/现金收益折线左轴与横向网格步长（USDT，与 Web「账户收益」、APK「本月收益」一致）。
+const _kSnapshotMonthLineAxisStep = 500.0;
+
 /// 折线触摸提示：不透明底色 + 浅色字，避免盈亏色与默认灰底糊在一起。
 const _kLineTouchTooltipBg = Color(0xFF1E1E28);
 
@@ -57,6 +60,28 @@ double _snapshotValueAtOrBefore(
   return v ?? double.nan;
 }
 
+/// 仅使用 [year]/[month] 内的快照，避免「上月异常 equity」被当作本月初前值。
+double _snapshotValueAtOrBeforeInMonth(
+  List<BotProfitSnapshot> sortedChronological,
+  DateTime instant,
+  int year,
+  int month,
+  double Function(BotProfitSnapshot s) pick,
+) {
+  double? v;
+  for (final s in sortedChronological) {
+    final d = _parseSnapshotAt(s.snapshotAt);
+    if (d == null) continue;
+    if (d.year != year || d.month != month) continue;
+    if (!d.isAfter(instant)) {
+      v = pick(s);
+    } else {
+      break;
+    }
+  }
+  return v ?? double.nan;
+}
+
 /// X 轴刻度：点很多时只标若干处，避免重叠。
 Set<int> _lineChartXLabelIndices(int n) {
   if (n <= 0) return {};
@@ -86,6 +111,8 @@ class SnapshotPercentLineChart extends StatelessWidget {
     this.dailyPerfDays,
     /// 权益用月初权益；现金用 `month_initial_balance`（USDT 余额）。
     this.monthPerformanceDenom,
+    /// 与界面「月初」一致：有值时作为当月收益曲线的基准水位，且日内取值不引用上月快照。
+    this.monthOpenLevelHint,
   });
 
   final List<BotProfitSnapshot> snapshots;
@@ -94,6 +121,7 @@ class SnapshotPercentLineChart extends StatelessWidget {
   final DateTime? focusedMonth;
   final List<DailyRealizedPnlDayRow>? dailyPerfDays;
   final double? monthPerformanceDenom;
+  final double? monthOpenLevelHint;
 
   @override
   Widget build(BuildContext context) {
@@ -161,7 +189,6 @@ class SnapshotPercentLineChart extends StatelessWidget {
     int? monthForAxis;
     var monthLineFromDailyPerf = false;
     var monthPerfMapForTip = <int, double>{};
-    var monthLineDenomForTip = 0.0;
     final pick = series == SnapshotReturnSeries.equity
         ? (BotProfitSnapshot s) => s.equityUsdt
         : (BotProfitSnapshot s) => s.cashBalance ?? s.currentBalance;
@@ -192,7 +219,6 @@ class SnapshotPercentLineChart extends StatelessWidget {
       if (useDailyPerf) {
         monthLineFromDailyPerf = true;
         monthPerfMapForTip = perfMap;
-        monthLineDenomForTip = monthDenom;
         final maxDayByPerf = perfMap.isEmpty
             ? 0
             : perfMap.keys.reduce(math.max).clamp(1, daysInMonth);
@@ -207,25 +233,37 @@ class SnapshotPercentLineChart extends StatelessWidget {
       } else {
         final beforeFirstDay =
             DateTime(y, m, 1).subtract(const Duration(microseconds: 1));
-        double? runCarry;
         final startVal = _snapshotValueAtOrBefore(fullSorted, beforeFirstDay, pick);
-        final monthBase = startVal.isFinite ? startVal : denom;
-        monthLineDenomForTip = monthBase;
-        if (startVal.isFinite) runCarry = startVal;
+        double? firstInMonthVal;
+        for (final s in fullSorted) {
+          final d = _parseSnapshotAt(s.snapshotAt);
+          if (d == null) continue;
+          if (d.year == y && d.month == m) {
+            firstInMonthVal = pick(s);
+            break;
+          }
+        }
+        final hint = monthOpenLevelHint;
+        final monthBase = (hint != null && hint.isFinite)
+            ? hint
+            : (firstInMonthVal != null && firstInMonthVal.isFinite)
+                ? firstInMonthVal
+                : (startVal.isFinite ? startVal : denom);
+        double? runCarry = monthBase.isFinite ? monthBase : null;
 
         for (var day = 1; day <= maxDayByTime; day++) {
           final end = DateTime(y, m, day, 23, 59, 59, 999);
-          final vRaw = _snapshotValueAtOrBefore(fullSorted, end, pick);
+          final vInMonth =
+              _snapshotValueAtOrBeforeInMonth(fullSorted, end, y, m, pick);
           late final double v;
-          if (vRaw.isFinite) {
-            runCarry = vRaw;
-            v = vRaw;
+          if (vInMonth.isFinite) {
+            v = vInMonth;
+            runCarry = vInMonth;
           } else if (runCarry != null) {
             v = runCarry;
           } else if (startVal.isFinite) {
             v = startVal;
           } else {
-            // 无可用快照时该日不绘制；避免未来与空数据补线。
             continue;
           }
           final profit = v - monthBase;
@@ -264,8 +302,6 @@ class SnapshotPercentLineChart extends StatelessWidget {
     }
     final pad = (maxY - minY).abs() * 0.08 + 1.0;
     final lineColor = _snapshotTrendLineColor(spots);
-    final cashMonthGrid =
-        monthMode && series == SnapshotReturnSeries.cash;
 
     final monthPointCount = monthMode
         ? (spots.isEmpty ? 0 : (spots.last.x.round() + 1))
@@ -284,9 +320,9 @@ class SnapshotPercentLineChart extends StatelessWidget {
         minY: minY - pad,
         maxY: maxY + pad,
         gridData: FlGridData(
-          show: cashMonthGrid,
+          show: monthMode,
           drawVerticalLine: false,
-          horizontalInterval: cashMonthGrid ? 100 : null,
+          horizontalInterval: monthMode ? _kSnapshotMonthLineAxisStep : null,
           getDrawingHorizontalLine: (v) => FlLine(
             color: Colors.white.withValues(alpha: 0.07),
             strokeWidth: 1,
@@ -310,8 +346,6 @@ class SnapshotPercentLineChart extends StatelessWidget {
               return touchedSpots.map((spot) {
                 if (monthMode && monthForAxis != null && monthPointCount > 0) {
                   final day = spot.x.round().clamp(0, monthPointCount - 1) + 1;
-                  final y = focusedMonth!.year;
-                  final mo = focusedMonth!.month;
                   if (monthLineFromDailyPerf) {
                     var cumTip = 0.0;
                     for (var d = 1; d <= day; d++) {
@@ -322,15 +356,8 @@ class SnapshotPercentLineChart extends StatelessWidget {
                       tipStyle,
                     );
                   }
-                  final end = DateTime(y, mo, day, 23, 59, 59, 999);
-                  final raw = _snapshotValueAtOrBefore(fullSorted, end, pick);
-                  final base = monthLineDenomForTip > 0
-                      ? monthLineDenomForTip
-                      : (fullSorted.isNotEmpty ? fullSorted.first.initialBalance : 0.0);
-                  final profit = raw.isFinite ? (raw - base) : double.nan;
-                  final amt = profit.isFinite ? formatUiInteger(profit) : '—';
                   return LineTooltipItem(
-                    '$day日 收益 $amt',
+                    '$day日 收益 ${formatUiInteger(spot.y)}',
                     tipStyle,
                   );
                 }
@@ -358,13 +385,14 @@ class SnapshotPercentLineChart extends StatelessWidget {
             sideTitles: SideTitles(
               showTitles: monthMode,
               reservedSize: compact ? 34 : 40,
-              interval: monthMode
-                  ? (series == SnapshotReturnSeries.cash ? 100 : 10)
-                  : null,
+              interval: monthMode ? _kSnapshotMonthLineAxisStep : null,
               getTitlesWidget: (v, meta) {
-                if (cashMonthGrid) {
-                  const step = 100.0;
-                  if ((v - (v / step).round() * step).abs() > 1e-2) {
+                if (monthMode) {
+                  if ((v -
+                          (v / _kSnapshotMonthLineAxisStep).round() *
+                              _kSnapshotMonthLineAxisStep)
+                      .abs() >
+                      1e-2) {
                     return const SizedBox.shrink();
                   }
                 }

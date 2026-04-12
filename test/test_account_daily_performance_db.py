@@ -196,17 +196,7 @@ def test_daily_performance_provisional_refresh_today_upsert():
         "2026-04-01T00:00:00.000000Z",
         initial_balance=4000.0,
     )
-    # 北京 2026-04-10 日界：前一日界前一条 + 日内两条（避免跨北京日界的 UTC 时刻误算）
-    db.account_snapshot_insert(
-        aid,
-        "2026-04-09T15:00:00.000000Z",
-        5000.0,
-        4000.0,
-        0.0,
-        0.0,
-        available_margin=4000.0,
-        used_margin=0.0,
-    )
+    # 两条快照均落在北京 2026-04-10 内（16:00Z 已是北京 4/11 00:00，会误判「当日」末笔）
     db.account_snapshot_insert(
         aid,
         "2026-04-10T02:00:00.000000Z",
@@ -219,7 +209,7 @@ def test_daily_performance_provisional_refresh_today_upsert():
     )
     db.account_snapshot_insert(
         aid,
-        "2026-04-10T10:00:00.000000Z",
+        "2026-04-10T14:00:00.000000Z",
         5100.0,
         4400.0,
         0.0,

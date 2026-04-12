@@ -1,4 +1,4 @@
-# BaasAPI 运行时依赖（deploy2Local / run_local / AWS restart 与 install_on_aws 均使用本文件）
+# BaasAPI 运行时依赖（deploy2Local / run_local / AWS restart 与 aws-ops/code/install_on_aws 均使用本文件）
 flask>=3.0.0
 PyJWT>=2.8.0   # import 时使用: import jwt
 requests>=2.28.0

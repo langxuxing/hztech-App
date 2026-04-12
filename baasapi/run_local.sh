@@ -12,7 +12,7 @@ cd "$PROJECT_ROOT"
 export MOBILEAPP_ROOT="$PROJECT_ROOT"
 # 交易机器人 shell：本地缺省为仓库内 baasapi/accounts/tradingbot_ctrl（勿与 AWS /home/ec2-user/Alpha 混用）
 export HZTECH_TRADINGBOT_CTRL_DIR="${HZTECH_TRADINGBOT_CTRL_DIR:-$PROJECT_ROOT/baasapi/accounts/tradingbot_ctrl}"
-# 本地默认读 Account_List.json；生产见 install_on_aws.sh / server_mgr 远端启动（database）
+# 本地默认读 Account_List.json；生产见 aws-ops/code/install_on_aws.sh / server_mgr 远端启动（database）
 export HZTECH_TRADINGBOT_ACCOUNT_LIST_SOURCE="${HZTECH_TRADINGBOT_ACCOUNT_LIST_SOURCE:-json}"
 
 # 数据库：优先 database_config.json；否则自动使用 database_config.local.sqlite.json（SQLite，见 deploy2Local.sh）
@@ -40,13 +40,13 @@ _hztech_resolve_python() {
 }
 _PY="$(_hztech_resolve_python)"
 
-# 与 install_python_deps.sh 安装的 venv / 当前解释器一致（与 deploy2Local 共用）
+# 与 aws-ops/code/install_python_deps.sh 安装的 venv / 当前解释器一致（与 deploy2Local 共用）
 case "${HZTECH_SKIP_PIP_INSTALL:-}" in
 1 | true | yes) ;;
 *)
   if ! "$_PY" -c "import flask, jwt, requests, ccxt" 2>/dev/null; then
     echo "检测到缺少 BaasAPI 运行时依赖，正在安装 baasapi/requirements.txt ..."
-    "$SCRIPT_DIR/install_python_deps.sh" || exit 1
+    "$PROJECT_ROOT/aws-ops/code/install_python_deps.sh" || exit 1
     _PY="$(_hztech_resolve_python)"
   fi
   ;;

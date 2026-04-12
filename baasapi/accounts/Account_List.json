@@ -148,7 +148,7 @@
     "exchange_account": "OKX",
     "symbol": "PEPE-USDT-SWAP",
     "trading_strategy": "Moneyflow-V2.1",
-    "Initial_capital": 0,
+    "Initial_capital": 3021,
     "account_key_file": "OKX_HzTech_Moneyflow005.json",
     "script_file": "moneyflow_test_005.sh",
     "enbaled": true

@@ -1384,9 +1384,12 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen>
 
   Widget _buildEquityMetricsSection(bool wide) {
     if (_selectedAccount == null) return const SizedBox.shrink();
+    final acc = _selectedAccount!;
     final snap = _snapshots;
     final month = _equityMonthFor(snap);
     final equityPctDenom = _equityPctLineDenominator();
+    final equityMonthOpenHint =
+        acc.monthInitialEquity ?? acc.initialBalance;
     void setEquityMonth(DateTime d) {
       setState(() => _equityMetricsMonth = clampMonthToSnapshots(snap, d));
       unawaited(_syncDailyPerformanceForCharts());
@@ -1423,6 +1426,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen>
                     monthPerformanceDenom: equityPctDenom > 1e-12
                         ? equityPctDenom
                         : null,
+                    monthOpenLevelHint: equityMonthOpenHint,
                   ),
                 ),
               ],
@@ -1444,6 +1448,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen>
               useDailyBarsForEndMonth: true,
               dailyPerformanceRows: _equityPerfDays,
               dailyPerformancePick: (r) => r.equlityChanged,
+              dailyBarsLeftAxisInterval: 100,
             ),
           ),
           const SizedBox(height: 16),
@@ -1539,6 +1544,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen>
                                   monthPerformanceDenom: equityPctDenom > 1e-12
                                       ? equityPctDenom
                                       : null,
+                                  monthOpenLevelHint: equityMonthOpenHint,
                                 ),
                               ),
                             ],
@@ -1565,6 +1571,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen>
                             useDailyBarsForEndMonth: true,
                             dailyPerformanceRows: _equityPerfDays,
                             dailyPerformancePick: (r) => r.equlityChanged,
+                            dailyBarsLeftAxisInterval: 100,
                           ),
                         ),
                       ),
@@ -1581,9 +1588,13 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen>
 
   Widget _buildCashMetricsSection(bool wide) {
     if (_selectedAccount == null) return const SizedBox.shrink();
+    final acc = _selectedAccount!;
     final snap = _snapshots;
     final month = _cashMonthFor(snap);
     final cashPctDenom = _cashPctLineDenominator();
+    final cashMonthOpenHint = acc.monthInitialBalance ??
+        acc.cashBalance ??
+        acc.initialBalance;
     void setCashMonth(DateTime d) {
       setState(() => _cashMetricsMonth = clampMonthToSnapshots(snap, d));
       unawaited(_syncDailyPerformanceForCharts());
@@ -1620,6 +1631,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen>
                     monthPerformanceDenom: cashPctDenom > 1e-12
                         ? cashPctDenom
                         : null,
+                    monthOpenLevelHint: cashMonthOpenHint,
                   ),
                 ),
               ],
@@ -1631,7 +1643,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen>
               snapshots: snap,
               title: '每日现金',
               description: '',
-              valueAt: (s) => s.currentBalance,
+              valueAt: (s) => s.cashBalance ?? s.currentBalance,
               emptyMessage: '暂无日绩效或历史快照',
               showMonthNavigator: false,
               selectedEndMonth: month,
@@ -1641,7 +1653,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen>
               useDailyBarsForEndMonth: true,
               dailyPerformanceRows: _cashPerfDays,
               dailyPerformancePick: (r) => r.balanceChanged,
-              dailyBarsLeftAxisInterval: 10,
+              dailyBarsLeftAxisInterval: 100,
             ),
           ),
           const SizedBox(height: 16),
@@ -1650,7 +1662,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen>
               snapshots: snap,
               title: '现金日历',
               description: '',
-              valueAt: (s) => s.currentBalance,
+              valueAt: (s) => s.cashBalance ?? s.currentBalance,
               emptyMessage: '暂无日绩效或历史快照',
               showMonthNavigator: false,
               focusedMonth: month,
@@ -1687,7 +1699,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen>
                       snapshots: snap,
                       title: '现金日历',
                       description: '',
-                      valueAt: (s) => s.currentBalance,
+                      valueAt: (s) => s.cashBalance ?? s.currentBalance,
                       emptyMessage: '暂无日绩效或历史快照',
                       compact: true,
                       showMonthNavigator: false,
@@ -1737,6 +1749,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen>
                                   monthPerformanceDenom: cashPctDenom > 1e-12
                                       ? cashPctDenom
                                       : null,
+                                  monthOpenLevelHint: cashMonthOpenHint,
                                 ),
                               ),
                             ],
@@ -1752,7 +1765,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen>
                             snapshots: snap,
                             title: '每日现金',
                             description: '',
-                            valueAt: (s) => s.currentBalance,
+                            valueAt: (s) => s.cashBalance ?? s.currentBalance,
                             emptyMessage: '暂无日绩效或历史快照',
                             compact: true,
                             showMonthNavigator: false,
@@ -1763,7 +1776,7 @@ class _WebAccountProfileScreenState extends State<WebAccountProfileScreen>
                             useDailyBarsForEndMonth: true,
                             dailyPerformanceRows: _cashPerfDays,
                             dailyPerformancePick: (r) => r.balanceChanged,
-                            dailyBarsLeftAxisInterval: 10,
+                            dailyBarsLeftAxisInterval: 100,
                           ),
                         ),
                       ),

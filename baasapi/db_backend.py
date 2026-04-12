@@ -285,7 +285,7 @@ def _pg_apply_schema_search_path(raw: Any) -> None:
                     "未显式 schema 的建表会落到 public，而在 PG15+ 上 public 默认无 CREATE 权限，"
                     "故报错 permission denied for schema public。请以超级用户执行 "
                     f'CREATE SCHEMA IF NOT EXISTS "{schema_esc}" AUTHORIZATION "<应用角色>"; '
-                    "并 GRANT USAGE, CREATE；或运行 baasapi/install_postgresql_remote.sh 完成初始化。"
+                    "并 GRANT USAGE, CREATE；或运行 aws-ops/database/install_postgresql_remote.sh 完成初始化。"
                 ) from None
         cur.execute(f'SET search_path TO "{schema_esc}", public')
         raw.commit()

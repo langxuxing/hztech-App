@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # 两台 AWS 服务（baasapi / flutterapp）远程启停与 HTTP 状态探测。
-# 运维菜单（本脚本的 status；含 PG 自检项）：ops/hztech_ops_menu.sh
+# 运维菜单（本脚本的 status；含 PG 自检项）：aws-ops/aws_test.sh
 # 配置：baasapi/deploy-aws.json（与 server_mgr 一致）
 # 启动 API 时会传入 HZTECH_CORS_ORIGINS（默认同 deploy-aws.json 里 Flutter 公网 URL），避免双机 Web 跨域被浏览器拦截。
 #
-#   ./ops/aws_ops.sh status [api|web|all]
-#   ./ops/aws_ops.sh stop|start|restart [api|web|all]
+#   ./aws-ops/aws_ops.sh status [api|web|all]
+#   ./aws-ops/aws_ops.sh stop|start|restart [api|web|all]
 #
 # 说明：停服务用 fuser -k 端口，避免 pkill -f 误杀 ssh 的 bash -c。
 set -euo pipefail
@@ -19,7 +19,7 @@ _log_warn() { printf '  ⚠️  %s\n' "$*"; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1090
-eval "$("$SCRIPT_DIR/read_deploy_config.py" --bash-export-all)"
+eval "$("$SCRIPT_DIR/lib/read_deploy_config.py" --bash-export-all)"
 
 _ssh_api() {
   ssh -o LogLevel=ERROR -i "$OPS_BAASAPI_SSH_KEY" -p "$OPS_BAASAPI_SSH_PORT" \
@@ -267,7 +267,7 @@ case "$_cmd" in
     ;;
   help | -h | --help)
     cat <<'H'
-📖 ops/aws_ops.sh <命令> [目标]
+📖 aws-ops/aws_ops.sh <命令> [目标]
 
 命令
   🔍 status              公网 HTTP 探测（默认两台）
@@ -278,9 +278,9 @@ case "$_cmd" in
   api | web | all        默认 all；restart all 末尾会再跑 status
 
 示例
-  ./ops/aws_ops.sh status
-  ./ops/aws_ops.sh restart api
-  ./ops/aws_ops.sh ssh web 'tail -n 20 web_static.log'
+  ./aws-ops/aws_ops.sh status
+  ./aws-ops/aws_ops.sh restart api
+  ./aws-ops/aws_ops.sh ssh web 'tail -n 20 web_static.log'
 H
     exit 0
     ;;

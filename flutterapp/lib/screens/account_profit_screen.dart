@@ -956,6 +956,10 @@ class _AccountProfitScreenState extends State<AccountProfitScreen>
   }
 
   Widget _buildCashLinePanel(_AccountProfitCashLayout L) {
+    final a = _selectedAccount;
+    final cashMonthOpen = a == null
+        ? null
+        : (a.monthInitialBalance ?? a.cashBalance ?? a.initialBalance);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -972,6 +976,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen>
                     series: SnapshotReturnSeries.cash,
                     compact: true,
                     focusedMonth: L.month,
+                    monthOpenLevelHint: cashMonthOpen,
                   ),
                 ),
               ),
@@ -1001,7 +1006,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen>
             maxBars: 8,
             useDailyBarsForEndMonth: true,
             compact: true,
-            dailyBarsLeftAxisInterval: 10,
+            dailyBarsLeftAxisInterval: 100,
           ),
         ),
       ],

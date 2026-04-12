@@ -10,7 +10,7 @@
   `<accounts>/tradingbot_ctrl`（即 `baasapi/accounts/tradingbot_ctrl`，例如本机
   `/Volumes/HZTech/hztechApp/baasapi/accounts/tradingbot_ctrl`）。
   `baasapi/run_local.sh` 会显式设为 `$MOBILEAPP_ROOT/baasapi/accounts/tradingbot_ctrl`。
-  AWS：`install_on_aws.sh`、`ops/aws_ops.sh` 与 `server_mgr` 远端重启缺省为 `/home/ec2-user/Alpha`
+  AWS：`aws-ops/code/install_on_aws.sh`、`aws-ops/aws_ops.sh` 与 `server_mgr` 远端重启缺省为 `/home/ec2-user/Alpha`
   （本机执行部署时勿把 Mac 上的 CTRL_DIR 传到 EC2；若需改远端目录，用环境变量
   `HZTECH_REMOTE_TRADINGBOT_CTRL_DIR`）。
   可为相对路径（相对 accounts 目录）或绝对路径。

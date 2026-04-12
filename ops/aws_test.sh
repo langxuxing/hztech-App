@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # HZTech 运维菜单：AWS 双机网络 · SSH · HTTP · PostgreSQL 自检
-# 数据库导入/迁移：ops/gp_ops.sh / ops/pg_ows_import.py
-# 配置：baasapi/deploy-aws.json（ops/read_deploy_config.py、ops/aws_ops.sh）
+# 数据库导入/迁移：aws-ops/database/pg_ops.sh / aws-ops/database/pg_ows_import.py
+# 配置：baasapi/deploy-aws.json（aws-ops/lib/read_deploy_config.py、aws_ops.sh）
 # UTF-8 终端下中文与图标显示最佳
 set -euo pipefail
 
@@ -15,7 +15,7 @@ _ensure_deploy_all() {
     return 0
   fi
   # shellcheck disable=SC1090
-  eval "$(python3 "$SCRIPT_DIR/read_deploy_config.py" --bash-export-all)" || {
+  eval "$(python3 "$SCRIPT_DIR/lib/read_deploy_config.py" --bash-export-all)" || {
     echo "❌ 读取部署配置失败（read_deploy_config.py --bash-export-all）" >&2
     return 1
   }
@@ -44,8 +44,8 @@ _menu_main() {
   printf '  4  🔑 SSH 登录 Flutter 静态机（交互）\n'
   printf '  5  🖥️  BaasAPI HTTP 接口测试（Python）\n'
   printf '\n━━ 🗄️  PostgreSQL 自检 ━━\n'
-  printf '  6  🏠 本机 PostgreSQL（ops/gp_ops.sh test-local）\n'
-  printf '  7  ☁️  AWS 只读检查（ops/gp_ops.sh test-aws）\n'
+  printf '  6  🏠 本机 PostgreSQL（aws-ops/database/pg_ops.sh test-local）\n'
+  printf '  7  ☁️  AWS 只读检查（aws-ops/database/pg_ops.sh test-aws）\n'
   printf '\n  0  ❌ 退出\n'
   printf '\n请选择 [0-7]: '
 }
@@ -97,11 +97,11 @@ _run_choice() {
     ;;
   6)
     _hdr "▶️  6 本机 PostgreSQL"
-    bash "$SCRIPT_DIR/gp_ops.sh" test-local
+    bash "$SCRIPT_DIR/database/pg_ops.sh" test-local
     ;;
   7)
     _hdr "▶️  7 AWS PostgreSQL（只读）"
-    bash "$SCRIPT_DIR/gp_ops.sh" test-aws "$@"
+    bash "$SCRIPT_DIR/database/pg_ops.sh" test-aws "$@"
     ;;
   *)
     printf '❌ 无效选择: %s（有效范围 0–7）\n' "$c" >&2
@@ -110,7 +110,7 @@ _run_choice() {
   esac
 }
 
-# 非交互：./hztech_ops_menu.sh 5 -v  |  ./hztech_ops_menu.sh run 7
+# 非交互：./aws-ops/aws_test.sh 5 -v  |  ./aws-ops/aws_test.sh run 7
 if [[ "${1:-}" == "run" ]]; then
   shift || true
   [[ -n "${1:-}" ]] || {
@@ -130,8 +130,8 @@ if [[ -n "${1:-}" ]] && [[ "$1" =~ ^[0-9]+$ ]]; then
 fi
 
 if [[ ! -t 0 ]] || [[ ! -t 1 ]]; then
-  printf '请在本机交互终端运行：\n  ./ops/hztech_ops_menu.sh\n' >&2
-  printf '或非交互：./ops/hztech_ops_menu.sh 1   /   ./ops/hztech_ops_menu.sh run 5 -v   /   ./ops/hztech_ops_menu.sh run 7\n' >&2
+  printf '请在本机交互终端运行：\n  ./aws-ops/aws_test.sh\n' >&2
+  printf '或非交互：./aws-ops/aws_test.sh 1   /   ./aws-ops/aws_test.sh run 5 -v   /   ./aws-ops/aws_test.sh run 7\n' >&2
   exit 1
 fi
 
@@ -154,7 +154,7 @@ while true; do
     exit 0
   fi
   if [[ "$choice" -gt 7 ]]; then
-    printf '请输入 0–7（全库导入请用 ./ops/gp_ops.sh 或 python3 ops/pg_ows_import.py）。\n'
+    printf '请输入 0–7（全库导入请用 ./aws-ops/database/pg_ops.sh 或 python3 aws-ops/database/pg_ows_import.py）。\n'
     continue
   fi
   set +e

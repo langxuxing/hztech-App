@@ -10,22 +10,22 @@ positions / profit-history / ticker / pending-orders 等通过本模块解析密
 - account_balance_snapshots：cash_balance=USDT 资产余额(cashBal)，available_margin=可用保证金(availEq)，used_margin=占用；equity_usdt=权益
 - （已弃用 tradingbots.json；盈亏快照以 account_balance_snapshots 为准）
 - OKX 当前持仓（每合约一行：多/空各计一条仓位腿 open_leg_count，张数与分项/合计未实现盈亏，多/空加权预估强平价 liqPx）→ account_open_positions_snapshots
-- 定时余额写入后：按账户节流（默认至多每小时）检测近 92 日 UTC 是否缺日，若有则调 OKX bills-archive（USDT bal）补全 account_balance_snapshots；权益按最近快照 equity/可用保证金 比例估算；日绩效 account_daily_performance 由 main 周期末尾仅重算「北京当天」、凌晨任务固化「昨天」，不全表重建
+- OKX bills-archive 缺日补全 account_balance_snapshots 不在定时任务内执行；仅管理员 HTTP、``baasapi/pg_data_fill.py`` 或 ``aws-ops/code/balance_snapshots_bills_backfill.sh``；日绩效 account_daily_performance 由 main 周期末尾仅 UPSERT「北京当天」、北京每日 00:01–00:05（可跨日补跑）固化「昨天」，不全表重建
 - 多时点快照经 strategy_efficiency.daily_cash_delta_by_utc_day 汇总为 UTC 自然日现金增量，再算现金收益率%、策略能效
 - OKX 历史仓位 → account_positions_history（SWAP+FUTURES 合并去重，深分页；自库内最大 uTime 起向前重叠 60s 增量拉取；
   统计口径与接口一致：时间用 uTime 平仓/更新时刻，非 cTime；净盈亏优先 realizedPnl）；
   日绩效由 db.account_daily_performance_rebuild_days_for_accounts 按北京日增量写入（main 定时统一刷当天；历史行可手工修正不被每轮全删）
-- 各账户静态字段（与 SQLite account_list 同步）；UTC 每月 1 日 00:10 定时任务写入 account_month_balance_baseline（不再由余额同步顺带插入）
+- 各账户静态字段（与 SQLite account_list 同步）；北京时间每月 1 日 00:10–00:15 定时任务写入 account_month_balance_baseline（不再由余额同步顺带插入）
 """
 from __future__ import annotations
 
 import logging
 import os
-import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from hztech_log_format import short_network_err_text
 
@@ -45,9 +45,7 @@ ACCOUNTS_DIR = Path(__file__).resolve().parent
 _LOG_ACCOUNT_COL_WIDTH = 20
 # 历史仓位增量拉取：以库内最大 uTime 为基准再向前重叠，避免漏单与重复全量分页
 _POSITIONS_HISTORY_OVERLAP_MS = 60_000
-_BILLS_BACKFILL_MIN_INTERVAL_SEC = 3600.0
 _BILLS_BACKFILL_LOOKBACK_DAYS = 92
-_last_okx_bills_backfill_monotonic: dict[str, float] = {}
 
 
 def _fmt_log_account_id(account_id: str, width: int = _LOG_ACCOUNT_COL_WIDTH) -> str:
@@ -299,7 +297,7 @@ def sync_account_list_after_account_list_write(db_module: Any) -> None:
 
 def account_month_balance_baseline_missing_current_month(db_module: Any) -> bool:
     """存在可拉密钥的启用账户但当月无 account_month_balance_baseline 行时返回 True。"""
-    ym = datetime.now(timezone.utc).strftime("%Y-%m")
+    ym = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m")
     for row in iter_okx_accounts(enabled_only=True):
         aid = str(row.get("account_id") or "").strip()
         if not resolve_okx_config_path(aid):
@@ -312,13 +310,13 @@ def account_month_balance_baseline_missing_current_month(db_module: Any) -> bool
 def run_account_month_balance_baseline_rollover(
     db_module: Any, logger: logging.Logger | None = None
 ) -> None:
-    """UTC 每月 1 日 00:10 定时：拉取各启用账户 OKX 余额，upsert 当月 account_month_balance_baseline。"""
+    """北京时间每月 1 日 00:10–00:15 定时：拉取各启用账户 OKX 余额，upsert 当月 account_month_balance_baseline（YYYY-MM 为北京历月）。"""
     log = logger or logging.getLogger(__name__)
     import exchange.okx as okx_mod
 
     sync_account_list_from_json(db_module)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    ym = datetime.now(timezone.utc).strftime("%Y-%m")
+    ym = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m")
     for row in iter_okx_accounts(enabled_only=True):
         aid = str(row.get("account_id") or "").strip()
         path = resolve_okx_config_path(aid)
@@ -356,15 +354,16 @@ def run_account_month_balance_baseline_rollover(
 def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None = None) -> None:
     """
     拉取各 OKX 账户余额并写入 account_balance_snapshots。
-    当月月初 initial_equity / initial_balance（原 open_cash）由 UTC 每月 1 日 00:10 定时任务写入 account_month_balance_baseline。
+    当月月初 initial_equity / initial_balance（原 open_cash）由北京时间每月 1 日 00:10–00:15 定时任务写入 account_month_balance_baseline。
     应在定时器内调用（建议每 5 分钟）。
 
-    每个成功拉取余额的账户：至多每小时检测近 92 个 UTC 自然日是否缺快照行；有缺则调
-    bills-archive 补全。日绩效「当天」由 main 账户同步周期末尾统一重算。
+    不在此函数内调用 bills-archive 缺日补全（仅管理员手工，见 ``pg_data_fill``）。
+    日绩效「当天」由 main 账户同步周期末尾统一重算。
     """
     log = logger or logging.getLogger(__name__)
     import exchange.okx as okx_mod
 
+    # 同步账户列表
     sync_account_list_from_json(db_module)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
@@ -378,6 +377,7 @@ def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None 
             log.debug("⏭ %s │ 无密钥", _fmt_log_account_id(aid))
             continue
 
+        # 拉取余额
         live = okx_mod.okx_fetch_balance(config_path=path)
         if not live:
             db_module.log_insert(
@@ -388,12 +388,16 @@ def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None 
             )
             continue
 
-        total_eq, cash_bal, avail_eq, used_m = _okx_balance_amounts(live)
+        # 计算余额
+        total_eq, cash_bal, avail_eq, used_m = _okx_balance_amounts(live)   
+        # 计算收益  
         profit_amount, profit_percent = profit_vs_initial(initial, total_eq)
+        # 计算资产余额收益
         balance_profit_amount, balance_profit_percent = cash_profit_vs_initial(
             initial, cash_bal
         )
 
+        # 写入数据库
         db_module.account_snapshot_insert(
             account_id=aid,
             snapshot_at=ts,
@@ -416,28 +420,6 @@ def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None 
             int(round(used_m)),
         )
 
-        try:
-            now_mono = time.monotonic()
-            last = _last_okx_bills_backfill_monotonic.get(aid)
-            if last is not None and (now_mono - last) < _BILLS_BACKFILL_MIN_INTERVAL_SEC:
-                pass
-            else:
-                if not db_module.account_balance_snapshots_has_gap_in_recent_utc_days(
-                    aid, _BILLS_BACKFILL_LOOKBACK_DAYS
-                ):
-                    _last_okx_bills_backfill_monotonic[aid] = now_mono
-                else:
-                    _last_okx_bills_backfill_monotonic[aid] = now_mono
-                    n_b, _bf = backfill_account_snapshots_from_okx_bills(
-                        db_module, aid, log, days=_BILLS_BACKFILL_LOOKBACK_DAYS
-                    )
-        except Exception as e:
-            log.warning(
-                "⚠️ 💰 账单回填 │ %s │ %s",
-                _fmt_log_account_id(aid),
-                short_network_err_text(e),
-            )
-
     # 日绩效仅「当天」由 main._job_fetch_account_and_save_snapshots 末尾统一重算，避免此处重复
 
 
@@ -458,13 +440,17 @@ def backfill_account_snapshots_from_okx_bills(
     import exchange.okx as okx_mod
 
     log = logger or logging.getLogger(__name__)
-    aid = str(account_id or "").strip()
-    if not aid:
+    acc_id = str(account_id or "").strip()
+    if not acc_id:
         return 0, "缺少 account_id"
-    br = okx_account_disabled_exchange_reason(aid)
+
+    # 检测账户是否禁用
+    br = okx_account_disabled_exchange_reason(acc_id)
     if br:
         return 0, br
-    path = resolve_okx_config_path(aid)
+    # 获取密钥路径
+    path = resolve_okx_config_path(acc_id)
+    # 检测密钥路径是否存在
     if not path or not path.is_file():
         return 0, "无密钥"
 
@@ -480,6 +466,7 @@ def backfill_account_snapshots_from_okx_bills(
     )
     end_ms = int(now.timestamp() * 1000)
 
+    # 拉取账单
     rows, err = okx_mod.okx_fetch_account_bills_archive_usdt(
         path, begin_ms=begin_ms, end_ms=end_ms
     )
@@ -488,7 +475,7 @@ def backfill_account_snapshots_from_okx_bills(
     if err:
         log.warning(
             "⚠️ 📄 账单补全 │ %s │ %s",
-            _fmt_log_account_id(aid),
+            _fmt_log_account_id(acc_id),
             short_network_err_text(err),
         )
 
@@ -521,11 +508,11 @@ def backfill_account_snapshots_from_okx_bills(
     if not filled_bal:
         return 0, "账单区间内无 USDT 余额记录"
 
-    meta = db_module.account_list_get(aid)
+    meta = db_module.account_list_get(acc_id)
     initial = float(meta["initial_capital"]) if meta else 0.0
     if initial <= 0:
         for row in iter_okx_accounts(enabled_only=False):
-            if str(row.get("account_id") or "").strip() == aid:
+            if str(row.get("account_id") or "").strip() == acc_id:
                 initial = _initial_capital(row)
                 break
 
@@ -533,7 +520,7 @@ def backfill_account_snapshots_from_okx_bills(
     cur_d = start_d
     while cur_d <= end_d:
         day_s = cur_d.isoformat()
-        if db_module.account_snapshot_exists_on_utc_date(aid, day_s):
+        if db_module.account_snapshot_exists_on_utc_date(acc_id, day_s):
             cur_d = cur_d + timedelta(days=1)
             continue
         if cur_d not in filled_bal:
@@ -541,7 +528,7 @@ def backfill_account_snapshots_from_okx_bills(
             continue
         cash_b = float(filled_bal[cur_d])
         cutoff = f"{day_s}T23:59:58.000000Z"
-        prev = db_module.account_snapshot_last_before_instant(aid, cutoff)
+        prev = db_module.account_snapshot_last_before_instant(acc_id, cutoff)
         avail_prev = float(prev["available_margin"]) if prev else 0.0
         if avail_prev <= 1e-12 and prev is not None:
             avail_prev = float(prev.get("cash_balance") or 0.0)
@@ -554,7 +541,7 @@ def backfill_account_snapshots_from_okx_bills(
         )
         snap_at = f"{day_s}T23:59:59.000000Z"
         db_module.account_snapshot_insert(
-            account_id=aid,
+            account_id=acc_id,
             snapshot_at=snap_at,
             cash_balance=cash_b,
             equity_usdt=equity,
@@ -702,7 +689,7 @@ def refresh_account_daily_performance_today_provisional_safe(
     account_ids: list[str],
     logger: logging.Logger | None = None,
 ) -> None:
-    """北京「当天」日绩效临时刷写：UPSERT；日界前最后一笔 + 日内快照（SOD 口径）与当日平仓聚合；不删历史日。失败仅记日志。"""
+    """北京「当天」日绩效临时刷写：UPSERT、北京当日余额快照首末 + 当日平仓聚合；不删历史日。失败仅记日志。"""
     log = logger or logging.getLogger(__name__)
     ids = [str(i).strip() for i in (account_ids or []) if str(i).strip()]
     if not ids:
@@ -731,17 +718,16 @@ def rebuild_account_daily_performance_days_safe(
     account_ids: list[str],
     beijing_days: list[str],
     logger: logging.Logger | None = None,
-) -> bool:
-    """仅重算指定北京日的 account_daily_performance 行；失败仅记录日志。成功返回 True（供凌晨定时器决定是否推进游标）。"""
+) -> None:
+    """仅重算指定北京日的 account_daily_performance 行；失败仅记录日志。"""
     log = logger or logging.getLogger(__name__)
     ids = [str(i).strip() for i in (account_ids or []) if str(i).strip()]
     if not ids or not beijing_days:
-        return False
+        return
     try:
         db_module.account_daily_performance_rebuild_days_for_accounts(
             ids, beijing_days, _account_benchmark_inst_map()
         )
-        return True
     except Exception as ex:
         log.warning("⚠️ 📊 日表现按日重建 │ %s", ex)
         try:
@@ -753,7 +739,6 @@ def rebuild_account_daily_performance_days_safe(
             )
         except Exception:
             pass
-        return False
 
 
 def refresh_all_positions_history(

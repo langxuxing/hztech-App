@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def _load_orchestrator():
-    path = ROOT / "baasapi" / "deploy_orchestrator.py"
+    path = ROOT / "aws-ops" / "code" / "deploy_orchestrator.py"
     spec = importlib.util.spec_from_file_location("deploy_orchestrator", path)
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
@@ -31,7 +31,7 @@ class TestDeployOrchestratorParser(unittest.TestCase):
         m = _load_orchestrator()
         p = m._build_parser()
         ns = p.parse_args(["local"])
-        self.assertEqual(ns.flutter_mode, "debug")
+        self.assertEqual(ns.flutter_mode, "release")
         self.assertFalse(ns.no_start)
 
     def test_db_aliases(self):

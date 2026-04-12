@@ -3367,29 +3367,25 @@ def _beijing_sorted_days_window_ms(
     return int(start.timestamp() * 1000), int(end.timestamp() * 1000)
 
 
-def _signed_equity_cash_delta_beijing_day_detail(
+def _signed_equity_cash_delta_beijing_day(
     snaps: list[tuple[Any, float, float]], day: str
-) -> tuple[float | None, float | None, float | None, float | None, float | None, float | None]:
-    """北京日界内：权益/现金 signed 差分，以及 SOD 与当日最后快照上的权益/现金。
-
-    返回 (eq_ch, cash_ch, sod_eq, sod_cash, last_eq, last_cash)；无当日快照时前两项与 last 为 None。
-    """
+) -> tuple[float | None, float | None]:
     from datetime import datetime, timedelta, timezone
     from zoneinfo import ZoneInfo
 
     parts = (day or "").strip().split("-")
     if len(parts) != 3:
-        return None, None, None, None, None, None
+        return None, None
     try:
         y, m, d = int(parts[0]), int(parts[1]), int(parts[2])
     except ValueError:
-        return None, None, None, None, None, None
+        return None, None
     sh = ZoneInfo("Asia/Shanghai")
     day_start = datetime(y, m, d, 0, 0, 0, tzinfo=sh).astimezone(timezone.utc)
     day_end = day_start + timedelta(days=1)
     in_day = [(dt, eq, cash) for dt, eq, cash in snaps if day_start <= dt < day_end]
     if not in_day:
-        return None, None, None, None, None, None
+        return None, None
     last_eq, last_cash = in_day[-1][1], in_day[-1][2]
     first_eq, first_cash = in_day[0][1], in_day[0][2]
     sod_eq: float | None = None
@@ -3402,16 +3398,7 @@ def _signed_equity_cash_delta_beijing_day_detail(
         sod_eq = first_eq
     if sod_cash is None:
         sod_cash = first_cash
-    le, lc = float(last_eq), float(last_cash)
-    se, sc = float(sod_eq), float(sod_cash)
-    return (le - se, lc - sc, se, sc, le, lc)
-
-
-def _signed_equity_cash_delta_beijing_day(
-    snaps: list[tuple[Any, float, float]], day: str
-) -> tuple[float | None, float | None]:
-    eq_ch, cash_ch, _, _, _, _ = _signed_equity_cash_delta_beijing_day_detail(snaps, day)
-    return eq_ch, cash_ch
+    return (float(last_eq) - float(sod_eq), float(last_cash) - float(sod_cash))
 
 
 def _month_realized_denom_from_open(
@@ -3901,69 +3888,66 @@ def _account_balance_snapshot_first_last_on_conn(
     return first, last
 
 
-def _utc_ms_to_snapshot_iso_z(ms: int) -> str:
-    """UTC 毫秒 → 与 account_snapshot_insert 一致的 ISO Z 串，供快照表字典序比较。"""
-    from datetime import datetime, timezone
+def _beijing_day_utc_snapshot_at_range_iso(beijing_day: str) -> tuple[str, str] | None:
+    """北京自然日 ``YYYY-MM-DD`` 对应 ``snapshot_at``（UTC ISO 文本）左闭右开区间 ``[lo, hi)``，用于筛选当日快照。"""
+    from datetime import datetime, timedelta, timezone
+    from zoneinfo import ZoneInfo
 
-    dt = datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc)
-    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond:06d}Z"
+    lo = _normalize_beijing_ymd(str(beijing_day or "").strip())
+    if not lo:
+        return None
+    try:
+        y, m, d = int(lo[:4]), int(lo[5:7]), int(lo[8:10])
+    except ValueError:
+        return None
+    sh = ZoneInfo("Asia/Shanghai")
+    day_start = datetime(y, m, d, 0, 0, 0, tzinfo=sh)
+    day_end = day_start + timedelta(days=1)
+    lo_utc = day_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    hi_utc = day_end.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return lo_utc, hi_utc
 
 
-def _account_balance_snapshot_rows_for_beijing_provisional(
-    conn: Any, account_id: str, t0_ms: int, t1_ms: int, beijing_day: str
-) -> list[tuple[str, float, float]]:
-    """北京日 [t0_ms,t1_ms) 临时 ADP：日界前最后一条快照 + 日内快照序列。
-
-    若 ``beijing_day`` 为当前北京日历日，则上界截断为 min(now_utc_ms, t1_ms)（仅算到「此刻」）；
-    若为历史日则用完整 ``t1_ms``，便于测试与补算。
-    """
-    from datetime import datetime, timezone
-
+def _account_balance_snapshot_first_last_beijing_day_on_conn(
+    conn: Any, account_id: str, beijing_day: str
+) -> tuple[tuple[str, float, float] | None, tuple[str, float, float] | None]:
+    """同一连接内：指定北京日内按 ``snapshot_at`` 最早 / 最晚一条 (snapshot_at, equity_usdt, cash_balance)；无当日快照时返回 (None, None)。"""
     aid = (account_id or "").strip()
     if not aid:
-        return []
-    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    day_n = _normalize_beijing_ymd(str(beijing_day or "").strip())
-    if day_n and day_n == beijing_calendar_today_ymd():
-        hi_ms = min(int(t1_ms), max(int(t0_ms), now_ms))
-    else:
-        hi_ms = int(t1_ms)
-    lo_iso = _utc_ms_to_snapshot_iso_z(int(t0_ms))
-    hi_iso = _utc_ms_to_snapshot_iso_z(hi_ms)
-    cur = conn.execute(
-        """
-        SELECT snapshot_at, equity_usdt, cash_balance
-        FROM account_balance_snapshots
-        WHERE account_id = ? AND snapshot_at < ?
-        ORDER BY snapshot_at DESC
-        LIMIT 1
-        """,
-        (aid, lo_iso),
-    )
-    pre = cur.fetchone()
+        return None, None
+    bounds = _beijing_day_utc_snapshot_at_range_iso(beijing_day)
+    if not bounds:
+        return None, None
+    lo_utc, hi_utc = bounds
     cur = conn.execute(
         """
         SELECT snapshot_at, equity_usdt, cash_balance
         FROM account_balance_snapshots
         WHERE account_id = ? AND snapshot_at >= ? AND snapshot_at < ?
         ORDER BY snapshot_at ASC
+        LIMIT 1
         """,
-        (aid, lo_iso, hi_iso),
+        (aid, lo_utc, hi_utc),
     )
-    in_day = [(str(r[0]), float(r[1] or 0.0), float(r[2] or 0.0)) for r in cur.fetchall()]
-    rows: list[tuple[str, float, float]] = []
-    if pre:
-        rows.append((str(pre[0]), float(pre[1] or 0.0), float(pre[2] or 0.0)))
-    rows.extend(in_day)
-    seen: set[str] = set()
-    out: list[tuple[str, float, float]] = []
-    for sa, eq, c in rows:
-        k = (sa or "").strip()
-        if not k or k in seen:
-            continue
-        seen.add(k)
-        out.append((sa, eq, c))
-    return out
+    rf = cur.fetchone()
+    first = (
+        (str(rf[0]), float(rf[1] or 0.0), float(rf[2] or 0.0)) if rf else None
+    )
+    cur = conn.execute(
+        """
+        SELECT snapshot_at, equity_usdt, cash_balance
+        FROM account_balance_snapshots
+        WHERE account_id = ? AND snapshot_at >= ? AND snapshot_at < ?
+        ORDER BY snapshot_at DESC
+        LIMIT 1
+        """,
+        (aid, lo_utc, hi_utc),
+    )
+    rl = cur.fetchone()
+    last = (
+        (str(rl[0]), float(rl[1] or 0.0), float(rl[2] or 0.0)) if rl else None
+    )
+    return first, last
 
 
 def _account_daily_performance_net_close_for_beijing_window(
@@ -4010,13 +3994,14 @@ def account_daily_performance_refresh_today_provisional_for_accounts(
 ) -> None:
     """
     北京「当天」account_daily_performance 临时刷写（账户同步周期末尾调用）：
-    不 DELETE 其它历史日；对指定日 UPSERT。平仓仅聚合当日北京窗；快照仅取「北京日界前最后一条 + 日内至当前」，
-    与 ``_signed_equity_cash_delta_beijing_day`` 的 SOD 口径一致，避免全表扫描与用「全库最早快照」误算日内%。
-    列义（仅当日临时行；次日凌晨 ``account_daily_performance_rebuild_days_for_accounts`` 固化「昨天」等日界完整值）：
-    - net_realized_pnl / close_pos_count / pnl_pct：当日平仓（u_time_ms→北京日）与月初分母；
-    - balance_changed / equlity_changed：北京日 SOD（日界前最后一笔或日内首笔）→ 当前最新快照的现金/权益差；
-    - balance_changed_pct / equity_changed_pct：上述差分相对 SOD 现金/权益的%；
+    不 DELETE 其它历史日；对指定日 UPSERT；平仓聚合为当日北京窗；现金/权益差分仅使用**北京当日**
+    ``account_balance_snapshots`` 中按 ``snapshot_at`` 的最早与最晚一行（非全库历史最早），避免误用开户首日快照作分母。
+    列义（仅当日临时行，次日凌晨 ``account_daily_performance_rebuild_days_for_accounts`` 固化「昨天」后按日界重算覆盖）：
+    - net_realized_pnl / close_pos_count / pnl_pct：当日已平仓（u_time_ms→北京日）与月初分母；
+    - balance_changed / balance_changed_pct：当日末笔快照现金 − 当日首笔快照现金，及相对首笔的%；
+    - equlity_changed / equity_changed_pct：当日末笔权益 − 当日首笔权益，及相对首笔的%；
     - instrument_id / market_truevolatility / efficiency_ratio：与完整重算一致（对标合约 TR + 能效）。
+    若该北京日在库内尚无余额快照，则跳过该户（不写 UPSERT）。
     """
     from datetime import datetime, timezone
 
@@ -4049,32 +4034,23 @@ def account_daily_performance_refresh_today_provisional_for_accounts(
             meta = account_list_get(aid)
             initial = float(meta["initial_capital"]) if meta else 0.0
 
-            snap_rows = _account_balance_snapshot_rows_for_beijing_provisional(
-                conn, aid, t0_ms, t1_ms, day
+            first, last = _account_balance_snapshot_first_last_beijing_day_on_conn(
+                conn, aid, day
             )
-            if not snap_rows:
+            if first is None or last is None:
                 continue
-            snaps_dt = _snapshots_sorted_dt_equity_cash(snap_rows)
-            (
-                equlity_changed_v,
-                balance_changed_v,
-                sod_eq,
-                sod_cash,
-                _last_eq,
-                _last_cash,
-            ) = _signed_equity_cash_delta_beijing_day_detail(snaps_dt, day)
-            if balance_changed_v is None or equlity_changed_v is None:
-                continue
-            balance_changed = float(balance_changed_v)
-            equlity_changed = float(equlity_changed_v)
+            _, fe, fc = first
+            _, le, lc = last
 
+            balance_changed = float(lc) - float(fc)
             balance_changed_pct: float | None = None
-            if sod_cash is not None and float(sod_cash) > t_eps:
-                balance_changed_pct = balance_changed / float(sod_cash) * 100.0
+            if float(fc) > t_eps:
+                balance_changed_pct = balance_changed / float(fc) * 100.0
 
+            equlity_changed = float(le) - float(fe)
             equity_changed_pct: float | None = None
-            if sod_eq is not None and float(sod_eq) > t_eps:
-                equity_changed_pct = equlity_changed / float(sod_eq) * 100.0
+            if float(fe) > t_eps:
+                equity_changed_pct = equlity_changed / float(fe) * 100.0
 
             net_pnl, close_pos_count = _account_daily_performance_net_close_for_beijing_window(
                 conn, aid, t0_ms, t1_ms
