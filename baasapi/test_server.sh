@@ -62,9 +62,9 @@ echo -n "GET / (BaasAPI JSON) ... "
 code=$(curl -s -o /dev/null -w "%{http_code}" $CURL_EXTRA --connect-timeout 5 --max-time "$CURL_TIMEOUT" "$HOST_URL_API/" || echo "000")
 [ "$code" = "200" ] && echo "OK ($code)" || { echo "FAIL ($code)"; exit 1; }
 
-# 2) 策略状态（无需登录）
-echo -n "GET /api/strategy/status ... "
-code=$(curl -s -o /dev/null -w "%{http_code}" $CURL_EXTRA --connect-timeout 5 --max-time "$CURL_TIMEOUT" "$HOST_URL_API/api/strategy/status" || echo "000")
+# 2) 健康检查（无需登录）
+echo -n "GET /api/health ... "
+code=$(curl -s -o /dev/null -w "%{http_code}" $CURL_EXTRA --connect-timeout 5 --max-time "$CURL_TIMEOUT" "$HOST_URL_API/api/health" || echo "000")
 [ "$code" = "200" ] && echo "OK ($code)" || { echo "FAIL ($code)"; exit 1; }
 
 # 3) 登录（需已知用户，缺省 admin/i23321，若未配置则跳过断言）

@@ -54,14 +54,14 @@ class TestAuthRequired:
         "method,path",
         [
             ("GET", "/api/account-profit"),
-            ("GET", "/api/tradingbots"),
+            ("GET", "/api/accounts"),
             ("GET", "/api/logs"),
             ("GET", "/api/users"),
             ("GET", "/api/okx/positions"),
-            ("GET", "/api/tradingbots/simpleserver-lhg/positions"),
-            ("GET", "/api/tradingbots/simpleserver-lhg/profit-history"),
-            ("GET", "/api/tradingbots/simpleserver-lhg/seasons"),
-            ("GET", "/api/tradingbots/simpleserver-lhg/tradingbot-events"),
+            ("GET", "/api/accounts/simpleserver-lhg/positions"),
+            ("GET", "/api/accounts/simpleserver-lhg/profit-history"),
+            ("GET", "/api/accounts/simpleserver-lhg/seasons"),
+            ("GET", "/api/accounts/simpleserver-lhg/tradingbot-events"),
             ("POST", "/api/tradingbots/simpleserver-lhg/start"),
             ("POST", "/api/tradingbots/simpleserver-lhg/stop"),
             ("POST", "/api/tradingbots/simpleserver-lhg/restart"),
@@ -85,7 +85,7 @@ class TestAuthRequired:
         assert "accounts" in data
 
     def test_tradingbots_with_token(self, client, auth_headers):
-        r = client.get("/api/tradingbots", headers=auth_headers)
+        r = client.get("/api/accounts", headers=auth_headers)
         assert r.status_code == 200
         data = r.get_json()
         assert "bots" in data or "tradingbots" in data
@@ -107,17 +107,17 @@ class TestTradingbotsConfigAndApi:
     def test_tradingbots_excludes_default_simpleserver_when_no_tradingbots_json(
         self, client, auth_headers
     ):
-        r = client.get("/api/tradingbots", headers=auth_headers)
+        r = client.get("/api/accounts", headers=auth_headers)
         assert r.status_code == 200
         data = r.get_json()
         bots = data.get("bots") or data.get("tradingbots") or []
         ids = {b.get("tradingbot_id") for b in bots if b.get("tradingbot_id")}
         assert self.LEGACY_MOCK_BOT_IDS.isdisjoint(ids), (
-            f"/api/tradingbots 不应默认包含模拟 simpleserver bot，实际 ids={ids}"
+            f"/api/accounts 不应默认包含模拟 simpleserver bot，实际 ids={ids}"
         )
 
     def test_tradingbots_each_has_required_fields(self, client, auth_headers):
-        r = client.get("/api/tradingbots", headers=auth_headers)
+        r = client.get("/api/accounts", headers=auth_headers)
         assert r.status_code == 200
         data = r.get_json()
         bots = data.get("bots") or data.get("tradingbots") or []
@@ -129,42 +129,11 @@ class TestTradingbotsConfigAndApi:
             assert "can_control" in b
 
     def test_tradingbots_response_total_matches_list(self, client, auth_headers):
-        r = client.get("/api/tradingbots", headers=auth_headers)
+        r = client.get("/api/accounts", headers=auth_headers)
         assert r.status_code == 200
         data = r.get_json()
         bots = data.get("bots") or data.get("tradingbots") or []
         assert data.get("total") == len(bots), "total 应与 bots 长度一致"
-
-
-class TestStrategyApi:
-    """/api/strategy/status 仍无需 token；start/stop/restart 需登录且为交易员或管理员。"""
-
-    def test_strategy_status(self, client):
-        r = client.get("/api/strategy/status")
-        assert r.status_code == 200
-        data = r.get_json()
-        assert "bots" in data
-        assert "simpleserver-lhg" in data["bots"]
-        assert "simpleserver-hztech" in data["bots"]
-
-    def test_strategy_start_stop_restart_need_bot_id(self, client, trader_headers):
-        for path in ["/api/strategy/start", "/api/strategy/stop", "/api/strategy/restart"]:
-            r = client.post(path)
-            assert r.status_code == 401
-        r = client.get("/api/strategy/status")
-        assert r.status_code == 200
-        r = client.post(
-            "/api/strategy/start?bot_id=simpleserver-lhg",
-            headers=trader_headers,
-        )
-        assert r.status_code == 200
-
-    def test_strategy_start_ok_for_admin(self, client, auth_headers):
-        r = client.post(
-            "/api/strategy/start?bot_id=simpleserver-lhg",
-            headers=auth_headers,
-        )
-        assert r.status_code == 200
 
 
 class TestBotApi:
@@ -213,16 +182,16 @@ class TestBotApi:
 
 
 class TestPositionsApi:
-    """GET /api/tradingbots/<bot_id>/positions 从后台读取当前持仓（需 token）"""
+    """GET /api/accounts/<account_id>/positions 从后台读取当前持仓（需 token）"""
 
     def test_positions_require_auth(self, client):
-        r = client.get("/api/tradingbots/simpleserver-lhg/positions")
+        r = client.get("/api/accounts/simpleserver-lhg/positions")
         assert r.status_code == 401
 
     def test_positions_with_token_returns_structure(self, client, auth_headers):
         """带 token 调用返回 200，且包含 success、bot_id、positions 列表。"""
         r = client.get(
-            "/api/tradingbots/simpleserver-lhg/positions",
+            "/api/accounts/simpleserver-lhg/positions",
             headers=auth_headers,
         )
         assert r.status_code == 200, r.get_data(as_text=True)
@@ -241,7 +210,7 @@ class TestPositionsApi:
     def test_positions_known_bot_id(self, client, auth_headers):
         """指定 simpleserver-hztech 同样返回合规结构。"""
         r = client.get(
-            "/api/tradingbots/simpleserver-hztech/positions",
+            "/api/accounts/simpleserver-hztech/positions",
             headers=auth_headers,
         )
         assert r.status_code == 200
@@ -422,7 +391,7 @@ class TestCustomerScope:
         tok = lr.get_json()["token"]
         assert lr.get_json().get("role") == "customer"
         h = {"Authorization": f"Bearer {tok}"}
-        r = client.get("/api/tradingbots", headers=h)
+        r = client.get("/api/accounts", headers=h)
         assert r.status_code == 200
         bots = r.get_json().get("bots") or []
         ids = {b.get("tradingbot_id") for b in bots}
@@ -460,7 +429,9 @@ class TestCustomerScope:
         ids.discard("")
         assert ids <= {"Hztech_Devops"}
 
-    def test_customer_strategy_status_filtered_when_authenticated(self, client):
+    def test_customer_accounts_filtered_when_authenticated(
+        self, client, auth_headers
+    ):
         import hashlib
 
         import db as tdb
@@ -481,17 +452,28 @@ class TestCustomerScope:
         assert lr.status_code == 200
         tok = lr.get_json()["token"]
         h = {"Authorization": f"Bearer {tok}"}
-        r0 = client.get("/api/strategy/status")
-        assert r0.status_code == 200
-        full_bots = set((r0.get_json() or {}).get("bots") or {})
-        r = client.get("/api/strategy/status", headers=h)
+        r_admin = client.get("/api/accounts", headers=auth_headers)
+        assert r_admin.status_code == 200
+        admin_list = r_admin.get_json() or {}
+        admin_bots = admin_list.get("bots") or []
+        full_ids = {
+            (b.get("tradingbot_id") or b.get("bot_id") or "").strip()
+            for b in admin_bots
+        }
+        full_ids.discard("")
+        r = client.get("/api/accounts", headers=h)
         assert r.status_code == 200
         data = r.get_json()
-        cust_bots = set(data.get("bots") or {})
-        assert cust_bots <= full_bots
-        assert cust_bots <= {"simpleserver-lhg"}
-        if "simpleserver-hztech" in full_bots:
-            assert "simpleserver-hztech" not in cust_bots
+        cust_bots = data.get("bots") or []
+        cust_ids = {
+            (b.get("tradingbot_id") or b.get("bot_id") or "").strip()
+            for b in cust_bots
+        }
+        cust_ids.discard("")
+        assert cust_ids <= full_ids
+        assert cust_ids <= {"simpleserver-lhg"}
+        if "simpleserver-hztech" in full_ids:
+            assert "simpleserver-hztech" not in cust_ids
 
 
 class TestCustomerAccountSetupApi:
@@ -621,11 +603,11 @@ class TestOkxPositionsGlobalApi:
 
 
 class TestBotProfitHistoryApi:
-    """GET /api/tradingbots/<bot_id>/profit-history 盈利历史（需 token）"""
+    """GET /api/accounts/<account_id>/profit-history 盈利历史（需 token）"""
 
     def test_profit_history_with_token(self, client, auth_headers):
         r = client.get(
-            "/api/tradingbots/simpleserver-lhg/profit-history",
+            "/api/accounts/simpleserver-lhg/profit-history",
             headers=auth_headers,
         )
         assert r.status_code == 200
@@ -637,7 +619,7 @@ class TestBotProfitHistoryApi:
 
     def test_profit_history_limit_param(self, client, auth_headers):
         r = client.get(
-            "/api/tradingbots/simpleserver-lhg/profit-history?limit=10",
+            "/api/accounts/simpleserver-lhg/profit-history?limit=10",
             headers=auth_headers,
         )
         assert r.status_code == 200
@@ -647,11 +629,11 @@ class TestBotProfitHistoryApi:
 
 
 class TestBotSeasonsApi:
-    """GET /api/tradingbots/<bot_id>/seasons 赛季列表（需 token）"""
+    """GET /api/accounts/<account_id>/seasons 赛季列表（需 token）"""
 
     def test_seasons_with_token(self, client, auth_headers):
         r = client.get(
-            "/api/tradingbots/simpleserver-lhg/seasons",
+            "/api/accounts/simpleserver-lhg/seasons",
             headers=auth_headers,
         )
         assert r.status_code == 200
@@ -663,11 +645,11 @@ class TestBotSeasonsApi:
 
 
 class TestBotTradingbotEventsApi:
-    """GET /api/tradingbots/<bot_id>/tradingbot-events 启停事件（需 token）"""
+    """GET /api/accounts/<account_id>/tradingbot-events 启停事件（需 token）"""
 
     def test_events_with_token(self, client, auth_headers):
         r = client.get(
-            "/api/tradingbots/simpleserver-lhg/tradingbot-events",
+            "/api/accounts/simpleserver-lhg/tradingbot-events",
             headers=auth_headers,
         )
         assert r.status_code == 200

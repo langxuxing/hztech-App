@@ -27,7 +27,7 @@ class _WebTradingBotControlScreenState
   List<AccountProfit> _accounts = [];
   Map<String, List<BotSeason>> _seasonsByBot = {};
   Map<String, List<StrategyEvent>> _eventsByBot = {};
-  /// 与 `/api/tradingbots` 同步，用于角标「运行中/已停止」；避免仅用 shell 下放的 sharedBots 导致启停后状态不刷新。
+  /// 与 GET `/api/accounts` 同步，用于角标「运行中/已停止」；避免仅用 shell 下放的 sharedBots 导致启停后状态不刷新。
   List<UnifiedTradingBot> _botsSnapshot = [];
   bool _loading = true;
   String? _error;
@@ -924,12 +924,12 @@ class _WebTradingBotControlScreenState
                                   gridDelegate:
                                       SliverGridDelegateWithFixedCrossAxisCount(
                                         crossAxisCount: cross,
-                                        mainAxisSpacing: 8,
+                                        mainAxisSpacing: 6,
                                         crossAxisSpacing: 8,
-                                        // 卡片高度 = 格宽 / childAspectRatio；÷1.2 相对基准 0.91/0.78 高度约 +20%
+                                        // 卡片高度 = 格宽 / childAspectRatio；分母越大格子越矮、底部留白越少（勿过大以免溢出）
                                         childAspectRatio: cross >= 3
-                                            ? 0.91 / 1.2
-                                            : 0.78 / 1.2,
+                                            ? 0.91 / 1.06
+                                            : 0.78 / 1.06,
                                       ),
                                   delegate: SliverChildBuilderDelegate((
                                     context,
@@ -1302,7 +1302,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
 
   /// 控制区相对原先尺寸：宽约 80%；内边距较上一版收紧约 25% 以降低卡片高度。
   static const double _controlBoxScale = 0.75;
-  static const EdgeInsets _controlBoxPadding = EdgeInsets.fromLTRB(8, 5, 8, 8);
+  static const EdgeInsets _controlBoxPadding = EdgeInsets.fromLTRB(8, 3, 8, 5);
 
   /// 赛季/策略控制圆钮：与概览区「全部启动/停止」同款——深色实底 + 亮色图标
   static const _ctrlStartFill = Color(0xFF16352A);
@@ -1452,7 +1452,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
       animation: _pulse,
       builder: (context, _) {
         return FinanceCard(
-          padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+          padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
@@ -1515,7 +1515,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                           ],
                         ),
                         if (widget.bot != null && !widget.bot!.canControl) ...[
-                          const SizedBox(height: 6),
+                          const SizedBox(height: 4),
                           Text(
                             '未配置 accounts 目录下的启停脚本（script_file）',
                             style: Theme.of(context).textTheme.bodySmall
@@ -1589,9 +1589,9 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                   ),
                 ],
               ),
-              const SizedBox(height: 13),
+              const SizedBox(height: 6),
               Text('赛季控制', style: labelStyle), //赛季控制
-              const SizedBox(height: 9),
+              const SizedBox(height: 5),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.baseline,
                 textBaseline: TextBaseline.alphabetic,
@@ -1615,7 +1615,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                   Text(seasonDurationShown, style: durationStyle),
                 ],
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 5),
 
               Align(
                 alignment: Alignment.center,
@@ -1628,7 +1628,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          SizedBox(height: 6 * _controlBoxScale),
+                          SizedBox(height: 3 * _controlBoxScale),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                             children: [
@@ -1668,15 +1668,15 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                 ),
               ),
 
-              const SizedBox(height: 16),
+              const SizedBox(height: 10),
               Divider(
                 height: 1,
                 thickness: 1,
                 color: Colors.white.withValues(alpha: 0.08),
               ),
-              const SizedBox(height: 13),
+              const SizedBox(height: 8),
               Text('策略控制', style: labelStyle),
-              const SizedBox(height: 9),
+              const SizedBox(height: 5),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.baseline,
                 textBaseline: TextBaseline.alphabetic,
@@ -1701,7 +1701,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                 ],
               ),
 
-              const SizedBox(height: 8),
+              const SizedBox(height: 5),
               Align(
                 alignment: Alignment.center,
                 child: FractionallySizedBox(
@@ -1713,9 +1713,9 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          SizedBox(height: 6 * _controlBoxScale),
+                          SizedBox(height: 3 * _controlBoxScale),
                           if (robotBusy) ...[
-                            SizedBox(height: 5 * _controlBoxScale),
+                            SizedBox(height: 4 * _controlBoxScale),
                             ClipRRect(
                               borderRadius: BorderRadius.circular(999),
                               child: const LinearProgressIndicator(
@@ -1723,7 +1723,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                               ),
                             ),
                           ] else if (_running) ...[
-                            SizedBox(height: 5 * _controlBoxScale),
+                            SizedBox(height: 4 * _controlBoxScale),
                             ClipRRect(
                               borderRadius: BorderRadius.circular(999),
                               child: LinearProgressIndicator(
@@ -1737,7 +1737,7 @@ class _AccountGlassCardState extends State<_AccountGlassCard>
                               ),
                             ),
                           ],
-                          SizedBox(height: 8 * _controlBoxScale),
+                          SizedBox(height: 5 * _controlBoxScale),
                           if (canCtl)
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceEvenly,

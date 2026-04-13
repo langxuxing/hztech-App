@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def _load_orchestrator():
-    path = ROOT / "aws-ops" / "code" / "deploy_orchestrator.py"
+    path = ROOT / "ops" / "code" / "deploy_orchestrator.py"
     spec = importlib.util.spec_from_file_location("deploy_orchestrator", path)
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

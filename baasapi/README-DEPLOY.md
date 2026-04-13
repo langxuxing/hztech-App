@@ -92,7 +92,7 @@ cd /home/ec2-user/hztechapp && bash aws-ops/code/install_on_aws.sh
 
 或指定地址：`BASE_URL=http://54.252.181.151:9001 ./baasapi/test_server.sh`
 
-会请求 FlutterApp 根、BaasAPI 根（JSON）、`/api/strategy/status`、`/api/login` 等。
+会请求 FlutterApp 根、BaasAPI 根（JSON）、`/api/health`、`/api/login` 等。
 
 ## 部署后（地址以 `deploy-aws.json` 为准）
 

@@ -10,6 +10,7 @@ import '../user_management_screen.dart';
 import 'web_moneyflow_catchnet_screen.dart';
 import 'web_download_app_page.dart';
 import 'web_tradingbot_control_screen.dart';
+import 'web_account_order_screen.dart';
 import 'web_dashboard_screen.dart';
 import 'web_home_screen.dart';
 import 'web_account_profile_screen.dart';
@@ -36,7 +37,7 @@ class _NavItem {
 
 /// 浏览器端主导航：侧栏 / 抽屉 + 多 Tab，与移动端 [MainScreen] 分流。
 /// 客户（customer）：仅「账户详情」全宽单页，无侧栏；更多菜单含 OKX 账户配置与退出登录。
-/// 其他角色侧栏顺序：主页 → 仪表盘 → 账户收益 → 策略启停 → 策略能效 → 绩效对比表 → 赛季与历史仓位
+/// 其他角色侧栏顺序：主页 → 仪表盘 → 账户收益 → 策略启停 → 账号下单 → 策略能效 → 绩效对比表 → 赛季与历史仓位
 /// → 收网测试（管理员/策略分析师）→ 账户配置（客户 OKX JSON，仅非 Web 客户壳）→ 账户管理 / 用户管理（管理员）→ 下载 → 设置。
 class WebMainShell extends StatefulWidget {
   const WebMainShell({super.key, this.onLogout});
@@ -104,6 +105,18 @@ class _WebMainShellState extends State<WebMainShell> {
           icon: Icons.play_circle_outline,
           selectedIcon: Icons.play_circle,
           page: WebTradingBotControlScreen(sharedBots: bots),
+        ),
+      );
+      final accountOrderTabIndex = out.length;
+      out.add(
+        _NavItem(
+          title: '账号下单',
+          icon: Icons.swap_vert_circle_outlined,
+          selectedIcon: Icons.swap_vert_circle,
+          page: WebAccountOrderScreen(
+            sharedBots: bots,
+            periodicRefreshActive: _index == accountOrderTabIndex,
+          ),
         ),
       );
     }

@@ -2303,7 +2303,8 @@ def account_list_upsert(
         conn.close()
 
 
-def account_list_get(account_id: str) -> dict | None:
+# ---------- 账户列表行 ----------
+def get_accountinfo_by_id(account_id: str) -> dict | None:
     """按 account_id 读一行（表：account_list）。"""
     conn = get_conn()
     try:
@@ -2334,8 +2335,12 @@ def account_list_get(account_id: str) -> dict | None:
         conn.close()
 
 
-def account_list_list_okx(*, enabled_only: bool = True) -> list[dict]:
-    """列出表 account_list 中 OKX 且已配置密钥文件名的行；字段形状与 Account_List.json 单行一致，供交易机器人启停与 /api/tradingbots 使用。"""
+# AccountMgr 等历史命名
+account_list_get = get_accountinfo_by_id
+
+
+def get_accountinfo_list_okx(*, enabled_only: bool = True) -> list[dict]:
+    """列出表 account_list 中 OKX 且已配置密钥文件名的行；字段形状与 Account_List.json 单行一致，供策略启停与 GET /api/accounts 使用。"""
     conn = get_conn()
     try:
         sql = """SELECT account_id, account_name, exchange_account, symbol, initial_capital,
@@ -2362,6 +2367,101 @@ def account_list_list_okx(*, enabled_only: bool = True) -> list[dict]:
                     "account_key_file": str(r[6] or ""),
                     "script_file": str(r[7] or ""),
                     "enabled": enabled_bool,
+                }
+            )
+        return out
+    finally:
+        conn.close()
+
+
+def account_list_insert_if_missing(
+    account_id: str,
+    initial_capital: float,
+    *,
+    account_name: str = "",
+    exchange_account: str = "",
+    symbol: str = "",
+    trading_strategy: str = "",
+    account_key_file: str = "",
+    script_file: str = "",
+    enabled: bool = True,
+) -> bool:
+    """仅当 account_id 尚不存在时插入一行；已存在则返回 False。用于启动时从 Account_List.json 补库。"""
+    aid = (account_id or "").strip()
+    if not aid or get_accountinfo_by_id(aid) is not None:
+        return False
+    en = 1 if enabled else 0
+    conn = get_conn()
+    try:
+        conn.execute(
+            """INSERT INTO account_list (
+                   account_id, account_name, exchange_account, symbol, initial_capital,
+                   trading_strategy, account_key_file, script_file, enabled, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+            (
+                aid,
+                account_name or "",
+                exchange_account or "",
+                symbol or "",
+                float(initial_capital),
+                trading_strategy or "",
+                account_key_file or "",
+                script_file or "",
+                en,
+            ),
+        )
+        conn.commit()
+        return True
+    except DB_INTEGRITY_ERRORS:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        conn.close()
+
+
+def account_list_delete(account_id: str) -> bool:
+    """删除 account_list 中一行；无该行则返回 False。"""
+    aid = (account_id or "").strip()
+    if not aid:
+        return False
+    conn = get_conn()
+    try:
+        cur = conn.execute("DELETE FROM account_list WHERE account_id = ?", (aid,))
+        conn.commit()
+        return getattr(cur, "rowcount", 0) > 0
+    finally:
+        conn.close()
+
+
+def account_list_list_all() -> list[dict]:
+    """全部账户行（管理员列表与导出 Account_List.json）。"""
+    conn = get_conn()
+    try:
+        cur = conn.execute(
+            """SELECT account_id, account_name, exchange_account, symbol, initial_capital,
+                      trading_strategy, account_key_file, script_file, enabled, updated_at
+               FROM account_list
+               ORDER BY account_id"""
+        )
+        out: list[dict] = []
+        for r in cur.fetchall():
+            en = r[8]
+            enabled_bool = bool(int(en)) if en is not None else True
+            out.append(
+                {
+                    "account_id": r[0],
+                    "account_name": str(r[1] or ""),
+                    "exchange_account": str(r[2] or ""),
+                    "symbol": str(r[3] or ""),
+                    "initial_capital": float(r[4] or 0.0),
+                    "trading_strategy": str(r[5] or ""),
+                    "account_key_file": str(r[6] or ""),
+                    "script_file": str(r[7] or ""),
+                    "enabled": enabled_bool,
+                    "updated_at": r[9],
                 }
             )
         return out
@@ -3798,7 +3898,7 @@ def account_daily_performance_rebuild_for_accounts(
                 (benchmark_inst_by_account.get(aid) or "").strip()
                 or default_benchmark_inst
             )
-            meta = account_list_get(aid)
+            meta = get_accountinfo_by_id(aid)
             initial = float(meta["initial_capital"]) if meta else 0.0
             _account_daily_performance_rebuild_single_account(
                 conn, aid, bench, initial, now_s, scope_days=None
@@ -3840,7 +3940,7 @@ def account_daily_performance_rebuild_days_for_accounts(
                 (benchmark_inst_by_account.get(aid) or "").strip()
                 or default_benchmark_inst
             )
-            meta = account_list_get(aid)
+            meta = get_accountinfo_by_id(aid)
             initial = float(meta["initial_capital"]) if meta else 0.0
             _account_daily_performance_rebuild_single_account(
                 conn, aid, bench, initial, now_s, scope_days=scope
@@ -4031,7 +4131,7 @@ def account_daily_performance_refresh_today_provisional_for_accounts(
                 (benchmark_inst_by_account.get(aid) or "").strip()
                 or default_benchmark_inst
             )
-            meta = account_list_get(aid)
+            meta = get_accountinfo_by_id(aid)
             initial = float(meta["initial_capital"]) if meta else 0.0
 
             first, last = _account_balance_snapshot_first_last_beijing_day_on_conn(

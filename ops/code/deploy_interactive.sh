@@ -69,7 +69,7 @@ EOF
     break
   done
   if [[ "$bchoice" != "6" ]]; then
-    printf "移动端构建模式 [r/d]（默认 r）: "
+    printf "移动端构建模式 [R/d]（默认 R）: "
     read -r fmode
     fmode=${fmode:-r}
     case "$fmode" in
@@ -200,7 +200,7 @@ EOF
   done
 
   if [[ "$mode" == "2" || "$mode" == "3" || "$mode" == "5" ]]; then
-    printf "Android 构建模式 [r/d]（默认 r）: "
+    printf "Android 构建模式 [R/d]（默认 R）: "
     read -r fmode
     fmode=${fmode:-r}
     case "$fmode" in

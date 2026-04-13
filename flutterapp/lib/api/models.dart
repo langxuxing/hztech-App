@@ -206,7 +206,7 @@ class AccountProfit {
   }
 }
 
-/// 交易账户列表（与后端 /api/tradingbots 一致）
+/// 交易账户列表（与后端 GET /api/accounts 一致；子路径参数名为 account_id）
 class TradingBotsResponse {
   final List<UnifiedTradingBot>? bots;
   final List<UnifiedTradingBot>? tradingbots;
@@ -382,7 +382,7 @@ class BotProfitHistoryResponse {
   }
 }
 
-/// GET /api/tradingbots/{id}/daily-realized-pnl（北京时间自然日；平仓 uTime 归入日 + 日绩效合并，`day_basis`=asia_shanghai）。
+/// GET /api/accounts/{account_id}/daily-realized-pnl（北京时间自然日；平仓 uTime 归入日 + 日绩效合并，`day_basis`=asia_shanghai）。
 class DailyRealizedPnlDayRow {
   DailyRealizedPnlDayRow({
     required this.day,
@@ -693,7 +693,139 @@ class OkxPositionsResponse {
   }
 }
 
-/// GET /api/tradingbots/{id}/open-positions-snapshots（入库的当前持仓聚合，按 snapshot_at 降序）
+/// GET /api/accounts/{account_id}/pending-orders
+class PendingOrderRow {
+  PendingOrderRow({
+    required this.instId,
+    required this.ordId,
+    required this.side,
+    required this.posSide,
+    required this.ordType,
+    required this.state,
+    this.px,
+    this.sz,
+    this.fillSz,
+    this.uTime,
+  });
+
+  final String instId;
+  final String ordId;
+  final String side;
+  final String posSide;
+  final String ordType;
+  final String state;
+  final String? px;
+  final String? sz;
+  final String? fillSz;
+  final String? uTime;
+
+  factory PendingOrderRow.fromJson(Map<String, dynamic> json) {
+    return PendingOrderRow(
+      instId: json['inst_id'] as String? ?? '',
+      ordId: json['ord_id'] as String? ?? '',
+      side: json['side'] as String? ?? '',
+      posSide: json['pos_side'] as String? ?? '',
+      ordType: json['ord_type'] as String? ?? '',
+      state: json['state'] as String? ?? '',
+      px: json['px']?.toString(),
+      sz: json['sz']?.toString(),
+      fillSz: json['fill_sz']?.toString(),
+      uTime: json['u_time']?.toString(),
+    );
+  }
+}
+
+class PendingOrdersResponse {
+  PendingOrdersResponse({
+    required this.success,
+    this.botId = '',
+    this.orders = const [],
+    this.ordersError,
+  });
+
+  final bool success;
+  final String botId;
+  final List<PendingOrderRow> orders;
+  final String? ordersError;
+
+  factory PendingOrdersResponse.fromJson(Map<String, dynamic> json) {
+    return PendingOrdersResponse(
+      success: json['success'] as bool? ?? false,
+      botId: json['bot_id'] as String? ?? '',
+      orders:
+          (json['orders'] as List<dynamic>?)
+              ?.map((e) => PendingOrderRow.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          [],
+      ordersError: json['orders_error'] as String?,
+    );
+  }
+}
+
+/// POST /api/accounts/{account_id}/trade/execute
+class TradeExecuteStep {
+  TradeExecuteStep({
+    required this.name,
+    required this.ok,
+    required this.detail,
+  });
+
+  final String name;
+  final bool ok;
+  final String detail;
+
+  factory TradeExecuteStep.fromJson(Map<String, dynamic> json) {
+    return TradeExecuteStep(
+      name: json['name'] as String? ?? '',
+      ok: json['ok'] as bool? ?? false,
+      detail: json['detail'] as String? ?? '',
+    );
+  }
+}
+
+class ManualTradeExecuteResponse {
+  ManualTradeExecuteResponse({
+    required this.success,
+    this.message = '',
+    this.botId = '',
+    this.instId,
+    this.steps = const [],
+    this.warnings = const [],
+    this.longSz,
+    this.shortSz,
+  });
+
+  final bool success;
+  final String message;
+  final String botId;
+  final String? instId;
+  final List<TradeExecuteStep> steps;
+  final List<String> warnings;
+  final double? longSz;
+  final double? shortSz;
+
+  factory ManualTradeExecuteResponse.fromJson(Map<String, dynamic> json) {
+    final w = json['warnings'];
+    return ManualTradeExecuteResponse(
+      success: json['success'] as bool? ?? false,
+      message: json['message'] as String? ?? '',
+      botId: json['bot_id'] as String? ?? '',
+      instId: json['inst_id'] as String?,
+      steps:
+          (json['steps'] as List<dynamic>?)
+              ?.map((e) => TradeExecuteStep.fromJson(e as Map<String, dynamic>))
+              .toList() ??
+          [],
+      warnings: w is List
+          ? w.map((e) => e.toString()).toList()
+          : const [],
+      longSz: (json['long_sz'] as num?)?.toDouble(),
+      shortSz: (json['short_sz'] as num?)?.toDouble(),
+    );
+  }
+}
+
+/// GET /api/accounts/{account_id}/open-positions-snapshots（入库的当前持仓聚合，按 snapshot_at 降序）
 class OpenPositionsSnapshotRow {
   OpenPositionsSnapshotRow({
     required this.instId,
@@ -862,7 +994,7 @@ class TradingbotSeasonsResponse {
   }
 }
 
-/// 策略启停事件（与 GET /api/tradingbots/{id}/tradingbot-events 一致）
+/// 策略启停事件（与 GET /api/accounts/{account_id}/tradingbot-events 一致）
 class StrategyEvent {
   final int id;
   final String botId;

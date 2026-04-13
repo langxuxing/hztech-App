@@ -101,25 +101,64 @@ def _run_flutter_clean(dry_run: bool) -> int:
     return int(r.returncode or 0)
 
 
-def _http_ok(url: str, label: str) -> bool:
+def _http_probe_code(url: str) -> int:
     try:
         with urllib.request.urlopen(url, timeout=15) as r:
-            code = r.status
+            return int(r.status)
     except urllib.error.HTTPError as e:
-        code = e.code
+        return int(e.code)
     except OSError:
-        code = 0
-    ok = code in (200, 503)
-    mark = du.I_OK if ok else du.I_WARN
-    print("  %s %s → HTTP %s  %s" % (mark, label, code, url))
-    return ok
+        return 0
 
 
 def _verify_local_urls() -> int:
+    """与 baasapi.server_mgr.run_verify_deploy 一致：支持轮询（main.py 启动较慢）。"""
     api = int(os.environ.get("HZTECH_LOCAL_API_PORT") or os.environ.get("PORT") or "9001")
     web = int(os.environ.get("HZTECH_LOCAL_WEB_PORT") or "9000")
-    ok = _http_ok("http://127.0.0.1:%s/api/health" % api, "BaasAPI health")
-    ok = _http_ok("http://127.0.0.1:%s/" % web, "FlutterApp /") and ok
+    targets = [
+        ("http://127.0.0.1:%s/api/health" % api, "BaasAPI health"),
+        ("http://127.0.0.1:%s/" % web, "FlutterApp /"),
+    ]
+    try:
+        timeout_sec = float(os.environ.get("HZTECH_POST_DEPLOY_VERIFY_TIMEOUT_SEC", "120"))
+    except ValueError:
+        timeout_sec = 120.0
+    timeout_sec = max(5.0, timeout_sec)
+    try:
+        interval_sec = float(os.environ.get("HZTECH_POST_DEPLOY_VERIFY_INTERVAL_SEC", "2"))
+    except ValueError:
+        interval_sec = 2.0
+    interval_sec = max(0.5, interval_sec)
+
+    t0 = time.time()
+    deadline = t0 + timeout_sec
+    attempt = 0
+    rows: list[tuple[str, str, int, bool]] = []
+    ok = False
+    while True:
+        attempt += 1
+        rows = []
+        ok = True
+        for url, label in targets:
+            code = _http_probe_code(url)
+            row_ok = code in (200, 503)
+            rows.append((label, url, code, row_ok))
+            if not row_ok:
+                ok = False
+        if ok:
+            break
+        if time.time() >= deadline:
+            break
+        time.sleep(interval_sec)
+
+    for label, url, code, row_ok in rows:
+        mark = du.I_OK if row_ok else du.I_WARN
+        print("  %s %s → HTTP %s  %s" % (mark, label, code, url))
+    if ok and attempt > 1:
+        print(
+            "%s 本地健康检查：第 %d 次探测通过（约 %.0f s）"
+            % (du.I_OK, attempt, time.time() - t0)
+        )
     return 0 if ok else 1
 
 
@@ -599,7 +638,7 @@ def run_local(ns: argparse.Namespace) -> int:
     )
     du.hr()
 
-    pip_cmd = ["bash", str(PROJECT_ROOT / "aws-ops" / "code" / "install_python_deps.sh")]
+    pip_cmd = ["bash", str(PROJECT_ROOT / "ops" / "code" / "install_python_deps.sh")]
     if not skip_pip:
         if ns.dry_run:
             du.stage_step(2, T, du.I_TIME, "[dry-run] 将执行 install_python_deps.sh…")

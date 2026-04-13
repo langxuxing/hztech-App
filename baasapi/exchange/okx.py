@@ -9,6 +9,7 @@ import base64
 import hmac
 import json
 import logging
+import math
 import os
 import random
 import threading
@@ -143,65 +144,91 @@ def _okx_requests_get_ssl_retries(
 
 _OKX_SRV_OFF_LOCK = threading.Lock()
 _OKX_SRV_OFF_MS = 0
-_OKX_SRV_OFF_MONO = 0.0
-_OKX_SRV_OFF_TTL = max(15.0, float(os.environ.get("OKX_TIME_OFFSET_REFRESH_SEC", "60")))
+# 在此 monotonic 时间之前不发起 public/time 请求（0 表示允许立即拉取）
+_OKX_SRV_OFF_VALID_UNTIL_MONO = 0.0
+_OKX_SRV_OFF_TTL = max(15.0, float(os.environ.get("OKX_TIME_OFFSET_REFRESH_SEC", "120")))
+# public/time 遇 HTTP 429 时额外冷却（秒），避免与业务公开接口抢配额
+_OKX_TIME_OFFSET_429_COOLDOWN_SEC = max(
+    60.0, float(os.environ.get("OKX_TIME_OFFSET_429_COOLDOWN_SEC", "300"))
+)
+# 仅允许单线程执行 public/time 拉取，避免缓存失效/50102 校正时惊群
+_OKX_TIME_OFFSET_FETCH_LOCK = threading.Lock()
 _thread_okx_private_sess = threading.local()
 
 
 def _invalidate_okx_server_time_offset() -> None:
     """强制下次请求重新拉取 /api/v5/public/time（例如遇到 50102）。"""
-    global _OKX_SRV_OFF_MONO
+    global _OKX_SRV_OFF_VALID_UNTIL_MONO
     with _OKX_SRV_OFF_LOCK:
-        _OKX_SRV_OFF_MONO = 0.0
+        _OKX_SRV_OFF_VALID_UNTIL_MONO = 0.0
 
 
 def _okx_server_time_offset_ms() -> int:
-    """相对 OKX 服务器时间的毫秒偏移（server - local），用于签名 OK-ACCESS-TIMESTAMP。"""
-    global _OKX_SRV_OFF_MS, _OKX_SRV_OFF_MONO
+    """相对 OKX 服务器时间的毫秒偏移（server - local），用于签名 OK-ACCESS-TIMESTAMP。
+
+    成功或失败后都会在 TTL 内复用缓存；仅单线程发起 ``public/time`` 请求。
+    若需完全禁用网络时间同步（依赖本机 UTC），设置环境变量 ``OKX_TIME_SYNC=0``。
+    """
+    global _OKX_SRV_OFF_MS, _OKX_SRV_OFF_VALID_UNTIL_MONO
     if os.environ.get("OKX_TIME_SYNC", "1").strip().lower() in ("0", "false", "no", "off"):
         return 0
     now_m = time.monotonic()
     with _OKX_SRV_OFF_LOCK:
-        if _OKX_SRV_OFF_MONO > 0 and (now_m - _OKX_SRV_OFF_MONO) < _OKX_SRV_OFF_TTL:
+        if _OKX_SRV_OFF_VALID_UNTIL_MONO > now_m:
             return _OKX_SRV_OFF_MS
-        prev_off = _OKX_SRV_OFF_MS
-    off = prev_off
-    err_note: str | None = None
-    try:
-        _okx_public_throttle()
-        t_url = _okx_public_base_url() + "/api/v5/public/time"
-        t_resp = _okx_requests_get_ssl_retries(
-            t_url, timeout=12.0, user_agent="hztech-okx-public/1"
-        )
-        if t_resp is None:
-            err_note = "public/time: SSL/连接失败（已重试）"
-        elif t_resp.status_code != 200:
-            err_note = f"public/time: HTTP {t_resp.status_code}"
-        else:
-            pdata: dict | list | None
-            try:
-                raw_json = t_resp.json()
-                pdata = raw_json if isinstance(raw_json, dict) else None
-            except (json.JSONDecodeError, ValueError) as e:
-                err_note = f"public/time: JSON 无效 {e}"
-                pdata = None
+
+    with _OKX_TIME_OFFSET_FETCH_LOCK:
+        now_m = time.monotonic()
+        with _OKX_SRV_OFF_LOCK:
+            if _OKX_SRV_OFF_VALID_UNTIL_MONO > now_m:
+                return _OKX_SRV_OFF_MS
+            prev_off = _OKX_SRV_OFF_MS
+
+        off = prev_off
+        err_note: str | None = None
+        try:
+            _okx_public_throttle()
+            t_url = _okx_public_base_url() + "/api/v5/public/time"
+            t_resp = _okx_requests_get_ssl_retries(
+                t_url, timeout=12.0, user_agent="hztech-okx-public/1"
+            )
+            if t_resp is None:
+                err_note = "public/time: SSL/连接失败（已重试）"
+            elif t_resp.status_code != 200:
+                err_note = f"public/time: HTTP {t_resp.status_code}"
+            else:
+                pdata: dict | list | None
+                try:
+                    raw_json = t_resp.json()
+                    pdata = raw_json if isinstance(raw_json, dict) else None
+                except (json.JSONDecodeError, ValueError) as e:
+                    err_note = f"public/time: JSON 无效 {e}"
+                    pdata = None
+                if err_note is None:
+                    if isinstance(pdata, dict) and pdata.get("code") == "0":
+                        rows = pdata.get("data") or []
+                        if rows and isinstance(rows[0], dict):
+                            srv = int(str(rows[0].get("ts") or "0").strip() or "0")
+                            if srv > 0:
+                                off = srv - int(time.time() * 1000)
+                    else:
+                        err_note = "public/time: 响应 code!=0 或无 data"
+        except Exception as e:
+            err_note = str(e) or "public/time 异常"
+        if err_note:
+            logger.debug("OKX /api/v5/public/time 同步失败（沿用旧偏移）: %s", err_note)
+        done = time.monotonic()
+        with _OKX_SRV_OFF_LOCK:
+            _OKX_SRV_OFF_MS = off
             if err_note is None:
-                if isinstance(pdata, dict) and pdata.get("code") == "0":
-                    rows = pdata.get("data") or []
-                    if rows and isinstance(rows[0], dict):
-                        srv = int(str(rows[0].get("ts") or "0").strip() or "0")
-                        if srv > 0:
-                            off = srv - int(time.time() * 1000)
-                else:
-                    err_note = "public/time: 响应 code!=0 或无 data"
-    except Exception as e:
-        err_note = str(e) or "public/time 异常"
-    if err_note:
-        logger.debug("OKX /api/v5/public/time 同步失败（沿用旧偏移）: %s", err_note)
-    with _OKX_SRV_OFF_LOCK:
-        _OKX_SRV_OFF_MS = off
-        _OKX_SRV_OFF_MONO = time.monotonic()
-    return _OKX_SRV_OFF_MS
+                _OKX_SRV_OFF_VALID_UNTIL_MONO = done + _OKX_SRV_OFF_TTL
+            elif "429" in err_note:
+                _OKX_SRV_OFF_VALID_UNTIL_MONO = done + max(
+                    _OKX_SRV_OFF_TTL, _OKX_TIME_OFFSET_429_COOLDOWN_SEC
+                )
+            else:
+                _OKX_SRV_OFF_VALID_UNTIL_MONO = done + _OKX_SRV_OFF_TTL
+        return _OKX_SRV_OFF_MS
 
 
 def _okx_sign_timestamp_iso() -> str:
@@ -515,6 +542,21 @@ def load_okx_config(path: Path | None) -> dict | None:
     if not resolved or not resolved.exists():
         return None
     try:
+        from accounts.account_key_util import load_config as _acct_load_cfg
+
+        quick = _acct_load_cfg(resolved)
+        if quick and (quick.get("key") or "").strip() and (quick.get("secret") or "").strip():
+            return {
+                "name": quick.get("name") or resolved.stem,
+                "key": (quick.get("key") or "").strip(),
+                "secret": (quick.get("secret") or "").strip(),
+                "passphrase": (quick.get("passphrase") or "").strip(),
+                "base_url": (quick.get("base_url") or "https://www.okx.com").rstrip("/"),
+                "sandbox": bool(quick.get("sandbox")),
+            }
+    except Exception:
+        logger.debug("load_okx_config: account_key_util 快路径不可用", exc_info=False)
+    try:
         with open(resolved, "r", encoding="utf-8") as f:
             data = json.load(f)
     except (json.JSONDecodeError, OSError):
@@ -591,6 +633,12 @@ def _create_exchange(cfg: dict):
 _CCXT_OKX_LOCK = threading.Lock()
 # 密钥文件绝对路径 -> (mtime, ccxt.okx)；mtime 变化则重建（换钥/覆盖文件）
 _CCXT_OKX_CACHE: dict[str, tuple[float, Any]] = {}
+_CCXT_OKX_MAX_ENTRIES = max(4, int(os.environ.get("HZTECH_CCXT_OKX_CACHE_MAX", "64")))
+
+
+def ccxt_okx_exchange_cache_size() -> int:
+    with _CCXT_OKX_LOCK:
+        return len(_CCXT_OKX_CACHE)
 
 
 def get_ccxt_okx_exchange(config_path: Path | None) -> Any | None:
@@ -613,6 +661,12 @@ def get_ccxt_okx_exchange(config_path: Path | None) -> Any | None:
         cfg = load_okx_config(path)
         if not cfg or not (cfg.get("key") and cfg.get("secret")):
             return None
+        while len(_CCXT_OKX_CACHE) >= _CCXT_OKX_MAX_ENTRIES:
+            try:
+                old_k = next(iter(_CCXT_OKX_CACHE))
+            except StopIteration:
+                break
+            _CCXT_OKX_CACHE.pop(old_k, None)
         ex = _create_exchange(cfg)
         _CCXT_OKX_CACHE[key] = (mtime, ex)
         return ex
@@ -1678,6 +1732,119 @@ def okx_fetch_pending_orders(
         except (TypeError, ValueError):
             continue
     return (out, None)
+
+
+def okx_public_swap_instrument(inst_id: str) -> tuple[dict[str, Any] | None, str | None]:
+    """永续合约元数据：tickSz、lotSz、minSz 等（公开 GET）。"""
+    want = (inst_id or "").strip()
+    if not want:
+        return None, "empty inst_id"
+    data, err = okx_public_get(
+        "/api/v5/public/instruments",
+        {"instType": "SWAP", "instId": want},
+    )
+    if err:
+        return None, err
+    if not isinstance(data, dict) or data.get("code") != "0":
+        return None, _okx_business_error_detail(data) if isinstance(data, dict) else "instruments 异常"
+    rows = data.get("data") or []
+    if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
+        return None, f"OKX 未返回合约 {want}"
+    return rows[0], None
+
+
+def okx_format_contract_sz_str(sz: float, lot_sz: float, min_sz: float) -> tuple[str | None, str | None]:
+    """将张数向下取整到 lotSz 倍数，且 ≥ minSz。返回 (sz 字符串, error)。"""
+    if not math.isfinite(sz) or sz <= 0:
+        return None, "sz 须为正数"
+    lot = float(lot_sz) if lot_sz and float(lot_sz) > 0 else 1.0
+    mns = float(min_sz) if min_sz and float(min_sz) > 0 else lot
+    steps = math.floor(float(sz) / lot + 1e-12)
+    q = steps * lot
+    if q < mns - 1e-18:
+        return None, f"数量需 ≥ minSz={mns}（lotSz={lot}）"
+    if abs(q - round(q)) < 1e-9:
+        return str(int(round(q))), None
+    s = f"{q:.12f}".rstrip("0").rstrip(".")
+    return s if s else None, None
+
+
+def okx_format_px_str(px: float, tick_sz: float) -> str:
+    tick = float(tick_sz) if tick_sz and float(tick_sz) > 0 else 1e-8
+    q = round(float(px) / tick) * tick
+    if tick >= 1:
+        return str(int(round(q)))
+    nd = max(0, min(12, len(str(tick).split(".")[-1].rstrip("0")) or 8))
+    return f"{q:.{nd}f}".rstrip("0").rstrip(".")
+
+
+def okx_place_swap_order(
+    config_path: Path | None,
+    *,
+    inst_id: str,
+    side: str,
+    pos_side: str,
+    ord_type: str,
+    sz: str,
+    td_mode: str = "cross",
+    reduce_only: bool = False,
+    px: str | None = None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """
+    永续下单：POST /api/v5/trade/order。
+    side: buy / sell；pos_side: long / short；ord_type: market / limit。
+    返回 ({"ord_id":..., "data": [...]}, error)。
+    """
+    inst = (inst_id or "").strip()
+    sd = (side or "").strip().lower()
+    ps = (pos_side or "").strip().lower()
+    ot = (ord_type or "").strip().lower()
+    if not inst.upper().endswith("-SWAP"):
+        return None, "inst_id 须为永续 SWAP"
+    if sd not in ("buy", "sell"):
+        return None, f"side 无效: {side!r}"
+    if ps not in ("long", "short"):
+        return None, f"pos_side 无效: {pos_side!r}"
+    if ot not in ("market", "limit"):
+        return None, f"ord_type 仅支持 market/limit: {ord_type!r}"
+    sz_s = (sz or "").strip()
+    if not sz_s:
+        return None, "sz 不能为空"
+    payload: dict[str, Any] = {
+        "instId": inst,
+        "tdMode": (td_mode or "cross").strip().lower(),
+        "side": sd,
+        "posSide": ps,
+        "ordType": ot,
+        "sz": sz_s,
+    }
+    if ot == "limit":
+        if not px or not str(px).strip():
+            return None, "限价单须指定 px"
+        payload["px"] = str(px).strip()
+    if reduce_only:
+        payload["reduceOnly"] = True
+    body = json.dumps(payload)
+    data, err = okx_request(
+        "POST",
+        "/api/v5/trade/order",
+        body=body,
+        config_path=config_path,
+    )
+    if err:
+        return None, err
+    if data is None or data.get("code") != "0":
+        msg = (
+            _okx_business_error_detail(data)
+            if isinstance(data, dict)
+            else "trade/order 异常"
+        )
+        return None, msg
+    dlist = data.get("data")
+    ord_id = ""
+    if isinstance(dlist, list) and dlist and isinstance(dlist[0], dict):
+        ord_id = str(dlist[0].get("ordId") or "").strip()
+    return {"ord_id": ord_id, "data": dlist, "raw": data}, None
 
 
 def _parse_okx_lever_value(value: object) -> float | None:

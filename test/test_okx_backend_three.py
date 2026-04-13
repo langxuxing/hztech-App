@@ -100,9 +100,9 @@ class TestOkxBackendThreeRoutes:
     def test_tradingbot_positions_per_bot_config(
         self, client, auth_headers, bot_id
     ):
-        """GET /api/tradingbots/<bot_id>/positions：按 bot 解析 OKX 配置拉持仓。"""
+        """GET /api/accounts/<account_id>/positions：按 account 解析 OKX 配置拉持仓。"""
         r = client.get(
-            f"/api/tradingbots/{bot_id}/positions",
+            f"/api/accounts/{bot_id}/positions",
             headers=auth_headers,
         )
         assert r.status_code == 200

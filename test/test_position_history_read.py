@@ -35,7 +35,7 @@ def test_position_history_reads_inserted_rows(client, auth_headers):
     assert inserted == 1
 
     r = client.get(
-        f"/api/tradingbots/{aid}/position-history?limit=20",
+        f"/api/accounts/{aid}/position-history?limit=20",
         headers=auth_headers,
     )
     assert r.status_code == 200
@@ -66,7 +66,7 @@ def test_position_history_before_utime_pagination(client, auth_headers):
         synced,
     )
     first = client.get(
-        f"/api/tradingbots/{aid}/position-history?limit=1",
+        f"/api/accounts/{aid}/position-history?limit=1",
         headers=auth_headers,
     )
     assert first.status_code == 200
@@ -77,7 +77,7 @@ def test_position_history_before_utime_pagination(client, auth_headers):
     assert nb == 2000000000100
 
     second = client.get(
-        f"/api/tradingbots/{aid}/position-history?limit=1&before_utime={nb}",
+        f"/api/accounts/{aid}/position-history?limit=1&before_utime={nb}",
         headers=auth_headers,
     )
     assert second.status_code == 200

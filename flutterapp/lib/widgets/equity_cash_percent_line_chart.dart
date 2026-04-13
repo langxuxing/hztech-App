@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 
@@ -187,6 +185,8 @@ class SnapshotPercentLineChart extends StatelessWidget {
     var maxY = 0.0;
 
     int? monthForAxis;
+    /// 与按日柱图横轴天数一致（含「未来月」为 0）。
+    var monthAxisDayCount = 0;
     var monthLineFromDailyPerf = false;
     var monthPerfMapForTip = <int, double>{};
     final pick = series == SnapshotReturnSeries.equity
@@ -197,13 +197,13 @@ class SnapshotPercentLineChart extends StatelessWidget {
       final y = focusedMonth!.year;
       final m = focusedMonth!.month;
       monthForAxis = m;
-      final now = DateTime.now();
       final daysInMonth = DateTime(y, m + 1, 0).day;
-      final currentMonth = now.year == y && now.month == m;
-      final futureMonth = DateTime(y, m).isAfter(DateTime(now.year, now.month));
-      final maxDayByTime = futureMonth
-          ? 0
-          : (currentMonth ? now.day.clamp(1, daysInMonth) : daysInMonth);
+      final now = DateTime.now();
+      final futureMonth =
+          DateTime(y, m).isAfter(DateTime(now.year, now.month));
+      /// 与 [MonthEndValueBarPanel] 按日柱一致：横轴覆盖整月（未来月仍为 0）。
+      final axisLastDay = futureMonth ? 0 : daysInMonth;
+      monthAxisDayCount = axisLastDay;
       final pickCh = series == SnapshotReturnSeries.equity
           ? (DailyRealizedPnlDayRow r) => r.equlityChanged
           : (DailyRealizedPnlDayRow r) => r.balanceChanged;
@@ -219,12 +219,8 @@ class SnapshotPercentLineChart extends StatelessWidget {
       if (useDailyPerf) {
         monthLineFromDailyPerf = true;
         monthPerfMapForTip = perfMap;
-        final maxDayByPerf = perfMap.isEmpty
-            ? 0
-            : perfMap.keys.reduce(math.max).clamp(1, daysInMonth);
-        final plotUntilDay = math.min(maxDayByTime, maxDayByPerf);
         var cum = 0.0;
-        for (var day = 1; day <= plotUntilDay; day++) {
+        for (var day = 1; day <= axisLastDay; day++) {
           cum += perfMap[day] ?? 0.0;
           spots.add(FlSpot((day - 1).toDouble(), cum));
           if (cum < minY) minY = cum;
@@ -249,9 +245,9 @@ class SnapshotPercentLineChart extends StatelessWidget {
             : (firstInMonthVal != null && firstInMonthVal.isFinite)
                 ? firstInMonthVal
                 : (startVal.isFinite ? startVal : denom);
-        double? runCarry = monthBase.isFinite ? monthBase : null;
+        var runCarry = monthBase.isFinite ? monthBase : null;
 
-        for (var day = 1; day <= maxDayByTime; day++) {
+        for (var day = 1; day <= axisLastDay; day++) {
           final end = DateTime(y, m, day, 23, 59, 59, 999);
           final vInMonth =
               _snapshotValueAtOrBeforeInMonth(fullSorted, end, y, m, pick);
@@ -303,9 +299,7 @@ class SnapshotPercentLineChart extends StatelessWidget {
     final pad = (maxY - minY).abs() * 0.08 + 1.0;
     final lineColor = _snapshotTrendLineColor(spots);
 
-    final monthPointCount = monthMode
-        ? (spots.isEmpty ? 0 : (spots.last.x.round() + 1))
-        : 0;
+    final monthPointCount = monthMode ? monthAxisDayCount : 0;
     final xSpan = monthMode
         ? (monthPointCount - 1).clamp(0, 999).toDouble()
         : (sorted.length - 1).clamp(0, double.infinity).toDouble();
@@ -346,18 +340,20 @@ class SnapshotPercentLineChart extends StatelessWidget {
               return touchedSpots.map((spot) {
                 if (monthMode && monthForAxis != null && monthPointCount > 0) {
                   final day = spot.x.round().clamp(0, monthPointCount - 1) + 1;
+                  final vsMonth =
+                      series == SnapshotReturnSeries.equity ? '权益' : '现金';
                   if (monthLineFromDailyPerf) {
                     var cumTip = 0.0;
                     for (var d = 1; d <= day; d++) {
                       cumTip += monthPerfMapForTip[d] ?? 0.0;
                     }
                     return LineTooltipItem(
-                      '$day日 收益 ${formatUiInteger(cumTip)}',
+                      '$day日 $vsMonth较月初 ${formatUiInteger(cumTip)}',
                       tipStyle,
                     );
                   }
                   return LineTooltipItem(
-                    '$day日 收益 ${formatUiInteger(spot.y)}',
+                    '$day日 $vsMonth较月初 ${formatUiInteger(spot.y)}',
                     tipStyle,
                   );
                 }

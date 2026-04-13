@@ -133,17 +133,13 @@ def main() -> int:
         failed += 1
     run_test("GET /", ok, f"code={code}" if verbose else "", verbose)
 
-    # 2) GET /api/strategy/status（返回 ok + bots，无顶层 running）
-    code, body = request("GET", f"{base}/api/strategy/status")
-    ok = (
-        code == 200
-        and isinstance(body, dict)
-        and (body.get("ok") is True or "bots" in body)
-    )
+    # 2) GET /api/health（无需登录，供负载均衡探测）
+    code, body = request("GET", f"{base}/api/health")
+    ok = code == 200 and isinstance(body, dict) and body.get("ok") is True
     if not ok:
         failed += 1
     run_test(
-        "GET /api/strategy/status", ok,
+        "GET /api/health", ok,
         str(body)[:80] if verbose else "", verbose
     )
 
@@ -202,14 +198,14 @@ def main() -> int:
         f"code={code}" if verbose else "", verbose
     )
 
-    # 7) GET /api/tradingbots
-    code, body = request("GET", f"{base}/api/tradingbots", token=token)
+    # 7) GET /api/accounts
+    code, body = request("GET", f"{base}/api/accounts", token=token)
     ok = code == 200 and isinstance(body, dict)
     ok = ok and ("bots" in body or "tradingbots" in body)
     if not ok:
         failed += 1
     run_test(
-        "GET /api/tradingbots", ok,
+        "GET /api/accounts", ok,
         f"code={code}" if verbose else "", verbose
     )
 

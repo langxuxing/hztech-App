@@ -54,6 +54,22 @@ def test_api_status_includes_open_positions_sync_step(client, auth_headers):
     assert "account_daily_performance" in doc
 
 
+def test_api_status_includes_http_request_stats(client, auth_headers):
+    """http_request_stats：本进程累计；快照在视图内生成故不含当前 /api/status 这一笔。"""
+    client.get("/api/health")
+    client.get("/api/health")
+    r = client.get("/api/status", headers=auth_headers)
+    assert r.status_code == 200
+    stats = (r.get_json() or {}).get("http_request_stats") or {}
+    assert stats.get("disabled") is False
+    assert int(stats.get("total") or 0) >= 2
+    top = stats.get("top_endpoints") or []
+    by_ep = {x.get("endpoint"): int(x.get("count") or 0) for x in top if isinstance(x, dict)}
+    assert by_ep.get("api_health", 0) >= 2
+    assert "by_status_class" in stats
+    assert stats.get("idle_traffic_hint")
+
+
 def _utc_yesterday_iso() -> str:
     return (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
 

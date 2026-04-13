@@ -17,7 +17,7 @@
 # 跳过菜单：传入任意参数，或 CI=1 / HZTECH_DEPLOY_YES=1 / HZTECH_DEPLOY_NONINTERACTIVE=1。
 #
 # 默认（本脚本导出；交互向导会在确认前覆盖部分 HZTECH_*）：全量 rsync BaasAPI@aws-alpha + Flutter 静态机；不构建 Android/APK、不向远端同步 apk/；
-# rsync 排除项目根下 res/、aws-ops/ 等（见 baasapi/server_mgr.py _rsync_deploy_exclude_patterns）。
+# rsync 排除项目根下 res/、ops/ 等（见 baasapi/server_mgr.py _rsync_deploy_exclude_patterns）。
 # 若仅需上传 release APK：HZTECH_DEPLOY_APK_ONLY=1 ./deploy2AWS.sh（双机时推到 BaasAPI + Flutter 静态机各一份）
 # 若要在本次流水线中构建并同步 APK：HZTECH_SKIP_MOBILE_BUILD=0 HZTECH_DEPLOY_SKIP_APK_SYNC=0 ./deploy2AWS.sh --build android,web
 #
@@ -32,8 +32,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR"
 cd "$PROJECT_ROOT"
 
-# shellcheck source=aws-ops/code/deploy_common.sh
-source "$PROJECT_ROOT/aws-ops/code/deploy_common.sh"
+# shellcheck source=ops/code/deploy_common.sh
+source "$PROJECT_ROOT/ops/code/deploy_common.sh"
 
 DEPLOY_CONFIG="${DEPLOY_CONFIG:-baasapi/deploy-aws.json}"
 if [[ ! -f "$DEPLOY_CONFIG" ]]; then
@@ -55,8 +55,8 @@ export HZTECH_REMOTE_TRADINGBOT_CTRL_DIR="${HZTECH_REMOTE_TRADINGBOT_CTRL_DIR:-/
 
 ORCH_ARGS=( "$@" )
 if hztech_need_deploy_interactive "$@"; then
-  # shellcheck source=aws-ops/code/deploy_interactive.sh
-  source "$PROJECT_ROOT/aws-ops/code/deploy_interactive.sh"
+  # shellcheck source=ops/code/deploy_interactive.sh
+  source "$PROJECT_ROOT/ops/code/deploy_interactive.sh"
   hztech_run_aws_wizard || exit 0
   ORCH_ARGS=( "${HZTECH_WIZARD_ARGS[@]}" )
 fi

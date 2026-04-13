@@ -8,12 +8,31 @@ Account_List.json 与 OKX 密钥 JSON 的解析（无网络依赖）。
 """
 from __future__ import annotations
 
+import copy
 import json
+import threading
 from pathlib import Path
 
 OKXAPI_DIR = Path(__file__).resolve().parent
 ACCOUNT_LIST_FILE = OKXAPI_DIR / "Account_List.json"
 OKX_API_KEY_DIR = OKXAPI_DIR / "OKX_Api_Key"
+
+_CONFIG_CACHE_LOCK = threading.Lock()
+# resolved path str -> (mtime_ns, size_bytes, parsed dict | None)
+_CONFIG_CACHE: dict[str, tuple[int, int, dict | None]] = {}
+
+
+def invalidate_load_config_cache(config_path: Path | str | None = None) -> None:
+    """清除 OKX 密钥 JSON 的 load_config 内存缓存；path 为 None 时清空全部。"""
+    with _CONFIG_CACHE_LOCK:
+        if config_path is None:
+            _CONFIG_CACHE.clear()
+            return
+        try:
+            p = Path(config_path).resolve()
+        except (OSError, TypeError):
+            return
+        _CONFIG_CACHE.pop(str(p), None)
 
 
 def parse_enabled(value: object) -> bool:
@@ -91,22 +110,36 @@ def _parse_sandbox(value: object) -> bool:
 
 
 def load_config(path: Path) -> dict | None:
-    """从 JSON 加载 api 配置：name, key, secret, passphrase, base_url, sandbox。"""
+    """从 JSON 加载 api 配置：name, key, secret, passphrase, base_url, sandbox（mtime 未变时走进程内缓存）。"""
     if not path.exists():
         return None
+    try:
+        st = path.stat()
+        key = str(path.resolve())
+        sig = (int(st.st_mtime_ns), int(st.st_size))
+    except OSError:
+        return None
+    with _CONFIG_CACHE_LOCK:
+        hit = _CONFIG_CACHE.get(key)
+        if hit is not None and hit[0] == sig[0] and hit[1] == sig[1]:
+            return copy.deepcopy(hit[2]) if hit[2] is not None else None
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
     except (json.JSONDecodeError, OSError):
+        with _CONFIG_CACHE_LOCK:
+            _CONFIG_CACHE[key] = (sig[0], sig[1], None)
         return None
     api = data.get("api") if isinstance(data, dict) else None
     if not api or not isinstance(api, dict):
+        with _CONFIG_CACHE_LOCK:
+            _CONFIG_CACHE[key] = (sig[0], sig[1], None)
         return None
     sandbox = _parse_sandbox(api.get("sandbox"))
     base_url = (api.get("base_url") or "https://www.okx.com").rstrip("/")
     if sandbox:
         base_url = "https://www.okx.com"
-    return {
+    out = {
         "name": api.get("name") or path.stem,
         "key": (api.get("key") or "").strip(),
         "secret": (api.get("secret") or "").strip(),
@@ -114,3 +147,6 @@ def load_config(path: Path) -> dict | None:
         "base_url": base_url,
         "sandbox": sandbox,
     }
+    with _CONFIG_CACHE_LOCK:
+        _CONFIG_CACHE[key] = (sig[0], sig[1], out)
+    return copy.deepcopy(out)

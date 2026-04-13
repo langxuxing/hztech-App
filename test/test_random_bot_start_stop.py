@@ -35,7 +35,7 @@ def _emit(msg: str, data: dict | None = None) -> None:
 
 
 def _controllable_bot_ids(client, headers: dict) -> list[str]:
-    r = client.get("/api/tradingbots", headers=headers)
+    r = client.get("/api/accounts", headers=headers)
     assert r.status_code == 200
     data = r.get_json()
     bots = data.get("bots") or data.get("tradingbots") or []
@@ -50,7 +50,7 @@ def _controllable_bot_ids(client, headers: dict) -> list[str]:
 
 
 def _bot_row(client, headers: dict, bot_id: str) -> dict | None:
-    r = client.get("/api/tradingbots", headers=headers)
+    r = client.get("/api/accounts", headers=headers)
     assert r.status_code == 200
     for b in r.get_json().get("bots") or []:
         if (b.get("tradingbot_id") or "") == bot_id:
@@ -105,7 +105,7 @@ def _run_random_bot_cycle(client, headers: dict) -> None:
         assert r0.status_code == 200, r0.get_data(as_text=True)
 
         row_a = _bot_row(client, headers, bot_id)
-        _emit("GET /api/tradingbots 快照(停后)", _status_snapshot(row_a))
+        _emit("GET /api/accounts 快照(停后)", _status_snapshot(row_a))
 
         r1 = client.post(
             f"/api/tradingbots/{bot_id}/start", headers=headers
@@ -123,7 +123,7 @@ def _run_random_bot_cycle(client, headers: dict) -> None:
 
         time.sleep(0.6)
         row = _bot_row(client, headers, bot_id)
-        _emit("GET /api/tradingbots 快照(启后)", _status_snapshot(row))
+        _emit("GET /api/accounts 快照(启后)", _status_snapshot(row))
         assert row is not None
         running = row.get("is_running") is True
         running = running or row.get("status") == "running"
@@ -146,7 +146,7 @@ def _run_random_bot_cycle(client, headers: dict) -> None:
 
         time.sleep(0.5)
         row2 = _bot_row(client, headers, bot_id)
-        _emit("GET /api/tradingbots 快照(再停后)", _status_snapshot(row2))
+        _emit("GET /api/accounts 快照(再停后)", _status_snapshot(row2))
         assert row2 is not None
         stopped = row2.get("is_running") is False
         stopped = stopped or row2.get("status") == "stopped"

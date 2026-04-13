@@ -30,8 +30,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR"
 cd "$PROJECT_ROOT"
 
-# shellcheck source=aws-ops/code/deploy_common.sh
-source "$PROJECT_ROOT/aws-ops/code/deploy_common.sh"
+# shellcheck source=ops/code/deploy_common.sh
+source "$PROJECT_ROOT/ops/code/deploy_common.sh"
 
 hztech_require_python3
 
@@ -48,8 +48,8 @@ fi
 
 ORCH_ARGS=( "$@" )
 if hztech_need_deploy_interactive "$@"; then
-  # shellcheck source=aws-ops/code/deploy_interactive.sh
-  source "$PROJECT_ROOT/aws-ops/code/deploy_interactive.sh"
+  # shellcheck source=ops/code/deploy_interactive.sh
+  source "$PROJECT_ROOT/ops/code/deploy_interactive.sh"
   hztech_run_local_wizard || exit 0
   ORCH_ARGS=( "${HZTECH_WIZARD_ARGS[@]}" )
 fi
@@ -60,7 +60,7 @@ if [[ "$_ssh_pg" == "1" || "$_ssh_pg" == "true" || "$_ssh_pg" == "yes" ]]; then
   echo "🗄️  可选步骤：远端 PostgreSQL 安装（HZTECH_SSH_INSTALL_PG_AWS_ALPHA=1）"
   echo "   🔗 SSH 目标: ${HZTECH_SSH_PG_TARGET:-aws-alpha}"
   echo "──────────────────────────────────────────────────────────"
-  bash "$PROJECT_ROOT/aws-ops/database/install_postgresql_remote.sh" "${HZTECH_SSH_PG_TARGET:-aws-alpha}"
+  bash "$PROJECT_ROOT/ops/database/install_postgresql_remote.sh" "${HZTECH_SSH_PG_TARGET:-aws-alpha}"
   echo "✅ 远端 PostgreSQL 安装脚本已执行完毕"
   echo "──────────────────────────────────────────────────────────"
 fi

@@ -109,7 +109,7 @@ String _fmtDaysHours(Duration d) {
   );
 }
 
-/// 交易机器人：列表来自 main.py /api/tradingbots（Account_List.json），
+/// 交易机器人：列表来自 main.py GET /api/accounts（Account_List.json），
 /// 启停走 script_file（如 tradingbot_ctrl/moneyflow_alangsandbox.sh start|stop）。
 class TradingBotControl extends StatefulWidget {
   const TradingBotControl({super.key, this.embedInShell = false});

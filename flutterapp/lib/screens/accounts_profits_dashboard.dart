@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:fl_chart/fl_chart.dart';
 
 import '../api/client.dart';
 import '../api/models.dart';
@@ -7,9 +6,12 @@ import '../secure/prefs.dart';
 import '../theme/finance_style.dart';
 import '../utils/network_error_message.dart';
 import '../utils/number_display_format.dart';
+import '../widgets/equity_cash_percent_line_chart.dart'
+    show SnapshotPercentLineChart, SnapshotReturnSeries;
+import '../widgets/month_end_profit_panel.dart' show focusedMonthFromProfitSnapshots;
 import '../widgets/water_background.dart';
 
-/// 移动端「策略盈利」：按机器人列表展示月初 / 资产余额 / 盈利率与收益曲线（不含策略启停）。
+/// 移动端「策略盈利」：按机器人列表展示月初 / 资产余额 / 盈利率与 **余额（现金）绝对值** 月曲线（不含策略启停）。
 /// 数据与 [TradingBotControl] 同源，界面仅保留盈利相关展示。
 class AccountProfitDetailScreen extends StatefulWidget {
   const AccountProfitDetailScreen({super.key, this.embedInShell = false});
@@ -361,7 +363,17 @@ class _AccountProfitDetailScreenState extends State<AccountProfitDetailScreen> {
                             if (snapshots.isNotEmpty)
                               SizedBox(
                                 height: 128,
-                                child: _ProfitLineChart(snapshots: snapshots),
+                                child: SnapshotPercentLineChart(
+                                  snapshots: snapshots,
+                                  series: SnapshotReturnSeries.cash,
+                                  compact: true,
+                                  focusedMonth:
+                                      focusedMonthFromProfitSnapshots(snapshots),
+                                  monthOpenLevelHint: account == null
+                                      ? null
+                                      : (account.monthInitialBalance ??
+                                          account.initialBalance),
+                                ),
                               )
                             else
                               Padding(
@@ -369,7 +381,7 @@ class _AccountProfitDetailScreenState extends State<AccountProfitDetailScreen> {
                                   vertical: 8,
                                 ),
                                 child: Text(
-                                  '暂无收益曲线数据，约 10 分钟更新一次',
+                                  '暂无余额曲线数据，约 10 分钟更新一次',
                                   style: AppFinanceStyle.labelTextStyle(
                                     context,
                                   ),
@@ -383,64 +395,6 @@ class _AccountProfitDetailScreenState extends State<AccountProfitDetailScreen> {
                 ),
         ),
       ),
-    );
-  }
-}
-
-class _ProfitLineChart extends StatelessWidget {
-  const _ProfitLineChart({required this.snapshots});
-
-  final List<BotProfitSnapshot> snapshots;
-
-  @override
-  Widget build(BuildContext context) {
-    if (snapshots.isEmpty) return const SizedBox.shrink();
-    final spots = <FlSpot>[];
-    double minY = 0, maxY = 0;
-    for (var i = 0; i < snapshots.length; i++) {
-      final p = snapshots[i].profitPercent;
-      spots.add(FlSpot(i.toDouble(), p));
-      if (p < minY) minY = p;
-      if (p > maxY) maxY = p;
-    }
-    if (minY == maxY) {
-      minY = minY - 1;
-      maxY = maxY + 1;
-    }
-    final isPositive =
-        snapshots.isNotEmpty && (snapshots.last.profitPercent >= 0);
-    final lineColor = isPositive
-        ? AppFinanceStyle.textProfit
-        : AppFinanceStyle.textLoss;
-    return LineChart(
-      LineChartData(
-        minX: 0,
-        maxX: (snapshots.length - 1).clamp(0, double.infinity).toDouble(),
-        minY: minY - 2,
-        maxY: maxY + 2,
-        gridData: FlGridData(show: false),
-        titlesData: FlTitlesData(show: false),
-        borderData: FlBorderData(show: false),
-        lineBarsData: [
-          LineChartBarData(
-            spots: spots,
-            isCurved: true,
-            color: lineColor,
-            barWidth: 3,
-            isStrokeCapRound: true,
-            dotData: FlDotData(show: false),
-            belowBarData: BarAreaData(
-              show: true,
-              color:
-                  (isPositive
-                          ? AppFinanceStyle.textProfit
-                          : AppFinanceStyle.textLoss)
-                      .withValues(alpha: 0.25),
-            ),
-          ),
-        ],
-      ),
-      duration: const Duration(milliseconds: 150),
     );
   }
 }

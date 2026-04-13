@@ -3,7 +3,7 @@
 从 Account_List.json 管理 OKX 账户：列表、密钥路径、余额快照（入库）、
 行情/持仓/委托（仅实时查询，不入库）。
 
-与 baasapi/main.py 集成：/api/account-profit、/api/tradingbots、按 account_id 的
+与 baasapi/main.py 集成：/api/account-profit、GET /api/accounts 与 /api/accounts/{id}/*、按 account_id 的
 positions / profit-history / ticker / pending-orders 等通过本模块解析密钥与账户元数据。
 
 定时任务由 main 每 5 分钟调用，写入 SQLite：
@@ -20,14 +20,16 @@ positions / profit-history / ticker / pending-orders 等通过本模块解析密
 from __future__ import annotations
 
 import logging
-import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from collections.abc import Collection
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from hztech_log_format import short_network_err_text
+
+import db as _hztech_db
 
 from .account_key_util import (
     account_row_is_enabled as _account_row_is_enabled_util,
@@ -86,40 +88,26 @@ def _account_row_enabled(row: dict) -> bool:
 
 def okx_account_disabled_exchange_reason(account_id: str) -> str | None:
     """
-    Account_List 中该 account_id 若为 OKX 且 enbaled=false，返回说明文案；
+    库表 account_list 中该 account_id 若为 OKX 且 enabled=false，返回说明文案；
     各定时任务与实时接口据此拒绝访问 OKX（测连、持仓、委托、余额等）。
     未出现在列表或非 OKX 行则返回 None。
     """
     aid = str(account_id or "").strip()
     if not aid:
         return None
-    for row in load_account_list():
-        if str(row.get("account_id") or "").strip() != aid:
-            continue
-        if (row.get("exchange_account") or "").strip().upper() != "OKX":
-            return None
-        if not _account_row_enabled(row):
-            return "账户已在 Account_List 中禁用（enbaled/enabled 为 false），不进行 OKX 请求"
+    row = _hztech_db.get_accountinfo_by_id(aid)
+    if not row:
         return None
+    if (row.get("exchange_account") or "").strip().upper() != "OKX":
+        return None
+    if not _account_row_enabled(row):
+        return "账户已在 Account_List 中禁用（enbaled/enabled 为 false），不进行 OKX 请求"
     return None
 
 
 def iter_okx_accounts(*, enabled_only: bool = True) -> list[dict]:
-    """OKX 账户行（来自 Account_List），含 account_id、account_name、symbol、密钥文件名等。"""
-    rows: list[dict] = []
-    for row in load_account_list():
-        if (row.get("exchange_account") or "").strip().upper() != "OKX":
-            continue
-        if enabled_only and not _account_row_enabled(row):
-            continue
-        aid = str(row.get("account_id") or "").strip()
-        if not aid:
-            continue
-        key_name = (row.get("account_key_file") or "").strip()
-        if not key_name:
-            continue
-        rows.append(row)
-    return rows
+    """OKX 账户行（来自 account_list 库表），含 account_id、account_name、symbol、密钥文件名等。"""
+    return list(_hztech_db.get_accountinfo_list_okx(enabled_only=enabled_only))
 
 
 def resolve_okx_config_path(account_id: str) -> Path | None:
@@ -127,17 +115,16 @@ def resolve_okx_config_path(account_id: str) -> Path | None:
     want = (account_id or "").strip()
     if not want:
         return None
-    for row in load_account_list():
-        if str(row.get("account_id") or "").strip() != want:
-            continue
-        if (row.get("exchange_account") or "").strip().upper() != "OKX":
-            return None
-        key_name = (row.get("account_key_file") or "").strip()
-        if not key_name:
-            return None
-        path = resolve_key_file_path(key_name)
-        return path if path.is_file() else None
-    return None
+    row = _hztech_db.get_accountinfo_by_id(want)
+    if not row:
+        return None
+    if (row.get("exchange_account") or "").strip().upper() != "OKX":
+        return None
+    key_name = (row.get("account_key_file") or "").strip()
+    if not key_name:
+        return None
+    path = resolve_key_file_path(key_name)
+    return path if path.is_file() else None
 
 
 def get_okx_ccxt_exchange_for_config_path(config_path: Path | None) -> Any | None:
@@ -151,27 +138,29 @@ def get_okx_ccxt_exchange_for_config_path(config_path: Path | None) -> Any | Non
 
 
 def invalidate_okx_ccxt_exchange_cache(config_path: Path | None = None) -> None:
-    """清除 OKX ccxt 缓存（换钥后可调用；不传 path 则清空全部）。"""
+    """清除 OKX 密钥 JSON 解析缓存与 ccxt 实例缓存（换钥后可调用；不传 path 则清空全部）。"""
     import exchange.okx as okx_mod
 
+    from .account_key_util import invalidate_load_config_cache
+
+    invalidate_load_config_cache(config_path)
     okx_mod.invalidate_ccxt_okx_exchange_cache(config_path)
 
 
 def resolve_okx_key_write_path(account_id: str) -> Path | None:
-    """客户上传密钥时写入路径（与 Account_List 中 account_key_file 一致；文件可尚不存在）。"""
+    """客户上传密钥时写入路径（与 account_list.account_key_file 一致；文件可尚不存在）。"""
     want = (account_id or "").strip()
     if not want:
         return None
-    for row in load_account_list():
-        if str(row.get("account_id") or "").strip() != want:
-            continue
-        if (row.get("exchange_account") or "").strip().upper() != "OKX":
-            return None
-        key_name = (row.get("account_key_file") or "").strip()
-        if not key_name:
-            return None
-        return resolve_key_file_path(key_name)
-    return None
+    row = _hztech_db.get_accountinfo_by_id(want)
+    if not row:
+        return None
+    if (row.get("exchange_account") or "").strip().upper() != "OKX":
+        return None
+    key_name = (row.get("account_key_file") or "").strip()
+    if not key_name:
+        return None
+    return resolve_key_file_path(key_name)
 
 
 def _initial_capital(row: dict) -> float:
@@ -232,29 +221,36 @@ def list_account_basics(*, enabled_only: bool = True) -> list[dict[str, Any]]:
 
 
 def list_account_basics_for_tradingbot(*, enabled_only: bool = True) -> list[dict[str, Any]]:
-    """
-    交易机器人启停与 can_control 用的账户列表。
-    - 默认（HZTECH_TRADINGBOT_ACCOUNT_LIST_SOURCE 未设或为 json）：与 list_account_basics 相同，来自 Account_List.json。
-    - database：来自库表 account_list（与 JSON 结构一致，生产环境以库为准）。
-    """
-    raw = (os.environ.get("HZTECH_TRADINGBOT_ACCOUNT_LIST_SOURCE") or "json").strip().lower()
-    if raw in ("database", "db", "sql"):
-        import db as _db
-
-        rows = _db.account_list_list_okx(enabled_only=enabled_only)
-        return [account_basic_dict(r) for r in rows]
+    """交易机器人启停与 can_control 用的账户列表（与 list_account_basics 相同，均来自 account_list）。"""
     return list_account_basics(enabled_only=enabled_only)
 
 
+def db_row_to_account_list_json_shape(row: dict[str, Any]) -> dict[str, Any]:
+    """库表行 -> 与 Account_List.json 单行兼容的 dict（含 Initial_capital / enbaled）。"""
+    return {
+        "account_id": row["account_id"],
+        "account_name": (row.get("account_name") or "").strip(),
+        "exchange_account": (row.get("exchange_account") or "OKX").strip(),
+        "symbol": (row.get("symbol") or "").strip(),
+        "Initial_capital": float(row.get("initial_capital") or 0.0),
+        "initial_capital": float(row.get("initial_capital") or 0.0),
+        "trading_strategy": (row.get("trading_strategy") or "").strip(),
+        "account_key_file": (row.get("account_key_file") or "").strip(),
+        "script_file": (row.get("script_file") or "").strip(),
+        "enbaled": bool(row.get("enabled", True)),
+        "enabled": bool(row.get("enabled", True)),
+    }
+
+
 def account_list_row_by_id(account_id: str) -> dict[str, Any] | None:
-    """account_id 对应 Account_List.json 中的一行；不存在则 None。"""
+    """account_id 对应 account_list 一行（JSON 兼容形状）；不存在则 None。"""
     aid = str(account_id or "").strip()
     if not aid:
         return None
-    for row in load_account_list():
-        if str(row.get("account_id") or "").strip() == aid:
-            return row
-    return None
+    row = _hztech_db.get_accountinfo_by_id(aid)
+    if not row:
+        return None
+    return db_row_to_account_list_json_shape(row)
 
 
 def is_account_disabled_in_account_list(account_id: str) -> bool:
@@ -295,30 +291,87 @@ def sync_account_list_after_account_list_write(db_module: Any) -> None:
     db_module.account_list_prune_except(valid_ids)
 
 
-def account_month_balance_baseline_missing_current_month(db_module: Any) -> bool:
-    """存在可拉密钥的启用账户但当月无 account_month_balance_baseline 行时返回 True。"""
+def insert_new_accounts_from_account_list_json_only(db_module: Any) -> int:
+    """进程启动：仅将 Account_List.json 中尚未出现在 account_list 的 OKX 行插入库；已有 account_id 不修改。"""
+    n = 0
+    for row in load_account_list():
+        if (row.get("exchange_account") or "").strip().upper() != "OKX":
+            continue
+        aid = str(row.get("account_id") or "").strip()
+        if not aid:
+            continue
+        if db_module.account_list_insert_if_missing(
+            aid,
+            _initial_capital(row),
+            account_name=(row.get("account_name") or "").strip(),
+            exchange_account=(row.get("exchange_account") or "").strip(),
+            symbol=(row.get("symbol") or "").strip(),
+            trading_strategy=(row.get("trading_strategy") or "").strip(),
+            account_key_file=(row.get("account_key_file") or "").strip(),
+            script_file=(row.get("script_file") or "").strip(),
+            enabled=_account_row_enabled(row),
+        ):
+            n += 1
+    return n
+
+
+def export_account_list_json_from_db(db_module: Any) -> None:
+    """用当前 account_list 全表覆盖写 Account_List.json（管理员以库为准后的落盘备份）。"""
+    import account_list_store as _store
+
+    out = [db_row_to_account_list_json_shape(r) for r in db_module.account_list_list_all()]
+    _store.replace_all(out)
+
+
+def account_month_balance_baseline_missing_account_ids_current_month(
+    db_module: Any,
+) -> list[str]:
+    """可拉密钥的启用账户中，当月尚无 account_month_balance_baseline 行的 account_id（稳定顺序、去重）。"""
     ym = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m")
+    out: list[str] = []
+    seen: set[str] = set()
     for row in iter_okx_accounts(enabled_only=True):
         aid = str(row.get("account_id") or "").strip()
-        if not resolve_okx_config_path(aid):
+        if not aid or not resolve_okx_config_path(aid):
             continue
-        if db_module.account_month_balance_baseline_get(aid, ym) is None:
-            return True
-    return False
+        if db_module.account_month_balance_baseline_get(aid, ym) is not None:
+            continue
+        if aid not in seen:
+            seen.add(aid)
+            out.append(aid)
+    return out
+
+
+def account_month_balance_baseline_missing_current_month(db_module: Any) -> bool:
+    """存在可拉密钥的启用账户但当月无 account_month_balance_baseline 行时返回 True。"""
+    return bool(account_month_balance_baseline_missing_account_ids_current_month(db_module))
 
 
 def run_account_month_balance_baseline_rollover(
-    db_module: Any, logger: logging.Logger | None = None
+    db_module: Any,
+    logger: logging.Logger | None = None,
+    *,
+    only_account_ids: Collection[str] | None = None,
 ) -> None:
-    """北京时间每月 1 日 00:10–00:15 定时：拉取各启用账户 OKX 余额，upsert 当月 account_month_balance_baseline（YYYY-MM 为北京历月）。"""
+    """北京时间每月 1 日 00:10–00:15 定时：拉取各启用账户 OKX 余额，upsert 当月 account_month_balance_baseline（YYYY-MM 为北京历月）。
+    only_account_ids 非空时仅处理这些账户（启动补写缺数账户）；None 表示全量（与定时任务一致）。
+    """
     log = logger or logging.getLogger(__name__)
     import exchange.okx as okx_mod
 
-    sync_account_list_from_json(db_module)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     ym = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m")
+    restrict: frozenset[str] | None = None
+    if only_account_ids is not None:
+        restrict = frozenset(
+            str(x).strip() for x in only_account_ids if str(x).strip()
+        )
+        if not restrict:
+            return
     for row in iter_okx_accounts(enabled_only=True):
         aid = str(row.get("account_id") or "").strip()
+        if restrict is not None and aid not in restrict:
+            continue
         path = resolve_okx_config_path(aid)
         if not path:
             log.debug("⏭ %s │ 月初基线·无密钥", _fmt_log_account_id(aid))
@@ -363,8 +416,6 @@ def refresh_all_balance_snapshots(db_module: Any, logger: logging.Logger | None 
     log = logger or logging.getLogger(__name__)
     import exchange.okx as okx_mod
 
-    # 同步账户列表
-    sync_account_list_from_json(db_module)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
     for row in iter_okx_accounts(enabled_only=True):
@@ -428,7 +479,7 @@ def backfill_account_snapshots_from_okx_bills(
     account_id: str,
     logger: logging.Logger | None = None,
     *,
-    days: int = 40,
+    days: int = 90,
 ) -> tuple[int, str]:
     """用 OKX ``/api/v5/account/bills-archive`` 的 USDT ``bal`` 补全近期缺日快照。
 
@@ -479,6 +530,7 @@ def backfill_account_snapshots_from_okx_bills(
             short_network_err_text(err),
         )
 
+    # 按天分组账单
     by_day: dict = {}
     for r in rows:
         if (r.get("ccy") or "").upper() != "USDT":
@@ -495,6 +547,7 @@ def backfill_account_snapshots_from_okx_bills(
         if prev is None or ts_i >= prev[0]:
             by_day[bd] = (ts_i, bal_f)
 
+    # 按天填充余额
     filled_bal: dict = {}
     carry = None
     walk = start_d
@@ -508,6 +561,7 @@ def backfill_account_snapshots_from_okx_bills(
     if not filled_bal:
         return 0, "账单区间内无 USDT 余额记录"
 
+    # 获取账户初始资本  
     meta = db_module.account_list_get(acc_id)
     initial = float(meta["initial_capital"]) if meta else 0.0
     if initial <= 0:
@@ -516,10 +570,13 @@ def backfill_account_snapshots_from_okx_bills(
                 initial = _initial_capital(row)
                 break
 
+    # 插入缺日快照
     inserted = 0
     cur_d = start_d
     while cur_d <= end_d:
         day_s = cur_d.isoformat()
+
+        # 检测是否已存在该日快照
         if db_module.account_snapshot_exists_on_utc_date(acc_id, day_s):
             cur_d = cur_d + timedelta(days=1)
             continue
@@ -528,14 +585,22 @@ def backfill_account_snapshots_from_okx_bills(
             continue
         cash_b = float(filled_bal[cur_d])
         cutoff = f"{day_s}T23:59:58.000000Z"
+
+        # 获取前一天快照
         prev = db_module.account_snapshot_last_before_instant(acc_id, cutoff)
+        # 获取前一天可用保证金
         avail_prev = float(prev["available_margin"]) if prev else 0.0
         if avail_prev <= 1e-12 and prev is not None:
             avail_prev = float(prev.get("cash_balance") or 0.0)
+        # 获取前一天权益
         eq_prev = float(prev["equity_usdt"]) if prev else 0.0
+        # 计算权益/可用保证金比例
         ratio = (eq_prev / avail_prev) if avail_prev > 1e-12 else 1.0
+        # 计算权益
         equity = cash_b * ratio
+        # 计算权益收益
         profit_amount, profit_percent = profit_vs_initial(initial, equity)
+        # 计算资产余额收益
         balance_profit_amount, balance_profit_percent = cash_profit_vs_initial(
             initial, cash_b
         )
@@ -587,7 +652,6 @@ def refresh_balance_snapshot_one(
                 initial = _initial_capital(row)
                 break
 
-    sync_account_list_from_json(db_module)
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
     live = okx_mod.okx_fetch_balance(config_path=path)
@@ -1073,24 +1137,45 @@ def collect_accounts_profit_for_api(
     """
     import exchange.okx as okx_mod
 
-    rows = iter_okx_accounts(enabled_only=True)
-    prep: list[tuple[str, str, Any, Any, float, dict | None, str]] = []
-    for row in rows:
-        aid = str(row.get("account_id") or "").strip()
-        if account_ids_allowlist is not None and aid not in account_ids_allowlist:
+    
+    # 获取账户列表
+    account_lists = iter_okx_accounts(enabled_only=True)
+    # 初始化准备列表
+    profit_result: list[tuple[str, str, Any, Any, float, dict | None, str]] = []
+    
+    # 遍历账户列表
+    for row in account_lists:
+        acc_id = str(row.get("account_id") or "").strip()
+        # 如果账户ID不在允许列表中，则跳过
+        if account_ids_allowlist is not None and acc_id not in account_ids_allowlist:
             continue
+        # 获取交易所名称
         ex_name = (row.get("exchange_account") or "OKX").strip()
+        # 获取账户名称
         acc_name = (row.get("account_name") or "").strip()
-        path = resolve_okx_config_path(aid)
-        snap = db_module.account_snapshot_latest_by_account(aid)
-        meta_row = db_module.account_list_get(aid)
+        # 获取密钥路径
+        path = resolve_okx_config_path(acc_id)
+
+        # 从数据库获取最新快照
+        acc_snap = db_module.account_snapshot_latest_by_account(acc_id)
+
+        # 从数据库获取账户列表行
+        meta_row = db_module.account_list_get(acc_id)
+
+        # 获取初始资本
         initial = float(meta_row["initial_capital"]) if meta_row else _initial_capital(row)
         ym = datetime.now(timezone.utc).strftime("%Y-%m")
-        month_row = db_module.account_month_balance_baseline_get(aid, ym)
-        prep.append((aid, ex_name, path, snap, initial, month_row, acc_name))
+        # 从数据库获取月初基线
+        month_row = db_module.account_month_balance_baseline_get(acc_id, ym)
+        profit_result.append((acc_id, ex_name, path, acc_snap, initial, month_row, acc_name))
 
+    # 初始化余额缓存
     live_by_aid: dict[str, dict | None] = {}
-    fetch_jobs = [(p[0], p[2]) for p in prep if p[2] is not None]
+    # 初始化请求任务
+    fetch_jobs = [(p[0], p[2]) for p in profit_result if p[2] is not None]
+    # 如果请求任务存在
+    
+    
     if fetch_jobs:
 
         def _fetch_balance(job: tuple[str, Any]) -> tuple[str, dict | None]:
@@ -1099,30 +1184,38 @@ def collect_accounts_profit_for_api(
 
         workers = min(16, max(1, len(fetch_jobs)))
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            for aid, live in pool.map(_fetch_balance, fetch_jobs):
-                live_by_aid[aid] = live
+            for acc_id, live in pool.map(_fetch_balance, fetch_jobs):
+                live_by_aid[acc_id] = live
 
     out: list[dict] = []
-    for aid, ex_name, path, snap, initial, month_row, acc_name in prep:
+    for acc_id, ex_name, path, acc_snap, initial, month_row, acc_name in profit_result:
+        # 获取月初基线初始权益
         month_ie = month_row.get("initial_equity") if month_row else None
         m_initial_equity = float(month_ie) if month_ie is not None else None
+        # 获取月初基线初始资产金额
         m_initial_balance = (
             float(month_row["initial_balance"])
             if month_row and month_row.get("initial_balance") is not None
             else None
         )
-        live = live_by_aid.get(aid) if path else None
+        # 获取余额
+        live = live_by_aid.get(acc_id) if path else None
+        # 如果余额存在
         if live:
+            # 获取余额
             total_eq, cash_bal, avail_eq, used_m = _okx_balance_amounts(live)
+            # 获取未实现盈亏
             upl = float(live.get("upl") or 0.0)
+            # 计算权益收益
             profit_amount, profit_percent = profit_vs_initial(initial, total_eq)
+            # 计算资产余额收益
             balance_profit_amount, balance_profit_percent = cash_profit_vs_initial(
                 initial, cash_bal
             )
             out.append(
                 {
-                    "bot_id": aid,
-                    "account_id": aid,
+                    "bot_id": acc_id,
+                    "account_id": acc_id,
                     "account_name": acc_name,
                     "exchange_account": ex_name,
                     "initial_balance": initial,
@@ -1137,37 +1230,45 @@ def collect_accounts_profit_for_api(
                     "cash_balance": cash_bal,
                     "available_margin": avail_eq,
                     "used_margin": used_m,
-                    "snapshot_time": snap["snapshot_at"] if snap else None,
+                    "snapshot_time": acc_snap["snapshot_at"] if acc_snap else None,
                     "month_initial_equity": m_initial_equity,
                     "month_initial_balance": m_initial_balance,
                 }
             )
-        elif snap:
-            eq = float(snap["equity_usdt"])
-            cash_bal = float(snap.get("cash_balance") or 0.0)
-            avail_eq = float(snap.get("available_margin") or 0.0)
-            used_m = float(snap.get("used_margin") or 0.0)
+        elif acc_snap:
+            # 获取权益
+            eq = float(acc_snap["equity_usdt"])
+            # 获取资产余额
+            cash_bal = float(acc_snap.get("cash_balance") or 0.0)
+            # 获取可用保证金
+            avail_eq = float(acc_snap.get("available_margin") or 0.0)
+            # 获取占用保证金
+            used_m = float(acc_snap.get("used_margin") or 0.0)
             if avail_eq <= 1e-12:
                 avail_eq = cash_bal
-            cpa = snap.get("balance_profit_amount", snap.get("cash_profit_amount"))
-            cpp = snap.get("balance_profit_percent", snap.get("cash_profit_percent"))
+            # 获取资产余额收益
+            cpa = acc_snap.get("balance_profit_amount", acc_snap.get("cash_profit_amount"))
+            # 获取资产余额收益率
+            cpp = acc_snap.get("balance_profit_percent", acc_snap.get("cash_profit_percent"))
+            # 如果资产余额收益或资产余额收益率不存在，则计算资产余额收益和资产余额收益率
             if cpa is None or cpp is None:
+                # 计算资产余额收益和资产余额收益率
                 cpa, cpp = cash_profit_vs_initial(initial, cash_bal)
             else:
                 cpa, cpp = float(cpa), float(cpp)
             out.append(
                 {
-                    "bot_id": aid,
-                    "account_id": aid,
+                    "bot_id": acc_id,
+                    "account_id": acc_id,
                     "account_name": acc_name,
                     "exchange_account": ex_name,
                     "initial_balance": initial,
                     "current_balance": eq,
                     "equity_profit_amount": float(
-                        snap.get("equity_profit_amount", snap.get("profit_amount", 0))
+                        acc_snap.get("equity_profit_amount", acc_snap.get("profit_amount", 0))
                     ),
                     "equity_profit_percent": float(
-                        snap.get("equity_profit_percent", snap.get("profit_percent", 0))
+                        acc_snap.get("equity_profit_percent", acc_snap.get("profit_percent", 0))
                     ),
                     "balance_profit_amount": cpa,
                     "balance_profit_percent": cpp,
@@ -1177,7 +1278,7 @@ def collect_accounts_profit_for_api(
                     "cash_balance": cash_bal,
                     "available_margin": avail_eq,
                     "used_margin": used_m,
-                    "snapshot_time": snap["snapshot_at"],
+                    "snapshot_time": acc_snap["snapshot_at"],
                     "month_initial_equity": m_initial_equity,
                     "month_initial_balance": m_initial_balance,
                 }
@@ -1185,8 +1286,8 @@ def collect_accounts_profit_for_api(
         else:
             out.append(
                 {
-                    "bot_id": aid,
-                    "account_id": aid,
+                    "bot_id": acc_id,
+                    "account_id": acc_id,
                     "account_name": acc_name,
                     "exchange_account": ex_name,
                     "initial_balance": initial,
@@ -1211,7 +1312,7 @@ def collect_accounts_profit_for_api(
 
 def collect_tradingbots_style_list(strategy_status_fn: Any) -> list[dict]:
     """
-    供 /api/tradingbots 使用：与 UnifiedTradingBot 兼容的列表，数据来自 Account_List。
+    供 GET /api/accounts 使用：与 UnifiedTradingBot 兼容的列表，数据来自 Account_List。
     tradingbot_id = account_id；策略运行状态按 tradingbot_id 匹配 strategy_status。
     """
     import tradingbot_ctrl as _tc

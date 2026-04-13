@@ -18,7 +18,7 @@ enum _AccountsListBasis { equity, cash }
 
 /// 移动端「账户管理」汇总列表；点击进「账户收益」，数据字段与 Web「账户画像」一致（权益、现金、浮动、收益率等）。
 ///
-/// [sharedBots] 由 [MainScreen] 下发时与账户收益页同源，避免下拉框空窗；为空则本页并行请求 `/api/tradingbots`。
+/// [sharedBots] 由 [MainScreen] 下发时与账户收益页同源，避免下拉框空窗；为空则本页并行请求 `/api/accounts`。
 ///
 /// [periodicRefreshActive] 为 false 时不轮询持仓（例如 [MainScreen] 底栏非「账户总览」时）。
 class AccountsList extends StatefulWidget {
@@ -48,7 +48,7 @@ class _AccountsListState extends State<AccountsList> {
   bool _loading = true;
   String? _error;
 
-  /// 各 bot 的交易所持仓（与 /api/tradingbots/:id/positions 一致）；用于列表行浮动盈亏动态计算。
+  /// 各 bot 的交易所持仓（与 /api/accounts/:account_id/positions 一致）；用于列表行浮动盈亏动态计算。
   final Map<String, List<OkxPosition>> _positionsByBot = {};
 
   /// 单合约持仓时，按 instId 订阅公共 ticker 的最近价（与 [AccountProfitScreen] 一致）。

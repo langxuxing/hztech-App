@@ -459,7 +459,7 @@ def _rsync_deploy_exclude_patterns() -> list[str]:
         "baasapi/server_mgr.py",
         "baasapi/README-DEPLOY.md",
         "baasapi/test_server.sh",
-        "aws-ops/code/install_on_aws.sh",
+        "ops/code/install_on_aws.sh",
         "baasapi/run_local.sh",
         "baasapi/run_apk_debug.sh",
         "baasapi/build_and_deploy.sh",
@@ -469,7 +469,7 @@ def _rsync_deploy_exclude_patterns() -> list[str]:
         "baasapi/sqlite/*.db",
         # 不落盘：静态资源目录、本仓库运维脚本（导入库/探测等仅在开发者机器使用）
         "res",
-        "aws-ops",
+        "ops",
     ]
 
 
@@ -1162,26 +1162,28 @@ def _api_listen_port(cfg: dict) -> int:
 
 
 def run_verify_deploy() -> int:
-    """HTTP 探测 BaasAPI /api/health 与 Flutter Web /（503 视为 Web 未构建但可达）。返回 0 全部成功。"""
+    """HTTP 探测 BaasAPI /api/health 与 Flutter Web /（503 视为 Web 未构建但可达）。返回 0 全部成功。
+
+    阶段 8 远端仅 ``sleep 1`` 后即验证；``main.py`` 在 ``app.run`` 前有导入与初始化，端口可能稍晚才监听。
+    本函数按环境变量轮询直至成功或超时：
+
+    - ``HZTECH_POST_DEPLOY_VERIFY_TIMEOUT_SEC``：总等待秒数，默认 120，最小 5
+    - ``HZTECH_POST_DEPLOY_VERIFY_INTERVAL_SEC``：两次探测间隔，默认 2，最小 0.5
+    """
     import urllib.error
     import urllib.request
 
-    rows: list[tuple[str, str, int, bool]] = []
-
-    def _one(url: str, label: str) -> bool:
+    def _http_code(url: str) -> int:
         try:
             with urllib.request.urlopen(url, timeout=15) as r:
-                code = r.status
+                return int(r.status)
         except urllib.error.HTTPError as e:
-            code = e.code
+            return int(e.code)
         except OSError:
-            code = 0
-        ok = code in (200, 503)
-        rows.append((label, url, code, ok))
-        if not _deploy_quiet():
-            mark = du.I_OK if ok else du.I_WARN
-            print("  %s %s → HTTP %s　%s" % (mark, label, code, url))
-        return ok
+            return 0
+
+    def _row_ok(code: int) -> bool:
+        return code in (200, 503)
 
     c = load_config()
     scheme = str(c.get("scheme") or "http")
@@ -1198,16 +1200,61 @@ def run_verify_deploy() -> int:
     ah = (ba.get("host") or "").strip()
     if not dual and not ah:
         ah = wh
-    ok = True
+    targets: list[tuple[str, str]] = []
     if dual:
-        ok = _one("%s://%s:%s/api/health" % (scheme, ah, api_port), "BaasAPI 健康检查") and ok
-        ok = _one("%s://%s:%s/" % (scheme, wh, web_port), "Flutter 静态站首页") and ok
+        targets.append(("%s://%s:%s/api/health" % (scheme, ah, api_port), "BaasAPI 健康检查"))
+        targets.append(("%s://%s:%s/" % (scheme, wh, web_port), "Flutter 静态站首页"))
     else:
-        ok = _one("%s://%s:%s/api/health" % (scheme, wh, api_port), "BaasAPI 健康检查") and ok
-        ok = _one("%s://%s:%s/" % (scheme, wh, web_port), "Flutter 静态站首页") and ok
+        targets.append(("%s://%s:%s/api/health" % (scheme, wh, api_port), "BaasAPI 健康检查"))
+        targets.append(("%s://%s:%s/" % (scheme, wh, web_port), "Flutter 静态站首页"))
+
+    try:
+        timeout_sec = float(os.environ.get("HZTECH_POST_DEPLOY_VERIFY_TIMEOUT_SEC", "120"))
+    except ValueError:
+        timeout_sec = 120.0
+    timeout_sec = max(5.0, timeout_sec)
+    try:
+        interval_sec = float(os.environ.get("HZTECH_POST_DEPLOY_VERIFY_INTERVAL_SEC", "2"))
+    except ValueError:
+        interval_sec = 2.0
+    interval_sec = max(0.5, interval_sec)
+
+    t0 = time.time()
+    deadline = t0 + timeout_sec
+    attempt = 0
+    rows: list[tuple[str, str, int, bool]] = []
+    ok = False
+    while True:
+        attempt += 1
+        rows = []
+        ok = True
+        for url, label in targets:
+            code = _http_code(url)
+            row_ok = _row_ok(code)
+            rows.append((label, url, code, row_ok))
+            if not row_ok:
+                ok = False
+        if ok:
+            break
+        if time.time() >= deadline:
+            break
+        time.sleep(interval_sec)
+
+    if not _deploy_quiet():
+        for label, url, code, row_ok in rows:
+            mark = du.I_OK if row_ok else du.I_WARN
+            print("  %s %s → HTTP %s　%s" % (mark, label, code, url))
+        if ok and attempt > 1:
+            print(
+                "%s 健康检查：第 %d 次探测通过（约 %.0f s 内就绪）"
+                % (du.I_OK, attempt, time.time() - t0)
+            )
     if _deploy_quiet():
         if ok:
-            print("%s 部署后健康检查通过（API + Web 可达）" % du.I_OK)
+            extra = ""
+            if attempt > 1:
+                extra = "（约 %.0f s 内就绪，共 %d 次探测）" % (time.time() - t0, attempt)
+            print("%s 部署后健康检查通过（API + Web 可达）%s" % (du.I_OK, extra))
         else:
             for label, url, code, row_ok in rows:
                 mark = du.I_OK if row_ok else du.I_WARN

@@ -10,6 +10,11 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 export MOBILEAPP_ROOT="$PROJECT_ROOT"
+# 本地默认：DEBUG 日志、Flask debug（含热重载）、进程内 HTTP 统计（GET /api/status → http_request_stats）
+# 安静/类生产：LOG_LEVEL=INFO FLASK_DEBUG=0 ./baasapi/run_local.sh
+export LOG_LEVEL="${LOG_LEVEL:-DEBUG}"
+export FLASK_DEBUG="${FLASK_DEBUG:-1}"
+export HZTECH_API_REQUEST_STATS="${HZTECH_API_REQUEST_STATS:-1}"
 # 交易机器人 shell：本地缺省为仓库内 baasapi/accounts/tradingbot_ctrl（勿与 AWS /home/ec2-user/Alpha 混用）
 export HZTECH_TRADINGBOT_CTRL_DIR="${HZTECH_TRADINGBOT_CTRL_DIR:-$PROJECT_ROOT/baasapi/accounts/tradingbot_ctrl}"
 # 本地默认读 Account_List.json；生产见 aws-ops/code/install_on_aws.sh / server_mgr 远端启动（database）
@@ -46,7 +51,7 @@ case "${HZTECH_SKIP_PIP_INSTALL:-}" in
 *)
   if ! "$_PY" -c "import flask, jwt, requests, ccxt" 2>/dev/null; then
     echo "检测到缺少 BaasAPI 运行时依赖，正在安装 baasapi/requirements.txt ..."
-    "$PROJECT_ROOT/aws-ops/code/install_python_deps.sh" || exit 1
+    "$PROJECT_ROOT/ops/code/install_python_deps.sh" || exit 1
     _PY="$(_hztech_resolve_python)"
   fi
   ;;
@@ -83,7 +88,7 @@ _hztech_echo_mobile_api_urls() {
 if [[ "$WEB_STATIC" != "1" ]]; then
   echo "=============================================="
   echo "  本地启动: 仅 API (单进程, 端口 ${API_PORT})"
-  echo "  HZTECH_LOCAL_WEB_STATIC=${WEB_STATIC}  FLASK_DEBUG=${FLASK_DEBUG:-0}  LOG_LEVEL=${LOG_LEVEL:-}"
+  echo "  HZTECH_LOCAL_WEB_STATIC=${WEB_STATIC}  FLASK_DEBUG=${FLASK_DEBUG}  LOG_LEVEL=${LOG_LEVEL}  HZTECH_API_REQUEST_STATS=${HZTECH_API_REQUEST_STATS}"
   echo ""
   echo "  本机浏览器 / curl:"
   echo "    API  http://127.0.0.1:${API_PORT}/"
@@ -108,7 +113,7 @@ trap cleanup EXIT
 
 echo "=============================================="
 echo "  本地启动: API + Flutter Web 静态 (双进程)"
-echo "  HZTECH_LOCAL_WEB_STATIC=1  Web=${WEB_PORT}  API=${API_PORT}  FLASK_DEBUG=${FLASK_DEBUG:-0}  LOG_LEVEL=${LOG_LEVEL:-}"
+echo "  HZTECH_LOCAL_WEB_STATIC=1  Web=${WEB_PORT}  API=${API_PORT}  FLASK_DEBUG=${FLASK_DEBUG}  LOG_LEVEL=${LOG_LEVEL}  HZTECH_API_REQUEST_STATS=${HZTECH_API_REQUEST_STATS}"
 echo ""
 echo "  本机浏览器:"
 echo "    Web  http://127.0.0.1:${WEB_PORT}/"

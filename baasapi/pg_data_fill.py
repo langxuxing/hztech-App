@@ -23,7 +23,7 @@ import sys
 from typing import Any
 
 
-def run_okx_bills_balance_snapshot_backfill(
+def backfill_snapshot_okx_bills_history(
     db_module: Any,
     account_mgr_module: Any,
     logger: logging.Logger,
@@ -115,7 +115,7 @@ def main() -> int:
     import db as db_mod
     from accounts import AccountMgr as am
 
-    out = run_okx_bills_balance_snapshot_backfill(
+    out = backfill_snapshot_okx_bills_history(
         db_mod,
         am,
         log,

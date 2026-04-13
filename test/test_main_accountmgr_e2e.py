@@ -4,12 +4,12 @@
 并与 Flutter App / Flutter Web 使用的 ApiClient 路径对齐。
 
 覆盖：
-- GET /api/account-profit、/api/tradingbots
+- GET /api/account-profit、/api/accounts
 - 每个启用账户：profit-history、positions、seasons、tradingbot-events
 - 可选：pending-orders、ticker（与 account_profit_screen / web 链路一致）
 
-说明：测试使用 conftest 临时 DB，但 AccountMgr 仍读仓库内真实 Account_List.json；
-OKX 实时调用可能失败，接口仍须返回约定 JSON 结构。
+说明：测试使用 conftest 临时 DB；main 导入时会从仓库内 Account_List.json 仅插入库中缺失的账户行，
+运行期 AccountMgr 从 account_list 读。OKX 实时调用可能失败，接口仍须返回约定 JSON 结构。
 """
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def _enabled_account_ids_from_mgr() -> list[str]:
 
 
 def _tradingbots_index(client, headers: dict) -> dict[str, dict]:
-    r = client.get("/api/tradingbots", headers=headers)
+    r = client.get("/api/accounts", headers=headers)
     assert r.status_code == 200
     bots = r.get_json().get("bots") or []
     return {b["tradingbot_id"]: b for b in bots if b.get("tradingbot_id")}
@@ -55,24 +55,24 @@ def _profit_account_ids(client, headers: dict) -> set[str]:
 
 
 class TestMainAccountMgrE2E:
-    """AccountMgr 启用账户 ⊆ /api/tradingbots 且 ⊆ /api/account-profit。"""
+    """AccountMgr 启用账户 ⊆ GET /api/accounts 且 ⊆ /api/account-profit。"""
 
     def test_enabled_accounts_in_both_apis(self, client, auth_headers):
         mgr_ids = set(_enabled_account_ids_from_mgr())
         if not mgr_ids:
-            pytest.skip("Account_List 无启用 OKX 账户")
+            pytest.skip("account_list 无启用 OKX 账户")
 
         tb_map = _tradingbots_index(client, auth_headers)
         profit_ids = _profit_account_ids(client, auth_headers)
 
         missing_tb = mgr_ids - set(tb_map.keys())
         assert not missing_tb, (
-            "下列 account_id 在 AccountMgr(enabled) 中但不在 /api/tradingbots: "
+            "下列 account_id 在 AccountMgr/库(enabled) 中但不在 /api/accounts: "
             f"{missing_tb}"
         )
         missing_profit = mgr_ids - profit_ids
         assert not missing_profit, (
-            "下列 account_id 在 AccountMgr(enabled) 但不在 /api/account-profit: "
+            "下列 account_id 在 AccountMgr/库(enabled) 但不在 /api/account-profit: "
             f"{missing_profit}"
         )
 
@@ -92,7 +92,7 @@ class TestMainAccountMgrE2E:
         """
         mgr_ids = _enabled_account_ids_from_mgr()
         if not mgr_ids:
-            pytest.skip("Account_List 无启用 OKX 账户")
+            pytest.skip("account_list 无启用 OKX 账户")
 
         # 至少抽一个含 @ 的 id（URL 编码与 Flask 路由）
         pick = mgr_ids[0]
@@ -102,7 +102,7 @@ class TestMainAccountMgrE2E:
                 break
 
         enc = quote(pick, safe="")
-        base = f"/api/tradingbots/{enc}"
+        base = f"/api/accounts/{enc}"
 
         for path, keys in (
             (f"{base}/profit-history?limit=20", ("success", "snapshots")),
@@ -131,12 +131,12 @@ class TestMainAccountMgrE2E:
 
         mgr_ids = _enabled_account_ids_from_mgr()
         if not mgr_ids:
-            pytest.skip("Account_List 无启用 OKX 账户")
+            pytest.skip("account_list 无启用 OKX 账户")
 
         for aid in mgr_ids[:5]:
             path = am.resolve_okx_config_path(aid)
             r = client.get(
-                f"/api/tradingbots/{quote(aid, safe='')}/positions",
+                f"/api/accounts/{quote(aid, safe='')}/positions",
                 headers=auth_headers,
             )
             assert r.status_code == 200
@@ -151,25 +151,22 @@ class TestMainAccountMgrE2E:
     def test_disabled_okx_account_positions_skips_exchange(
         self, client, auth_headers
     ):
-        """enbaled=false 的 Account_List OKX 账户：持仓接口不访问 OKX，返回禁用说明。"""
-        from accounts import AccountMgr as am
+        """enabled=false 的 account_list OKX 账户：持仓接口不访问 OKX，返回禁用说明。"""
+        import db as d
 
         disabled_id = None
-        for row in am.load_account_list():
+        for row in d.account_list_list_all():
             if (row.get("exchange_account") or "").strip().upper() != "OKX":
                 continue
-            en = row.get("enbaled")
-            if en is False or (
-                isinstance(en, str) and en.strip().lower() in ("false", "0", "no")
-            ):
+            if row.get("enabled") is False:
                 disabled_id = str(row.get("account_id") or "").strip() or None
                 break
         if not disabled_id:
-            pytest.skip("Account_List 中无禁用的 OKX 账户")
+            pytest.skip("account_list 中无禁用的 OKX 账户")
 
         enc = quote(disabled_id, safe="")
         r = client.get(
-            f"/api/tradingbots/{enc}/positions",
+            f"/api/accounts/{enc}/positions",
             headers=auth_headers,
         )
         assert r.status_code == 200

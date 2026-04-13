@@ -12,7 +12,8 @@ import '../utils/network_error_message.dart';
 import '../services/okx_public_ticker_ws.dart';
 import '../theme/finance_style.dart';
 import '../utils/number_display_format.dart';
-import '../widgets/equity_cash_percent_line_chart.dart';
+import '../widgets/equity_cash_percent_line_chart.dart'
+    show SnapshotPercentLineChart, SnapshotReturnSeries;
 import '../widgets/month_end_profit_panel.dart';
 import '../widgets/account_detail_loading_overlay.dart';
 import '../widgets/water_background.dart';
@@ -25,6 +26,8 @@ class _AccountProfitCashLayout {
     required this.setCashMonth,
     required this.plotH,
     required this.calendarGridH,
+    /// 与账户「月初现金」口径一致，作为 [SnapshotPercentLineChart] 当月差额基准。
+    this.cashMonthOpenHint,
   });
 
   final List<BotProfitSnapshot> snap;
@@ -32,6 +35,7 @@ class _AccountProfitCashLayout {
   final void Function(DateTime) setCashMonth;
   final double plotH;
   final double calendarGridH;
+  final double? cashMonthOpenHint;
 }
 
 /// APK「账户收益」（客户视图）：账户选择 → 账户盈利总览 → 当前持仓 → 现金（日历 / 曲线 / 每日）。
@@ -900,6 +904,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen>
     if (_selectedAccount == null) return null;
     final snap = _snapshots;
     final month = _cashMonthFor(snap);
+    final acc = _selectedAccount!;
     void setCashMonth(DateTime d) {
       setState(() => _cashMetricsMonth = clampMonthToSnapshots(snap, d));
     }
@@ -918,6 +923,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen>
       setCashMonth: setCashMonth,
       plotH: plotH,
       calendarGridH: calendarGridH,
+      cashMonthOpenHint: acc.monthInitialBalance ?? acc.initialBalance,
     );
   }
 
@@ -956,10 +962,6 @@ class _AccountProfitScreenState extends State<AccountProfitScreen>
   }
 
   Widget _buildCashLinePanel(_AccountProfitCashLayout L) {
-    final a = _selectedAccount;
-    final cashMonthOpen = a == null
-        ? null
-        : (a.monthInitialBalance ?? a.cashBalance ?? a.initialBalance);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -976,7 +978,7 @@ class _AccountProfitScreenState extends State<AccountProfitScreen>
                     series: SnapshotReturnSeries.cash,
                     compact: true,
                     focusedMonth: L.month,
-                    monthOpenLevelHint: cashMonthOpen,
+                    monthOpenLevelHint: L.cashMonthOpenHint,
                   ),
                 ),
               ),

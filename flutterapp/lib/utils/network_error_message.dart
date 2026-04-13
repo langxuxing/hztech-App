@@ -14,3 +14,6 @@ String friendlyNetworkError(Object e) {
   }
   return e.toString();
 }
+
+/// 与 [friendlyNetworkError] 相同，保留旧名称供个别界面调用。
+String networkErrorMessage(Object e) => friendlyNetworkError(e);

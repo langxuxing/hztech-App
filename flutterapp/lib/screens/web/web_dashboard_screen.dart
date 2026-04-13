@@ -5,7 +5,8 @@ import '../../api/models.dart';
 import '../../secure/prefs.dart';
 import '../../theme/finance_style.dart';
 import '../../utils/number_display_format.dart';
-import '../../widgets/equity_cash_percent_line_chart.dart';
+import '../../widgets/equity_cash_percent_line_chart.dart'
+    show SnapshotPercentLineChart, SnapshotReturnSeries;
 import '../../widgets/month_end_profit_panel.dart' show focusedMonthFromProfitSnapshots;
 import '../../widgets/water_background.dart';
 import 'web_account_profile_screen.dart';
@@ -500,7 +501,13 @@ class _OverviewGlassCard extends StatelessWidget {
             children: [
               _OverviewStatCol(
                 label: '月初',
-                value: formatUiInteger(account.initialBalance),
+                value: formatUiInteger(
+                  basis == _DashboardBasis.equity
+                      ? (account.monthInitialEquity ??
+                          account.initialBalance)
+                      : (account.monthInitialBalance ??
+                          account.initialBalance),
+                ),
               ),
               _OverviewStatCol(
                 label: basis == _DashboardBasis.equity ? '当前权益' : '当前现金',
@@ -534,7 +541,6 @@ class _OverviewGlassCard extends StatelessWidget {
                   monthOpenLevelHint: basis == _DashboardBasis.equity
                       ? (account.monthInitialEquity ?? account.initialBalance)
                       : (account.monthInitialBalance ??
-                          account.cashBalance ??
                           account.initialBalance),
                 ),
               ),

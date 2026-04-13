@@ -245,7 +245,7 @@ class ApiClient {
   }
 
   Future<TradingBotsResponse> getTradingBots({String? status}) async {
-    var path = '${_normalizedBase}api/tradingbots';
+    var path = '${_normalizedBase}api/accounts';
     if (status != null && status.isNotEmpty) {
       path = '$path?status=$status';
     }
@@ -305,7 +305,7 @@ class ApiClient {
     String? since,
   }) async {
     final uri = Uri.parse(
-      '${_normalizedBase}api/tradingbots/$botId/profit-history',
+      '${_normalizedBase}api/accounts/$botId/profit-history',
     ).replace(
       queryParameters: {
         'limit': '$limit',
@@ -324,7 +324,7 @@ class ApiClient {
     int month,
   ) async {
     final uri = Uri.parse(
-      '${_normalizedBase}api/tradingbots/$botId/daily-realized-pnl'
+      '${_normalizedBase}api/accounts/$botId/daily-realized-pnl'
       '?year=$year&month=$month',
     );
     final resp = await _getWithRetry(uri, _headers);
@@ -346,7 +346,7 @@ class ApiClient {
     int limit = 500,
   }) async {
     final uri = Uri.parse(
-      '${_normalizedBase}api/tradingbots/'
+      '${_normalizedBase}api/accounts/'
       '${Uri.encodeComponent(botId)}/open-positions-snapshots?limit=$limit',
     );
     final resp = await _getWithRetry(uri, _headers);
@@ -357,9 +357,9 @@ class ApiClient {
   Future<OkxPositionsResponse> getTradingbotPositions(String botId) async {
     if (kDebugMode && ApiClient.debugPositions) {
       // ignore: avoid_print
-      print('[持仓-界面] 调用 BaasAPI: GET api/tradingbots/$botId/positions');
+      print('[持仓-界面] 调用 BaasAPI: GET api/accounts/$botId/positions');
     }
-    final uri = Uri.parse('${_normalizedBase}api/tradingbots/$botId/positions');
+    final uri = Uri.parse('${_normalizedBase}api/accounts/$botId/positions');
     final resp = await _getWithRetry(uri, _headers);
     final map = jsonDecode(resp.body) as Map<String, dynamic>;
     final result = OkxPositionsResponse.fromJson(map);
@@ -370,12 +370,56 @@ class ApiClient {
     return result;
   }
 
+  /// GET /api/accounts/{botId}/pending-orders
+  Future<PendingOrdersResponse> getPendingOrders(String botId) async {
+    final uri = Uri.parse(
+      '${_normalizedBase}api/accounts/'
+      '${Uri.encodeComponent(botId)}/pending-orders',
+    );
+    final resp = await _getWithRetry(uri, _headers);
+    final map = jsonDecode(resp.body) as Map<String, dynamic>;
+    return PendingOrdersResponse.fromJson(map);
+  }
+
+  /// GET /api/accounts/{botId}/ticker?inst_id=（可选；缺省为账户默认 symbol）
+  Future<Map<String, dynamic>> getAccountTicker(
+    String botId, {
+    String? instId,
+  }) async {
+    var uri = Uri.parse(
+      '${_normalizedBase}api/accounts/${Uri.encodeComponent(botId)}/ticker',
+    );
+    if (instId != null && instId.isNotEmpty) {
+      uri = uri.replace(queryParameters: {'inst_id': instId});
+    }
+    final resp = await _getWithRetry(uri, _headers);
+    return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
+  /// POST /api/accounts/{botId}/trade/execute（交易员/管理员）
+  Future<ManualTradeExecuteResponse> postAccountTradeExecute(
+    String botId,
+    Map<String, dynamic> body,
+  ) async {
+    final uri = Uri.parse(
+      '${_normalizedBase}api/accounts/'
+      '${Uri.encodeComponent(botId)}/trade/execute',
+    );
+    final resp = await _postWithRetry(
+      uri,
+      _headers,
+      body: jsonEncode(body),
+    );
+    final map = jsonDecode(resp.body) as Map<String, dynamic>;
+    return ManualTradeExecuteResponse.fromJson(map);
+  }
+
   Future<TradingbotSeasonsResponse> getTradingbotSeasons(
     String botId, {
     int limit = 50,
   }) async {
     final uri = Uri.parse(
-      '${_normalizedBase}api/tradingbots/$botId/seasons?limit=$limit',
+      '${_normalizedBase}api/accounts/$botId/seasons?limit=$limit',
     );
     final resp = await _getWithRetry(uri, _headers);
     final map = jsonDecode(resp.body) as Map<String, dynamic>;
@@ -387,7 +431,7 @@ class ApiClient {
     int limit = 100,
   }) async {
     final uri = Uri.parse(
-      '${_normalizedBase}api/tradingbots/$botId/tradingbot-events?limit=$limit',
+      '${_normalizedBase}api/accounts/$botId/tradingbot-events?limit=$limit',
     );
     final resp = await _getWithRetry(uri, _headers);
     final map = jsonDecode(resp.body) as Map<String, dynamic>;
@@ -401,7 +445,7 @@ class ApiClient {
     int days = 31,
   }) async {
     final uri = Uri.parse(
-      '${_normalizedBase}api/tradingbots/$botId/strategy-daily-efficiency'
+      '${_normalizedBase}api/accounts/$botId/strategy-daily-efficiency'
       '?inst_id=${Uri.encodeQueryComponent(instId)}&days=$days',
     );
     final resp = await _getWithRetry(uri, _headers);
@@ -455,7 +499,7 @@ class ApiClient {
     return ServerStatusResponse.fromJson(map);
   }
 
-  /// GET /api/tradingbots/{id}/position-history
+  /// GET /api/accounts/{account_id}/position-history
   Future<PositionHistoryResponse> getPositionHistory(
     String botId, {
     int limit = 100,
@@ -470,7 +514,7 @@ class ApiClient {
       params['since_utime'] = '$sinceUtime';
     }
     final uri = Uri.parse(
-      '${_normalizedBase}api/tradingbots/${Uri.encodeComponent(botId)}/position-history',
+      '${_normalizedBase}api/accounts/${Uri.encodeComponent(botId)}/position-history',
     ).replace(queryParameters: params);
     final resp = await _getWithRetry(uri, _headers);
     final map = jsonDecode(resp.body) as Map<String, dynamic>;
@@ -480,7 +524,7 @@ class ApiClient {
   /// POST .../position-history/sync（仅管理员）
   Future<SimpleMessageResponse> syncPositionHistory(String botId) async {
     final uri = Uri.parse(
-      '${_normalizedBase}api/tradingbots/${Uri.encodeComponent(botId)}/position-history/sync',
+      '${_normalizedBase}api/accounts/${Uri.encodeComponent(botId)}/position-history/sync',
     );
     final resp = await _postWithRetry(uri, _headers);
     final map = jsonDecode(resp.body) as Map<String, dynamic>;

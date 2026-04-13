@@ -8,7 +8,7 @@ import '../../theme/finance_style.dart';
 import '../../utils/beijing_format.dart';
 import '../../widgets/water_background.dart';
 
-/// 已入库的历史平仓（GET /api/tradingbots/{id}/position-history）
+/// 已入库的历史平仓（GET /api/accounts/{account_id}/position-history）
 class WebPositionHistoryScreen extends StatefulWidget {
   const WebPositionHistoryScreen({
     super.key,
